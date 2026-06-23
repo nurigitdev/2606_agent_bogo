@@ -1,0 +1,7 @@
+# 사내 보고 멀티에이전트 — 런타임 의존성
+# 두뇌: Hermes Agent(Nous Research) 프레임워크 위에서 구동, 모델은 DeepSeek V4 Flash(OpenRouter).
+# 통로: Mattermost(WebSocket 수신 + REST 게시) = 메시징 게이트웨이.
+# Python 3.12 기준(3.14는 일부 의존성 wheel 미제공으로 venv는 3.12 사용).
+
+hermes-agent==0.17.0   # Hermes Agent 런타임(AIAgent, provider 레이어, 도구셋)
+websockets>=15.0       # Mattermost WebSocket 게이트웨이 수신
