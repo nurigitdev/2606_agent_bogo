@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hermes.__ROLE__</string>
+
+    <!-- launchd corrupts non-ASCII (Hangul) UTF-8 bytes in paths it executes, and macOS
+         TCC denies launchd-spawned agents read access to ~/Desktop file CONTENTS. So the
+         operational runtime is mirrored to an ASCII path (__APP__) by install_service.sh,
+         and launchd only ever touches ASCII paths. All paths below are substituted at
+         install time from ${HOME} — no username is hardcoded. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LAUNCHER__</string>
+        <string>__ROLE__</string>
+    </array>
+
+    <!-- Start at login and keep alive: restart on any non-clean / crash exit. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restart to avoid crash loops (min seconds between spawns). -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__LOGS__/__ROLE__.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGS__/__ROLE__.err.log</string>
+</dict>
+</plist>

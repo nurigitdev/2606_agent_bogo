@@ -67,32 +67,45 @@
 
 ---
 
-## 다른 PC에서 처음 시작하기
+## 다른 PC에서 시작 (mac / Windows / Linux 공통)
+
+어느 OS에서 `git clone` 하거나 폴더를 복사하든 **단일 부트스트랩 한 번 → 상시 가동**이 되도록 설계됐다.
+경로는 사용자명·설치 위치·한글 폴더명과 무관하게 동작한다(`/Users/<이름>` 같은 하드코딩 0건).
 
 ```bash
-# 1. 저장소 클론
 git clone <repo-url>
 cd reporting
-
-# 2. 가상환경 생성 및 의존성 설치 (Python 3.12 권장 — 3.14는 일부 wheel 미제공)
-python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# 3. 시크릿 설정 파일 생성 (*.example → 실제 파일로 복사 후 값 입력)
-cp llm_config.json.example llm_config.json       # OpenRouter API 키, 모델명
-cp nk_config.json.example nk_config.json         # 박민철 봇 토큰·사용자 ID
-cp genz_config.json.example genz_config.json     # 이다은 봇 토큰·사용자 ID
-cp gyaru_config.json.example gyaru_config.json   # 최지현 봇 토큰·사용자 ID
-cp channels.json.example channels.json           # 채널명 → 채널 ID 매핑
-
-# 각 JSON 파일을 편집기로 열어 실제 값으로 채운다
-# (토큰·API 키는 git에 절대 커밋되지 않음 — .gitignore에 의해 보호)
-
-# 4. 에이전트 실행 (역할별 별도 터미널)
-.venv/bin/python hermes_runtime.py orchestrator  # 박민철(비서실장)
-.venv/bin/python hermes_runtime.py hr            # 이다은(인사총무)
-.venv/bin/python hermes_runtime.py dev           # 최지현(개발)
 ```
+
+### macOS / Linux
+
+```bash
+./hermes_ctl.sh setup       # ① venv 휴대용 재생성 + 의존성 설치 + *.example→config 복사
+                            #   ② OS 감지해 상시 가동 등록 (mac=launchd / linux=systemd --user)
+# setup 안내대로 .env·*_config.json·channels.json 에 실제 값 입력 → 재시작
+./hermes_ctl.sh restart
+```
+
+부트스트랩만: `./hermes_ctl.sh bootstrap` · 서비스만: `./hermes_ctl.sh install`
+수동 단일 실행: `./hermes_ctl.sh run orchestrator` · 상태: `./hermes_ctl.sh status`
+
+### Windows (PowerShell)
+
+```powershell
+pwsh ./hermes_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Scheduler 등록
+# .env·*_config.json·channels.json 에 실제 값 입력 후
+pwsh ./hermes_ctl.ps1 restart
+```
+
+> **Python 3.12 필수**(3.14는 일부 wheel 미제공). 없으면 부트스트랩이 설치 안내 후 멈춘다.
+> mac: `brew install python@3.12` · Ubuntu: `sudo apt install python3.12 python3.12-venv`
+> Windows: [python.org 3.12](https://www.python.org/downloads/release/python-3120/) (설치 시 "Add to PATH" 체크)
+
+### 시크릿은 커밋되지 않는다 (부트스트랩이 복사)
+
+`.env`·`*_config.json`·`channels.json` 은 `.gitignore` 로 커밋이 차단된다.
+부트스트랩이 `*.example` 을 실제 파일로 **없을 때만** 복사하며(기존 값 보존), 그 뒤 직접 값을 채운다.
+`.venv` 도 추적하지 않는다 — 부트스트랩이 그 PC에서 항상 새로 만들어 절대경로 핀 문제를 원천 차단한다.
 
 ### 설정 파일 참고
 
@@ -110,47 +123,63 @@ cp channels.json.example channels.json           # 채널명 → 채널 ID 매�
 
 ---
 
-## macOS 상시 무중단 가동 (launchd)
+## 상시 무중단 가동 (3 OS 크로스플랫폼)
 
-4개 역할(`orchestrator`/`hr`/`dev` + CEO 관리 봇 `admin`)을 launchd 사용자 에이전트로 등록한다.
-**로그인 시 자동 기동(RunAtLoad) + 비정상 종료 시 자동 재시작(KeepAlive)**.
-(`admin`은 `run_role.sh admin` → `ceo_admin_runtime.py`. 나머지는 `hermes_runtime.py <role>`.)
+4개 역할(`orchestrator`/`hr`/`dev` + CEO 관리 봇 `admin`)을 OS별 네이티브 서비스로 등록한다.
+**로그인/부팅 시 자동 기동 + 비정상 종료 시 자동 재시작**. 단일 진입점 `hermes_ctl` 이 OS를 감지해 분기한다.
 
-### 핵심 구조 — 왜 운영 복사본(`~/.hermes-bin/app`)이 별도로 있는가
+| OS | 서비스 메커니즘 | 자동 재시작 | 한글 경로 |
+|----|----------------|------------|----------|
+| macOS | launchd 사용자 에이전트 (`RunAtLoad`+`KeepAlive`+`ThrottleInterval 10`) | KeepAlive | ASCII 미러 경유(아래 사유) |
+| Linux | systemd `--user` 인스턴스 (`Restart=always`+`MemoryMax=1G`) | systemd + OOM 가드 | 직접 동작(인플레이스) |
+| Windows | Task Scheduler (로그온 트리거 + 실패 시 1분마다 재시작) | 스케줄러 재시작 정책 | 직접 동작(인플레이스) |
+
+```bash
+# mac/linux
+./hermes_ctl.sh install      # 등록+기동      ./hermes_ctl.sh uninstall   # 등록 해제
+./hermes_ctl.sh restart      # 재배포+재시작  ./hermes_ctl.sh status      # 상태
+
+# windows
+pwsh ./hermes_ctl.ps1 install ; pwsh ./hermes_ctl.ps1 status
+```
+
+모든 서비스 파일은 **템플릿**(`service/templates/`)에서 설치 시점에 `${HOME}`·repo 절대경로로 치환 생성된다 —
+사용자명·설치 위치가 어디든 자동 적응한다(하드코딩 0건).
+Linux 로그: `journalctl --user -u hermes@orchestrator -f`. Windows: 작업 스케줄러 기록.
+
+### macOS만의 특수 사정 — 왜 ASCII 미러(`~/.hermes-bin/app`)가 필요한가
 
 macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트가 **`~/Desktop` 아래 파일의 내용을
 읽는 것(open/read)을 차단**한다(디렉토리 목록은 되지만 `cat`은 "Operation not permitted").
 이 저장소는 `~/Desktop` 아래 있어, launchd가 직접 실행하면 `.env`·`*_config.json`·`channels.json`·
 `agents/*.md`·venv를 못 읽어 **즉시 종료(exit 127)**된다.
 
-→ 해결: 운영 실행본을 비보호 ASCII 경로 **`~/.hermes-bin/app`** 에 복사해 두고 launchd는 그쪽을 실행한다.
-**Desktop 저장소가 source of truth**(git 추적), `~/.hermes-bin/app`은 배포 복사본이다.
-(런처/plist의 모든 경로가 ASCII인 이유도 동일 — launchd가 한글 경로 바이트를 깨뜨린다.)
+→ 해결: `hermes_ctl.sh install` 이 운영 실행본을 비보호 ASCII 경로 **`${HOME}/.hermes-bin/app`** 에 자동
+미러링(rsync)하고, 거기서 venv를 만든 뒤 launchd가 그쪽을 실행한다. **저장소가 source of truth**(git 추적),
+`${HOME}/.hermes-bin/app` 은 자동 생성·갱신되는 배포 복사본이다.
+
+> **이 미러는 macOS 전용이며 launchd+TCC가 강제하는 우회다.** Linux·Windows 는 미러 없이 저장소를
+> 한글 경로 그대로 인플레이스 실행한다. 코드·런처(`run_role.sh`/`run_role.ps1`)는 자기 위치를 동적으로
+> 해석하므로 **한글·공백 경로에서도 직접 동작함이 실증됐다**(한글 경로에서 부트스트랩+venv import+런타임
+> 로드 통과 확인). macOS 미러는 "런타임이 한글을 못 읽어서"가 아니라 "launchd 프로세스가 한글 경로 인자를
+> 깨뜨리고 TCC가 Desktop 읽기를 막아서" 필요한 것이다.
 
 | 위치 | 역할 |
 |------|------|
-| `~/Desktop/.../reporting` | 소스(git). 코드·설정 편집은 여기서. |
-| `~/.hermes-bin/app` | launchd가 실제 실행하는 운영 복사본 |
-| `~/.hermes-bin/run_role.sh` | launchd가 부르는 런처(.env 로드 후 venv python exec) |
-| `~/Library/LaunchAgents/com.hermes.{orchestrator,hr,dev,admin}.plist` | 등록된 에이전트 |
-| `~/.hermes-bin/app/logs/<role>.{out,err}.log` | 역할별 stdout/stderr 로그 |
+| `<repo>/reporting` | 소스(git). 코드·설정 편집은 여기서. |
+| `${HOME}/.hermes-bin/app` | launchd가 실제 실행하는 운영 복사본(자동 생성) |
+| `${HOME}/.hermes-bin/run_role.sh` | launchd가 부르는 런처(.env 로드 후 venv python exec) |
+| `${HOME}/Library/LaunchAgents/com.hermes.{orchestrator,hr,dev,admin}.plist` | 등록된 에이전트(템플릿에서 생성) |
+| `${HOME}/.hermes-bin/app/logs/<role>.{out,err}.log` | 역할별 stdout/stderr 로그 |
 
-### 최초 설치
+### 최초 설치 (권장: 단일 명령)
 
 ```bash
-# 1) 운영 복사본 동기화 (소스 -> ~/.hermes-bin/app)
-launchd/sync_app.sh
-
-# 2) 런처 배치
-mkdir -p ~/.hermes-bin
-cp launchd/run_role.sh ~/.hermes-bin/run_role.sh && chmod +x ~/.hermes-bin/run_role.sh
-
-# 3) plist 설치 + 로드 (modern API). admin = CEO 에이전트 관리 봇(nk 봇 재사용)
-for r in orchestrator hr dev admin; do
-  cp launchd/com.hermes.$r.plist ~/Library/LaunchAgents/
-  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hermes.$r.plist
-done
+./hermes_ctl.sh setup     # 부트스트랩(venv+의존성+config) → ASCII 미러 생성 → 4개 launchd 등록+기동
 ```
+
+`setup` 은 내부적으로 미러 동기화, 미러 내 venv 생성, plist 템플릿 치환·설치를 모두 수행한다.
+코드/설정 수정 후 재배포는 `./hermes_ctl.sh restart` 한 줄이면 된다(미러 재동기화 + 4역할 재시작 포함).
 
 ### 운영 명령 (start / stop / status / 로그)
 
@@ -171,19 +200,16 @@ launchctl kickstart -k gui/$UID/com.hermes.dev
 # 중지(stop = 정지, KeepAlive로 다시 살아남 → 완전 중지는 bootout)
 launchctl bootout gui/$UID/com.hermes.dev
 
-# 전체 중지
-for r in orchestrator hr dev; do launchctl bootout gui/$UID/com.hermes.$r; done
-
-# 전체 기동
-for r in orchestrator hr dev; do launchctl bootstrap gui/$UID/com.hermes.$r.plist 2>/dev/null || \
-  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.hermes.$r.plist; done
+# 전체 중지/기동/재시작은 hermes_ctl 권장 (admin 포함 4역할 일괄)
+./hermes_ctl.sh uninstall   # 전체 중지+해제
+./hermes_ctl.sh install     # 전체 등록+기동
 ```
 
 ### 코드/설정 수정 후 배포
 
 ```bash
-# Desktop 저장소에서 편집한 뒤, 운영 복사본에 반영 + 3개 에이전트 재시작
-launchd/sync_app.sh --restart
+# 저장소에서 편집한 뒤 한 줄 — 미러 재동기화 + 4개 역할 재시작
+./hermes_ctl.sh restart
 ```
 
 ### 자동 재시작 검증(실증 완료)
@@ -192,4 +218,12 @@ launchd/sync_app.sh --restart
 로그에 부팅 배너 재출력됨을 확인했다. WS 끊김은 코드 내 지수 백오프가 자체 복구하고,
 프로세스 자체가 죽으면 launchd KeepAlive가 되살린다(이중 복원).
 
-> 단일 터미널 수동 기동이 필요하면: `~/.hermes-bin/run_role.sh <orchestrator|hr|dev>`
+> 단일 터미널 수동 기동: `./hermes_ctl.sh run <orchestrator|hr|dev|admin>`
+> (또는 미러 직접: `${HOME}/.hermes-bin/run_role.sh <role>`)
+
+### 레거시 안내
+
+`launchd/` 디렉터리(`sync_app.sh`·구 `run_role.sh`·고정 plist)는 신규 크로스플랫폼 시스템(`hermes_ctl`
++ `bootstrap.*` + `service/`)으로 대체됐다. 기존 macOS 가동과의 호환을 위해 보존만 하며, 신규 설치는
+위의 `hermes_ctl` 경로를 사용한다. 신규 시스템도 동일한 `${HOME}/.hermes-bin` 경로를 쓰므로 기존
+가동을 깨지 않고 그대로 인수인계된다.
