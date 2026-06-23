@@ -30,8 +30,21 @@ import websockets
 # Hermes Agent 런타임 — 두뇌. import 실패 시 즉시 중단(우회 금지).
 from run_agent import AIAgent  # noqa: E402
 
-ROLE = sys.argv[1]
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _die_usage(msg: str) -> "None":
+    """잘못된 실행 인자에 대해 원시 트레이스백 대신 명확한 사용법을 출력하고 종료."""
+    avail = ", ".join(sorted(
+        f[:-3] for f in os.listdir(os.path.join(HERE, "agents")) if f.endswith(".md")
+    ))
+    sys.stderr.write(f"{msg}\n사용법: python hermes_runtime.py <{avail}>\n")
+    raise SystemExit(2)
+
+
+if len(sys.argv) < 2:
+    _die_usage("역할 인자가 없습니다.")
+ROLE = sys.argv[1]
 
 
 def parse_md(path):
@@ -53,6 +66,8 @@ def parse_md(path):
 AGENTS_DIR = os.path.join(HERE, "agents")
 ROLES = {f[:-3]: parse_md(os.path.join(AGENTS_DIR, f))
          for f in os.listdir(AGENTS_DIR) if f.endswith(".md")}
+if ROLE not in ROLES:
+    _die_usage(f"알 수 없는 역할: {ROLE!r}")
 SPEC = ROLES[ROLE]
 CH = json.load(open(os.path.join(HERE, "channels.json"), encoding="utf-8"))
 ID2NAME = {v: k for k, v in CH.items()}
@@ -62,7 +77,6 @@ TOKEN = CFG["bot_token"]
 BOT_ID = CFG["bot_id"]
 KEY = LLM["api_key"]
 MODEL = LLM["model"]                       # deepseek/deepseek-v4-flash
-FALLBACK = LLM.get("fallback", "deepseek/deepseek-v4-flash:free")
 BASE_URL = LLM.get("base_url", "https://openrouter.ai/api/v1")
 MM = "http://localhost:8065/api/v4"
 
@@ -75,7 +89,7 @@ NAME2USER = {r["name"]: r["username"] for r in ROLES.values()}
 MEM_PATH = os.path.join(HERE, f"memory_{ROLE}.json")
 
 # Hermes/OpenRouter provider 레이어가 환경변수에서 키를 읽을 수 있도록 보강.
-# (AIAgent에 api_key를 직접 넘기지만, fallback 경로 안전을 위해 env도 세팅.)
+# (AIAgent에 api_key를 직접 넘기지만, provider 내부 경로가 env를 읽는 경우 대비.)
 os.environ.setdefault("OPENROUTER_API_KEY", KEY)
 
 BOT_ID_NAMES = {}
@@ -178,6 +192,8 @@ _pn = {}
 
 
 def speaker(uid):
+    if not uid:
+        return "사람"                         # user_id 누락 시 불필요한 /users/None 조회 방지
     if uid in BOT_ID_NAMES:
         return BOT_ID_NAMES[uid]
     if uid not in _pn:
@@ -191,15 +207,21 @@ def speaker(uid):
 
 
 def history(channel_id, n=12):
-    req = urllib.request.Request(MM + f"/channels/{channel_id}/posts?per_page={n}",
-                                 headers={"Authorization": f"Bearer {TOKEN}"})
-    d = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    """채널 최근 대화를 화자:본문 줄 목록으로. 조회 실패/오류 본문이면 빈 맥락으로 강등(판단은 계속)."""
+    try:
+        req = urllib.request.Request(MM + f"/channels/{channel_id}/posts?per_page={n}",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        d = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        order, posts = d["order"], d["posts"]    # 오류 본문(message/status_code)이면 KeyError
+    except Exception as e:
+        print("history-err", type(e).__name__, e)
+        return []
     lines = []
-    for pid in reversed(d["order"]):
-        p = d["posts"][pid]
+    for pid in reversed(order):
+        p = posts.get(pid, {})
         if p.get("type"):
             continue
-        lines.append(f"{speaker(p['user_id'])}: {p.get('message', '')[:300]}")
+        lines.append(f"{speaker(p.get('user_id'))}: {p.get('message', '')[:300]}")
     return lines[-n:]
 
 
@@ -233,55 +255,106 @@ def gate(text, is_bot, cname):
     return mentioned
 
 
-async def run():
-    async with websockets.connect("ws://localhost:8065/api/v4/websocket") as ws:
+WS_URL = "ws://localhost:8065/api/v4/websocket"
+
+
+async def _handle(raw):
+    """단일 WS 프레임을 처리한다. 한 메시지의 어떤 실패도 루프를 죽이지 않게 격리한다."""
+    try:
+        ev = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as e:
+        print("ws-frame-err", e)            # 깨진 프레임 → 무시(연결은 유지)
+        return
+    if ev.get("event") != "posted":
+        return
+    try:
+        p = json.loads(ev["data"]["post"])
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        print("post-parse-err", e)
+        return
+    if p.get("user_id") == BOT_ID:
+        return
+    cid = p.get("channel_id")
+    cname = ID2NAME.get(cid)
+    if cname not in SUBS:
+        return
+    is_bot = p.get("props", {}).get("from_bot") == "true"
+    text = p.get("message", "")
+    if not gate(text, is_bot, cname):
+        return
+    try:
+        # decide는 동기(블로킹) Hermes 호출이므로 스레드로 오프로드.
+        # 내부 Mattermost 조회(history/speaker) 또는 LLM/JSON 파싱 실패가
+        # 여기로 전파되며, 메시지 단위로만 드롭한다(루프·연결은 유지).
+        d = await asyncio.to_thread(decide, cname, cid, speaker(p["user_id"]), text)
+    except Exception as e:
+        print("decide-err", type(e).__name__, e)
+        return
+    if not d.get("act"):
+        return
+    # 진행상황 공유(사람 방)
+    ackmsg = (d.get("ack") or "").strip()
+    ackch = CH.get(d.get("ack_channel", ""))
+    if ackmsg and ackch:
+        try:
+            post(ackch, ackmsg)
+        except Exception as e:
+            print("ack-err", e)
+    # 본 메시지(상신/지시/전달)
+    tgt = CH.get(d.get("target_channel", ""))
+    msg = (d.get("message") or "").strip()
+    if tgt and msg:
+        ments = d.get("mentions") if isinstance(d.get("mentions"), list) else []
+        pre = " ".join(f"@{NAME2USER[m]}" for m in ments if m in NAME2USER)
+        body = (pre + "\n" if pre else "") + msg
+        try:
+            post(tgt, body)
+            print(f"[{NAME}] → {d.get('target_channel')} ({d.get('reason', '')[:40]})")
+        except Exception as e:
+            print("post-err", e)
+
+
+async def _session():
+    """WS 1회 연결: 인증 → 인증 응답 확인 → 메시지 수신 루프."""
+    async with websockets.connect(WS_URL) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
+        # 인증 응답 확인: 첫 프레임이 'hello'면 성공, 'error'면 토큰 불량 → 재시도 무의미.
+        try:
+            first = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            if first.get("status") == "FAIL" or first.get("event") == "error":
+                raise RuntimeError(f"WS 인증 실패(토큰 확인 필요): {first}")
+            if first.get("event") not in ("hello", None) and first.get("seq_reply") != 1:
+                # hello가 아니어도 정상 이벤트일 수 있으므로 처리만 하고 진행.
+                await _handle(json.dumps(first))
+        except asyncio.TimeoutError:
+            print("auth-ack-timeout — 응답 없이 수신 모드 진입")
         print(f"{NAME}({ROLE}) 가동[Hermes Agent 런타임] — 모델:{MODEL} / 구독:{SUBS}")
         async for raw in ws:
-            ev = json.loads(raw)
-            if ev.get("event") != "posted":
-                continue
-            p = json.loads(ev["data"]["post"])
-            if p.get("user_id") == BOT_ID:
-                continue
-            cid = p["channel_id"]
-            cname = ID2NAME.get(cid)
-            if cname not in SUBS:
-                continue
-            is_bot = p.get("props", {}).get("from_bot") == "true"
-            text = p.get("message", "")
-            if not gate(text, is_bot, cname):
-                continue
-            try:
-                # decide는 동기(블로킹) Hermes 호출이므로 스레드로 오프로드.
-                d = await asyncio.to_thread(decide, cname, cid, speaker(p["user_id"]), text)
-            except Exception as e:
-                print("decide-err", e)
-                continue
-            if not d.get("act"):
-                continue
-            # 진행상황 공유(사람 방)
-            ackmsg = (d.get("ack") or "").strip()
-            ackch = CH.get(d.get("ack_channel", ""))
-            if ackmsg and ackch:
-                try:
-                    post(ackch, ackmsg)
-                except Exception as e:
-                    print("ack-err", e)
-            # 본 메시지(상신/지시/전달)
-            tgt = CH.get(d.get("target_channel", ""))
-            msg = (d.get("message") or "").strip()
-            if tgt and msg:
-                ments = d.get("mentions") or []
-                pre = " ".join(f"@{NAME2USER[m]}" for m in ments if m in NAME2USER)
-                body = (pre + "\n" if pre else "") + msg
-                try:
-                    post(tgt, body)
-                    print(f"[{NAME}] → {d.get('target_channel')} ({d.get('reason', '')[:40]})")
-                except Exception as e:
-                    print("post-err", e)
+            await _handle(raw)
+
+
+async def run():
+    """재연결 슈퍼바이저: 연결이 끊기면 백오프 후 재접속(데몬은 죽지 않는다).
+
+    인증 실패(토큰 불량)는 재시도해도 동일하므로 즉시 중단해 운영자가 알게 한다.
+    """
+    backoff = 1
+    while True:
+        try:
+            await _session()
+            backoff = 1                      # 정상 종료(서버측 close) → 즉시 재접속
+        except RuntimeError as e:            # 인증 실패 등 비복구 오류
+            print("fatal", e)
+            raise
+        except (OSError, websockets.WebSocketException) as e:
+            print(f"ws-disconnect ({type(e).__name__}: {e}) — {backoff}s 후 재접속")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)   # 지수 백오프(최대 30s)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        print(f"\n{NAME}({ROLE}) 종료")
