@@ -62,20 +62,85 @@ cp channels.json.example channels.json           # 채널명 → 채널 ID 매�
 
 ---
 
-## macOS 데몬 자동 실행 (launchd)
+## macOS 상시 무중단 가동 (launchd)
 
-`launchd/` 디렉토리의 plist 파일을 사용해 macOS 로그인 시 자동 시작할 수 있다.
+3개 역할(`orchestrator`/`hr`/`dev`)을 launchd 사용자 에이전트로 등록한다.
+**로그인 시 자동 기동(RunAtLoad) + 비정상 종료 시 자동 재시작(KeepAlive)**.
+
+### 핵심 구조 — 왜 운영 복사본(`~/.hermes-bin/app`)이 별도로 있는가
+
+macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트가 **`~/Desktop` 아래 파일의 내용을
+읽는 것(open/read)을 차단**한다(디렉토리 목록은 되지만 `cat`은 "Operation not permitted").
+이 저장소는 `~/Desktop` 아래 있어, launchd가 직접 실행하면 `.env`·`*_config.json`·`channels.json`·
+`agents/*.md`·venv를 못 읽어 **즉시 종료(exit 127)**된다.
+
+→ 해결: 운영 실행본을 비보호 ASCII 경로 **`~/.hermes-bin/app`** 에 복사해 두고 launchd는 그쪽을 실행한다.
+**Desktop 저장소가 source of truth**(git 추적), `~/.hermes-bin/app`은 배포 복사본이다.
+(런처/plist의 모든 경로가 ASCII인 이유도 동일 — launchd가 한글 경로 바이트를 깨뜨린다.)
+
+| 위치 | 역할 |
+|------|------|
+| `~/Desktop/.../reporting` | 소스(git). 코드·설정 편집은 여기서. |
+| `~/.hermes-bin/app` | launchd가 실제 실행하는 운영 복사본 |
+| `~/.hermes-bin/run_role.sh` | launchd가 부르는 런처(.env 로드 후 venv python exec) |
+| `~/Library/LaunchAgents/com.hermes.{orchestrator,hr,dev}.plist` | 등록된 에이전트 |
+| `~/.hermes-bin/app/logs/<role>.{out,err}.log` | 역할별 stdout/stderr 로그 |
+
+### 최초 설치
 
 ```bash
-# plist 설치 (사용자 LaunchAgent)
-cp launchd/com.hermes.orchestrator.plist ~/Library/LaunchAgents/
-cp launchd/com.hermes.hr.plist ~/Library/LaunchAgents/
-cp launchd/com.hermes.dev.plist ~/Library/LaunchAgents/
+# 1) 운영 복사본 동기화 (소스 -> ~/.hermes-bin/app)
+launchd/sync_app.sh
 
-# 로드
-launchctl load ~/Library/LaunchAgents/com.hermes.orchestrator.plist
-launchctl load ~/Library/LaunchAgents/com.hermes.hr.plist
-launchctl load ~/Library/LaunchAgents/com.hermes.dev.plist
+# 2) 런처 배치
+mkdir -p ~/.hermes-bin
+cp launchd/run_role.sh ~/.hermes-bin/run_role.sh && chmod +x ~/.hermes-bin/run_role.sh
+
+# 3) plist 설치 + 로드 (modern API)
+for r in orchestrator hr dev; do
+  cp launchd/com.hermes.$r.plist ~/Library/LaunchAgents/
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hermes.$r.plist
+done
 ```
 
-또는 `run_role.sh <orchestrator|hr|dev>` 스크립트로 수동 기동할 수 있다.
+### 운영 명령 (start / stop / status / 로그)
+
+```bash
+UID=$(id -u)
+
+# 상태: 1열=PID, 2열=마지막 종료코드(0=정상), 3열=라벨
+launchctl list | grep hermes
+ps -p $(launchctl list | grep com.hermes.dev | awk '{print $1}') -o pid,stat,command
+
+# 로그 실시간 보기
+tail -f ~/.hermes-bin/app/logs/orchestrator.out.log
+tail -f ~/.hermes-bin/app/logs/dev.err.log
+
+# 한 역할 재시작(코드 무관, 강제 재기동)
+launchctl kickstart -k gui/$UID/com.hermes.dev
+
+# 중지(stop = 정지, KeepAlive로 다시 살아남 → 완전 중지는 bootout)
+launchctl bootout gui/$UID/com.hermes.dev
+
+# 전체 중지
+for r in orchestrator hr dev; do launchctl bootout gui/$UID/com.hermes.$r; done
+
+# 전체 기동
+for r in orchestrator hr dev; do launchctl bootstrap gui/$UID/com.hermes.$r.plist 2>/dev/null || \
+  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.hermes.$r.plist; done
+```
+
+### 코드/설정 수정 후 배포
+
+```bash
+# Desktop 저장소에서 편집한 뒤, 운영 복사본에 반영 + 3개 에이전트 재시작
+launchd/sync_app.sh --restart
+```
+
+### 자동 재시작 검증(실증 완료)
+
+`kill -9 <dev PID>` → 약 10초 내(ThrottleInterval) launchd가 새 PID로 부활,
+로그에 부팅 배너 재출력됨을 확인했다. WS 끊김은 코드 내 지수 백오프가 자체 복구하고,
+프로세스 자체가 죽으면 launchd KeepAlive가 되살린다(이중 복원).
+
+> 단일 터미널 수동 기동이 필요하면: `~/.hermes-bin/run_role.sh <orchestrator|hr|dev>`
