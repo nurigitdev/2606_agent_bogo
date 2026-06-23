@@ -1,26 +1,44 @@
-# 비밀·로컬 데이터는 절대 커밋하지 않음
+# ──────────────────────────────────────────────
+# 시크릿 / 로컬 데이터 — 절대 커밋 금지
+# ──────────────────────────────────────────────
 .env
-**/config.json
+**/.env
 
-# 백업 폴더(읽기 전용 보존물·토큰 포함) — 커밋 금지
+# 봇 토큰·API 키가 들어있는 설정 파일 (*.example 만 커밋 허용)
+*_config.json
+!*_config.json.example
+
+channels.json
+!channels.json.example
+
+memory_*.json
+
+# ──────────────────────────────────────────────
+# 백업 / 임시 파일
+# ──────────────────────────────────────────────
 backup_*/
+*.bak
 
-# 봇 토큰·API 키가 들어있는 설정(커밋 금지) — *.example 만 커밋
-reporting/nk_config.json
-reporting/genz_config.json
-reporting/gyaru_config.json
-reporting/llm_config.json
-reporting/channels.json
-reporting/memory_*.json
-
-# 빌드·런타임 아티팩트
-volumes/
-venv/
+# ──────────────────────────────────────────────
+# 빌드 · 런타임 아티팩트
+# ──────────────────────────────────────────────
 .venv/
+venv/
 .venv_*/
 __pycache__/
-__pycache_old__/
 *.pyc
-*.bak
 .ruff_cache/
+**/.ruff_cache/
+
+# 로그
+logs/
+reporting/logs/
+
+# DB
 hub/hub.db
+
+# ──────────────────────────────────────────────
+# 툴링 / IDE
+# ──────────────────────────────────────────────
+.claude/
+volumes/

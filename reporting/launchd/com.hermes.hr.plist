@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hermes.hr</string>
+
+    <!-- Real ASCII-path launcher; see com.hermes.orchestrator.plist for rationale. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/haris/.hermes-bin/run_role.sh</string>
+        <string>hr</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/haris/.hermes-bin/app/logs/hr.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/haris/.hermes-bin/app/logs/hr.err.log</string>
+</dict>
+</plist>
