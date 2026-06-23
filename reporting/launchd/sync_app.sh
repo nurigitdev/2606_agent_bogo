@@ -26,7 +26,8 @@ echo "synced: $SRC -> $APP"
 
 if [[ "${1:-}" == "--restart" ]]; then
   UID_NUM="$(id -u)"
-  for r in orchestrator hr dev; do
-    launchctl kickstart -k "gui/${UID_NUM}/com.hermes.${r}" && echo "restarted com.hermes.${r}"
+  for r in orchestrator hr dev admin; do
+    launchctl kickstart -k "gui/${UID_NUM}/com.hermes.${r}" 2>/dev/null \
+      && echo "restarted com.hermes.${r}" || echo "skip com.hermes.${r} (미등록)"
   done
 fi

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hermes.admin</string>
+
+    <!-- CEO 에이전트 업데이트 파이프라인(ceo_admin_runtime.py).
+         Real ASCII-path launcher; see com.hermes.orchestrator.plist for rationale.
+         run_role.sh 'admin' 인자가 ceo_admin_runtime.py 를 exec 한다. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/haris/.hermes-bin/run_role.sh</string>
+        <string>admin</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/haris/.hermes-bin/app/logs/admin.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/haris/.hermes-bin/app/logs/admin.err.log</string>
+</dict>
+</plist>

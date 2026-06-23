@@ -1,0 +1,30 @@
+{
+  "_comment": "선언적 팀·라우팅 데이터. 런타임(hermes_runtime.py)이 이 데이터를 읽어 ROUTING 텍스트를 동적 생성한다. 새 팀 추가 = 여기 teams 블록 1개 + agents/<role>.md 1개 추가만으로 동작(파이썬 수정 0). 채널명은 channels.json에 실재해야 한다(린트가 검증).",
+
+  "orchestrator": {
+    "role": "박민철",
+    "title": "비서실장",
+    "briefing_channel": "CEO브리핑",
+    "principal": "CEO",
+    "desc": "양 보고라인의 팀 보고를 받아 가공·게이트키핑 후 상신/반려하고, CEO 지시를 팀에 분배하는 상향·하향 오케스트레이터."
+  },
+
+  "teams": [
+    {
+      "id": "hr",
+      "label": "인사총무",
+      "team_channel": "인사총무팀",
+      "report_channel": "인사총무-보고라인",
+      "agent": "이다은",
+      "escalate_to": "박민철"
+    },
+    {
+      "id": "dev",
+      "label": "개발",
+      "team_channel": "개발팀",
+      "report_channel": "개발-보고라인",
+      "agent": "최지현",
+      "escalate_to": "박민철"
+    }
+  ]
+}

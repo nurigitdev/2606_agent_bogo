@@ -5,12 +5,16 @@
 # operational runtime lives here, outside Desktop. The Desktop git repo is the source of
 # truth; sync_app.sh mirrors it here after edits.
 set -eu
-ROLE="${1:?role argument required (orchestrator|hr|dev)}"
+ROLE="${1:?role argument required (orchestrator|hr|dev|admin)}"
 APP="${HOME:-/Users/haris}/.hermes-bin/app"
 cd "$APP"
 if [[ -f "$APP/.env" ]]; then
   set -a
   source "$APP/.env"
   set +a
+fi
+# 'admin' = CEO 에이전트 업데이트 파이프라인(ceo_admin_runtime.py). 그 외는 역할 에이전트.
+if [[ "$ROLE" == "admin" ]]; then
+  exec "$APP/.venv/bin/python" -u "$APP/ceo_admin_runtime.py"
 fi
 exec "$APP/.venv/bin/python" -u "$APP/hermes_runtime.py" "$ROLE"
