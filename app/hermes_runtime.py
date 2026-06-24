@@ -132,6 +132,45 @@ def save_mem(line):
               open(MEM_PATH, "w", encoding="utf-8"), ensure_ascii=False)
 
 
+# ── 메모리 2층 구조: 방(채널)별 공유 메모리 ───────────────────────────────
+# 역할별 memory_{ROLE}.json(개인 진행 메모)과 별개로, 채널마다 memory_ch_{slug}.json을
+# 둔다. 같은 방에 들어온 모든 에이전트(역할 무관)가 같은 파일을 공유해 읽고 쓴다.
+# 다른 방을 처리할 때는 그 방 파일을 읽지 않으므로, 한 방의 내용(예: 급여)이 프롬프트를
+# 통해 다른 방으로 새지 않는다(방 격리).
+
+def _room_slug(channel_id):
+    """채널 ID를 파일명 안전 슬러그로 정규화. 영숫자/-/_만 남기고 나머지는 _로."""
+    cid = str(channel_id or "")
+    return "".join(c if (c.isalnum() or c in "-_") else "_" for c in cid)
+
+
+def room_mem_path(channel_id):
+    return os.path.join(HERE, f"memory_ch_{_room_slug(channel_id)}.json")
+
+
+def load_room_mem(channel_id):
+    """해당 채널의 공유 기억 문자열. 파일이 없으면 빈 문자열로 시작."""
+    if not channel_id:
+        return ""
+    try:
+        return json.load(open(room_mem_path(channel_id), encoding="utf-8")).get("summary", "")
+    except Exception:
+        return ""
+
+
+def save_room_mem(channel_id, line):
+    """해당 채널의 공유 기억에 한 줄 롤링 추가(최근 6줄 유지). 다른 방 파일은 건드리지 않는다."""
+    if not channel_id:
+        return
+    line = (line or "").strip().replace("\n", " ")
+    if not line:
+        return
+    lines = [x for x in load_room_mem(channel_id).split("\n") if x.strip()]
+    lines.append(line)
+    json.dump({"summary": "\n".join(lines[-6:])},
+              open(room_mem_path(channel_id), "w", encoding="utf-8"), ensure_ascii=False)
+
+
 _pn = {}
 
 
@@ -180,7 +219,9 @@ def _validate(d):
 
 
 def decide(cname, channel_id, sp, text):
-    sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING, memo=load_mem())
+    # 방 공유 기억(채널별) + 개인 진행 메모(역할별)를 함께 주입.
+    sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
+                             memo=load_mem(), room_memo=load_room_mem(channel_id))
     convo = "\n".join(history(channel_id))
     user = f"[현재 방: {cname}]\n[최근 대화]\n{convo}\n\n[방금 들어온 메시지] {sp}: {text}"
     last = ""
@@ -301,11 +342,19 @@ async def run():
                         print(f"[{NAME}] → {tcn} ({d.get('reason', '')[:40]})")
                     except Exception as e:
                         print("post-err", e)
+            # 메모리 2층 저장:
+            #  - LLM이 남기는 메모(memo)와 closed 처리완료 메모는 그 방의 맥락이므로
+            #    방별 공유 메모리에 저장한다 → 다른 방으로 절대 새지 않음(격리 1순위).
+            #  - 개인 진행 추적용으로 역할별 메모리에도 보조 저장(방 이름을 접두로 표기해
+            #    개인 메모가 방 맥락과 섞여도 출처를 알 수 있게 한다).
             memo = (d.get("memo") or "").strip()
             if memo:
-                save_mem(memo)
+                save_room_mem(cid, memo)
+                save_mem(f"[{cname}] {memo}")
             elif d.get("task_status") == "closed":
-                save_mem(f"{cname} 처리완료: {(d.get('reason') or '')[:60]}")
+                done = f"{cname} 처리완료: {(d.get('reason') or '')[:60]}"
+                save_room_mem(cid, done)
+                save_mem(done)
 
 
 if __name__ == "__main__":

@@ -207,13 +207,22 @@ def build_routing(teams):
     return "\n".join(lines)
 
 
-def system_prompt(spec, common_rules, routing, memo=""):
-    """에이전트 시스템 프롬프트 조립: 페르소나(고유) + 공유규칙(상속) + 라우팅(데이터) + 메모."""
+def system_prompt(spec, common_rules, routing, memo="", room_memo=""):
+    """에이전트 시스템 프롬프트 조립: 페르소나(고유) + 공유규칙(상속) + 라우팅(데이터) + 메모.
+
+    메모리 2층 구조:
+      - room_memo: 현재 방(채널)의 공유 기억. 같은 방에 들어온 모든 에이전트가 공유.
+                   다른 방 처리 시엔 주입되지 않아 방 경계로 정보 누출이 차단된다.
+      - memo: 역할(에이전트) 개인의 진행 메모. 방과 무관하게 유지.
+    기존 memo 단일 인자 호출과의 하위 호환을 위해 room_memo는 기본값 빈 문자열.
+    """
     parts = [spec["prompt"]]
     if common_rules:
         parts.append("\n\n===== 전 에이전트 공통 규칙 (상속) =====\n" + common_rules)
+    if room_memo:
+        parts.append("\n\n[이 방의 공유 기억]\n" + room_memo)
     if memo:
-        parts.append("\n\n[진행 중 업무 메모]\n" + memo)
+        parts.append("\n\n[내 개인 메모]\n" + memo)
     parts.append("\n\n===== 라우팅 (teams.json 기반) =====\n" + routing)
     parts.append(f"\n[너] 이름:{spec['name']} / 주 담당 방:{spec['primary']}")
     return "".join(parts)
