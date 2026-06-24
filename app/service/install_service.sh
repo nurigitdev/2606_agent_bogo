@@ -19,7 +19,7 @@ set -euo pipefail
 
 ROLES=(orchestrator hr dev admin)
 
-# Repo root = reporting/ (this script lives in reporting/service/).
+# Repo root = app/ (this script lives in app/service/).
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SELF/.." && pwd)"
 TPL="$SELF/templates"

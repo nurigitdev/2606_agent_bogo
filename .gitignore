@@ -32,7 +32,7 @@ __pycache__/
 
 # 로그
 logs/
-reporting/logs/
+app/logs/
 
 # DB
 hub/hub.db

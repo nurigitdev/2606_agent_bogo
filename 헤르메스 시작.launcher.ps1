@@ -13,9 +13,9 @@
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# ── 0. 자기 위치 기준으로 reporting/ 디렉터리 고정 (한글·공백 경로 안전) ──
+# ── 0. 자기 위치 기준으로 app/ 디렉터리 고정 (한글·공백 경로 안전) ──
 $SelfDir = $PSScriptRoot
-$Repo    = Join-Path $SelfDir "reporting"
+$Repo    = Join-Path $SelfDir "app"
 $Ctl     = Join-Path $Repo "hermes_ctl.ps1"
 
 function Say($m)  { Write-Host "[헤르메스] $m" -ForegroundColor Cyan }
@@ -33,7 +33,7 @@ Write-Host ""
 # ── 1. 사전 점검: 컨트롤러 + PowerShell 호스트 확인 ─────────────────────
 if (-not (Test-Path $Ctl)) {
   Fail "hermes_ctl.ps1 을 찾지 못했습니다: $Ctl"
-  Fail "이 런처 파일은 'reporting' 폴더가 있는 프로젝트 루트에 두어야 합니다."
+  Fail "이 런처 파일은 'app' 폴더가 있는 프로젝트 루트에 두어야 합니다."
   Stop-With 1
 }
 
@@ -81,7 +81,7 @@ if ($RegisteredCount -ge 1) {
   if ($rc -eq 0) {
     Write-Host ""
     Ok "설치 + 상시 가동 등록 완료."
-    Say "처음이라면 reporting\.env 와 *_config.json, channels.json 에 실제 토큰/키/채널ID 입력 후"
+    Say "처음이라면 app\.env 와 *_config.json, channels.json 에 실제 토큰/키/채널ID 입력 후"
     Say "이 파일을 한 번 더 더블클릭하면 새 설정으로 재시작됩니다."
   } else {
     Write-Host ""
@@ -103,7 +103,7 @@ $Alive = @($After | Where-Object { $_.State -in @("Running", "Ready") }).Count
 Write-Host ""
 if ($After.Count -ge 1) {
   Ok "상시 가동 등록된 역할: $($After.Count)개 (가동/대기 $Alive개; orchestrator/hr/dev/admin 4개가 정상)."
-  Say "로그 보기:  Get-Content reporting\logs\orchestrator.out.log -Tail 50 -Wait"
+  Say "로그 보기:  Get-Content app\logs\orchestrator.out.log -Tail 50 -Wait"
 } else {
   Fail "등록된 헤르메스 역할이 없습니다. 위 로그에서 원인을 확인하세요."
   Stop-With 1

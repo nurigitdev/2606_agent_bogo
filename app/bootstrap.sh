@@ -15,7 +15,7 @@
 # Usage:  ./bootstrap.sh
 set -euo pipefail
 
-# Resolve the directory of this script (the repo root = reporting/), space/UTF-8 safe.
+# Resolve the directory of this script (the repo root = app/), space/UTF-8 safe.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 

@@ -154,7 +154,7 @@ HERMES_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 - 이미 상시 가동 중이면 → 중복 기동 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
 - 끝나면 현재 상태(PID/종료코드/역할)를 한국어로 표시하고, 오류 시 창이 닫히지 않고 원인을 보여준다
 
-내부적으로 `reporting/hermes_ctl.sh` 를 호출할 뿐이라 동작은 아래 명령들과 동일하다.
+내부적으로 `app/hermes_ctl.sh` 를 호출할 뿐이라 동작은 아래 명령들과 동일하다.
 (처음 다운로드 시 `우클릭 → 열기` 한 번으로 Gatekeeper 허용)
 
 ## 가장 쉬운 시작 — 더블클릭 (Windows)
@@ -167,7 +167,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`헤르메스 시작.bat`** �
 
 내부 동작: `헤르메스 시작.bat`(UTF-8 `chcp 65001`, `cd /d "%~dp0"` 로 한글·공백 경로 고정)
 → `헤르메스 시작.launcher.ps1`(가동 상태 감지·분기 본체)
-→ `reporting\hermes_ctl.ps1 {setup|restart|status}`. mac 의 `.command`→`hermes_ctl.sh` 경로와 1:1 등가다.
+→ `app\hermes_ctl.ps1 {setup|restart|status}`. mac 의 `.command`→`hermes_ctl.sh` 경로와 1:1 등가다.
 
 - 가동 상태는 `Get-ScheduledTask -TaskName "Hermes_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.hermes` 등가).
 - PowerShell 7(`pwsh`)이 있으면 그것을, 없으면 Windows 기본 `powershell` 5.1 을 자동으로 사용한다.
@@ -182,7 +182,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`헤르메스 시작.bat`** �
 
 ```bash
 git clone <repo-url>
-cd reporting
+cd app
 ```
 
 ### macOS / Linux
@@ -255,6 +255,52 @@ pwsh ./hermes_ctl.ps1 install ; pwsh ./hermes_ctl.ps1 status
 사용자명·설치 위치가 어디든 자동 적응한다(하드코딩 0건).
 Linux 로그: `journalctl --user -u hermes@orchestrator -f`. Windows: 작업 스케줄러 기록.
 
+### NVIDIA DGX Spark / Ubuntu ARM64 상시 가동 (최종 사내 운영 타깃)
+
+최종 운영 환경은 **NVIDIA DGX Spark**(DGX OS = Ubuntu 24.04, **ARM64/aarch64**, Python 3.12)다.
+이 저장소는 ARM64에서 **추가 빌드 도구 없이 `pip install` 만으로** 동작한다 — 근거:
+
+- `hermes-agent` 는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처와 무관하게 설치된다(요구: Python ≥3.11, <3.14).
+- `websockets` 는 `manylinux_2_17_aarch64` + `cp312` 휠을 제공해 ARM64 Python 3.12 에서 바로 설치된다.
+- 따라서 DGX Spark 에서도 컴파일러·헤더 없이 `bootstrap.sh` 가 venv 를 만들고 의존성을 그대로 받는다.
+
+설치·상시 가동 절차(Ubuntu ARM64):
+
+```bash
+# ① Python 3.12 + venv 모듈 (DGX OS 기본이 아닐 경우)
+sudo apt update
+sudo apt install -y python3.12 python3.12-venv
+
+# ② clone 후 단일 부트스트랩 + systemd --user 등록 (OS 자동 감지)
+git clone <repo-url>
+cd app
+./hermes_ctl.sh setup        # bootstrap(venv+deps+config) → systemd --user 4역할 enable --now
+
+# ③ .env·*_config.json·channels.json 에 실제 값 입력 후 재시작
+./hermes_ctl.sh restart
+```
+
+부팅 상시 가동(로그아웃·재부팅 후에도 자동 기동)은 **systemd `--user` + linger** 로 보장된다.
+`install_service.sh` 가 설치 시 `loginctl enable-linger <user>` 를 자동 시도하며, 권한 문제로 실패하면
+수동 1회 실행한다(헤드리스 서버는 로그인 세션이 없으므로 linger 가 필수):
+
+```bash
+sudo loginctl enable-linger "$USER"     # 사용자 세션 없이도 user 서비스가 부팅 시 기동
+systemctl --user enable --now hermes@orchestrator.service   # (setup 이 이미 4역할 enable)
+```
+
+운영 확인·로그:
+
+```bash
+./hermes_ctl.sh status                                  # 4역할 active 여부
+journalctl --user -u hermes@orchestrator -f             # 역할별 실시간 로그
+loginctl show-user "$USER" | grep Linger                # Linger=yes 면 부팅 상시 가동 보장됨
+```
+
+> Linux 는 TCC·한글 경로 문제가 없어 **저장소를 인플레이스로 직접 실행**한다(macOS 같은 ASCII 미러 불필요).
+> `service/templates/hermes@.service.template` 의 `__WORKDIR__` 가 설치 시점에 repo 절대경로로 치환되며,
+> `Restart=always`+`RestartSec=10`+`MemoryMax=1G` 로 크래시·메모리 누수에서 자동 복원한다.
+
 ### macOS만의 특수 사정 — 왜 ASCII 미러(`~/.hermes-bin/app`)가 필요한가
 
 macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트가 **`~/Desktop` 아래 파일의 내용을
@@ -274,7 +320,7 @@ macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트
 
 | 위치 | 역할 |
 |------|------|
-| `<repo>/reporting` | 소스(git). 코드·설정 편집은 여기서. |
+| `<repo>/app` | 소스(git). 코드·설정 편집은 여기서. |
 | `${HOME}/.hermes-bin/app` | launchd가 실제 실행하는 운영 복사본(자동 생성) |
 | `${HOME}/.hermes-bin/run_role.sh` | launchd가 부르는 런처(.env 로드 후 venv python exec) |
 | `${HOME}/Library/LaunchAgents/com.hermes.{orchestrator,hr,dev,admin}.plist` | 등록된 에이전트(템플릿에서 생성) |
@@ -331,7 +377,7 @@ launchctl bootout gui/$UID/com.hermes.dev
 
 ### 레거시 안내
 
-`launchd/` 디렉터리(`sync_app.sh`·구 `run_role.sh`·고정 plist)는 신규 크로스플랫폼 시스템(`hermes_ctl`
-+ `bootstrap.*` + `service/`)으로 대체됐다. 기존 macOS 가동과의 호환을 위해 보존만 하며, 신규 설치는
-위의 `hermes_ctl` 경로를 사용한다. 신규 시스템도 동일한 `${HOME}/.hermes-bin` 경로를 쓰므로 기존
-가동을 깨지 않고 그대로 인수인계된다.
+구 `launchd/` 디렉터리(`sync_app.sh`·구 `run_role.sh`·고정 plist)는 신규 크로스플랫폼 시스템(`hermes_ctl`
++ `bootstrap.*` + `service/templates/`)으로 **완전히 대체되어 제거됐다**. 신규 시스템도 동일한
+`${HOME}/.hermes-bin` 경로를 쓰므로, 구 launchd 로 가동 중이던 기존 환경도 `hermes_ctl install`(또는
+`헤르메스 시작.command` 더블클릭) 한 번이면 그대로 인수인계된다(중복 라벨은 bootout 후 재등록).

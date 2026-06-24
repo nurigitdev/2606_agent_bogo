@@ -13,9 +13,9 @@
 # ════════════════════════════════════════════════════════════════════════
 set -u
 
-# ── 0. 자기 위치 기준으로 reporting/ 디렉터리 고정 (한글·공백 경로 안전) ──
+# ── 0. 자기 위치 기준으로 app/ 디렉터리 고정 (한글·공백 경로 안전) ──
 SELF_DIR="${0:A:h}"
-REPO="$SELF_DIR/reporting"
+REPO="$SELF_DIR/app"
 CTL="$REPO/hermes_ctl.sh"
 
 # 색상 (터미널 가독성)
@@ -42,7 +42,7 @@ print -r -- ""
 # ── 1. 사전 점검: 컨트롤러 존재 확인 ──────────────────────────────────
 if [[ ! -f "$CTL" ]]; then
   fail "hermes_ctl.sh 를 찾지 못했습니다: $CTL"
-  fail "이 .command 파일은 'reporting' 폴더가 있는 프로젝트 루트에 두어야 합니다."
+  fail "이 .command 파일은 'app' 폴더가 있는 프로젝트 루트에 두어야 합니다."
   pause_exit 1
 fi
 chmod +x "$CTL" 2>/dev/null || true
@@ -73,7 +73,7 @@ else
   if "$CTL" setup; then
     print -r -- ""
     ok "설치 + 상시 가동 등록 완료."
-    say "처음이라면 reporting/.env 와 *_config.json, channels.json 에 실제 토큰/키/채널ID 입력 후"
+    say "처음이라면 app/.env 와 *_config.json, channels.json 에 실제 토큰/키/채널ID 입력 후"
     say "이 파일을 한 번 더 더블클릭하면 새 설정으로 재시작됩니다."
   else
     print -r -- ""
