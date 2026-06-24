@@ -109,6 +109,29 @@ def validate_teams(teams, valid_channels):
                 errors.append(f"[teams:{tid}] {key} 미정의 채널: '{ch}'")
         if not t.get("agent"):
             errors.append(f"[teams:{tid}] 필수 필드 누락: agent")
+    # collab_rooms(여러 에이전트 공동 참여 작업방) 정합성 검사
+    room_ids = set()
+    for room in teams.get("collab_rooms", []):
+        rid = room.get("id", "?")
+        if rid in room_ids:
+            errors.append(f"[collab_rooms] room id 중복: '{rid}'")
+        room_ids.add(rid)
+        ch = room.get("channel")
+        if not ch:
+            errors.append(f"[collab_rooms:{rid}] 필수 필드 누락: channel")
+        elif ch not in valid_channels:
+            errors.append(f"[collab_rooms:{rid}] channel 미정의: '{ch}'")
+        parts = room.get("participants") or []
+        if not parts:
+            errors.append(f"[collab_rooms:{rid}] 필수 필드 누락: participants")
+        lead = room.get("lead")
+        if not lead:
+            errors.append(f"[collab_rooms:{rid}] 필수 필드 누락: lead")
+        elif lead not in parts:
+            errors.append(f"[collab_rooms:{rid}] lead '{lead}'가 participants에 없음")
+        deliver = room.get("deliver_to")
+        if deliver and deliver not in valid_channels:
+            errors.append(f"[collab_rooms:{rid}] deliver_to 미정의 채널: '{deliver}'")
     return errors
 
 
@@ -116,6 +139,7 @@ def build_routing(teams):
     """teams.json 데이터로 ROUTING 텍스트를 동적 생성. (이전 하드코딩 ROUTING의 라우팅 흐름 부분을 대체)"""
     orch = teams.get("orchestrator", {})
     tlist = teams.get("teams", [])
+    rooms = teams.get("collab_rooms", [])
     orch_name = orch.get("role", "박민철")
     brief = orch.get("briefing_channel", "")
     principal = orch.get("principal", "CEO")
@@ -132,6 +156,13 @@ def build_routing(teams):
     )
     if brief:
         lines.append(f"- {brief}: {orch_name}과 {principal}(사람)만의 방. {orch_name}이 상신하고 {principal} 지시를 받는다.")
+    for room in rooms:
+        names = "·".join(room.get("participants", []))
+        lines.append(
+            f"- {room['channel']}: {names}이 함께 참여하는 협업 작업방. "
+            f"{principal}이 정책·기획 같은 범부서 과제를 게시하면 각자 전문성으로 기여하고, "
+            f"리드 {room.get('lead', orch_name)}이 취합·정리해 '{room.get('deliver_to', brief)}'에 제출한다."
+        )
 
     lines.append("")
     lines.append("[역할별 행동]")
@@ -149,6 +180,30 @@ def build_routing(teams):
         f"{brief}의 {principal} 지시 → {up_map} 멘션해 분배. "
         "★팀 상신을 단어만 바꿔 복붙하지 마라(공통규칙 4 가공 원칙 준수)."
     )
+    # 협업 작업방 행동 프로토콜(데이터 주도) — 참여 에이전트별 기여 + 리드 취합·제출
+    for room in rooms:
+        parts = room.get("participants", [])
+        lead = room.get("lead", orch_name)
+        deliver = room.get("deliver_to", brief)
+        members = "·".join(parts)
+        non_lead = [p for p in parts if p != lead]
+        contrib = ", ".join(non_lead) if non_lead else members
+        lines.append("")
+        lines.append(f"[협업 작업방: {room['channel']}]")
+        lines.append(
+            f"- {principal}이 '{room['channel']}'에 정책·기획 과제를 게시하면 {members} 전원이 같은 방에서 협업한다. "
+            f"각자 자기 전문 영역의 분석·근거·초안을 같은 방에 게시(target_channel='{room['channel']}')하고, "
+            "다른 참여자 기여를 읽고 자기 몫을 보탠다(중복·복붙 금지, 공통규칙 4)."
+        )
+        lines.append(
+            f"- 기여자({contrib}): 자기 차례(자기 전문성이 필요한 부분)일 때만 act=true로 '{room['channel']}'에 기여를 올린다. "
+            f"리드 {lead}이 추가 입력을 멘션 요청하면 보완 회신한다."
+        )
+        lines.append(
+            f"- 리드 {lead}: 참여자 기여가 모이면 하나의 결과물로 취합·구조화해 '{deliver}'에 {principal}에게 제출하고 task_status=closed. "
+            f"기여가 부족하면 해당 참여자를 '{room['channel']}'에서 멘션해 콕 집어 보완 요청한다. "
+            "단순 취합이 아니라 우선순위·리스크·권고를 더해 의사결정 가능한 형태로 가공한다."
+        )
     return "\n".join(lines)
 
 

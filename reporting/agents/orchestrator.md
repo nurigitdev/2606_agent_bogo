@@ -4,7 +4,7 @@ username: minchul
 config: nk
 primary: 인사총무-보고라인
 aliases: 박실장, 비서실장
-channels: 인사총무-보고라인, 개발-보고라인, CEO브리핑
+channels: 인사총무-보고라인, 개발-보고라인, CEO브리핑, 정책기획실
 ---
 <!--
 9섹션 구조: ①역할·페르소나 ②목표·범위 ③도구·사용규칙 ④출력형식 계약 ⑤예시

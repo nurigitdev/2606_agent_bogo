@@ -4,7 +4,7 @@ username: daeun
 config: gyaru
 primary: 인사총무팀
 aliases: 다은
-channels: 인사총무팀, 인사총무-보고라인
+channels: 인사총무팀, 인사총무-보고라인, 정책기획실
 ---
 <!--
 9섹션 구조. 공통 규칙(보고 포맷·언어·진행공유·완료조건·행동결정 스키마)은

@@ -47,6 +47,61 @@
 # 6) 새 역할 데몬 등록 (plist 1개 추가 → bootstrap). 런타임 기동 시에도 자동 검증된다.
 ```
 
+### 협업 작업방 (CEO 정책·기획 과제 — 여러 에이전트 공동 수행)
+
+기본 라우팅은 *1팀 = 1에이전트 = 1팀방* 모델이다. 여기에 더해, **CEO가 정책·기획 같은 범부서 과제를 던지면 모든 업무 에이전트(박민철·이다은·최지현)가 같은 방에 들어가 함께 결과물을 만들어 CEO에게 제출하는 공동 작업방**을 지원한다.
+
+| 구성 | 값(기본) |
+|------|----------|
+| 작업방 채널 | `정책기획실` |
+| 참여 에이전트 | 박민철(비서실장)·이다은(인사총무)·최지현(개발) |
+| 리드(취합·제출) | 박민철 |
+| 제출처 | `CEO브리핑` |
+
+동작 흐름:
+
+1. CEO가 `정책기획실`에 정책·기획 과제를 게시한다.
+2. 참여 에이전트가 **각자 자기 전문성**(인사·노무·예산 / 기술·일정·리스크)으로 분석·근거·초안을 같은 방에 올린다. 서로의 기여를 읽고 빠진 관점을 보탠다(복붙 금지).
+3. 리드(박민철)가 기여를 하나의 결과물로 취합·구조화(우선순위·리스크·권고 포함)해 `CEO브리핑`에 제출하고 `task_status=closed`. 기여가 부족하면 그 방에서 해당 참여자를 멘션해 보완을 요청한다.
+
+이 모든 흐름은 **데이터로 선언**된다. `teams.json` 의 `collab_rooms` 블록이 방·참여자·리드·제출처를 정의하고, 런타임 `build_routing()` 이 이를 라우팅 텍스트로 변환해 참여 에이전트 프롬프트에 주입한다. 협업 프로토콜 자체는 `agents/_shared/common_rules.md`(8-1절)에 명문화돼 전원에게 상속된다. **파이썬 분기 하드코딩은 없다.**
+
+```jsonc
+// teams.json — collab_rooms 블록
+"collab_rooms": [
+  {
+    "id": "policy_planning", "label": "정책기획",
+    "channel": "정책기획실",
+    "participants": ["박민철", "이다은", "최지현"],
+    "lead": "박민철", "deliver_to": "CEO브리핑",
+    "desc": "CEO 정책·기획 범부서 과제 공동 작업방"
+  }
+]
+```
+
+구독·송신 권한은 채널 화이트리스트로 강제된다: 참여 에이전트의 `agents/<role>.md` frontmatter `channels` 에 작업방 채널이 들어 있어야 런타임이 그 방 메시지를 구독·판단하고 그 방으로 송신할 수 있다(린트가 교차 검증).
+
+#### 새 협업 작업방 추가법 (파이썬 수정 0)
+
+```bash
+# 1) 작업방 채널을 Mattermost에 만들고 channels.json 에 "이름":"ID" 등록
+#    (자동 생성 스크립트가 없으면 Mattermost 관리자 패널에서 공개 채널 생성 후 ID 입력)
+# 2) teams.json 의 "collab_rooms" 배열에 블록 1개 추가
+#    {"id":"...","channel":"<채널명>","participants":["박민철","이다은","최지현"],
+#     "lead":"박민철","deliver_to":"CEO브리핑"}
+# 3) 참여할 각 에이전트의 agents/<role>.md frontmatter channels 에 <채널명> 추가
+# 4) 봇들을 그 채널의 멤버로 가입시킨다(Mattermost 관리자 패널 또는 채널 멤버 추가 API)
+# 5) 린트로 정합성 확인 (channel·participants·lead·deliver_to 검증 + 참여자 channels 교차 확인)
+.venv/bin/python lint_agents.py
+# 6) 변경 배포(코드/데이터 반영 + 역할 재시작)
+./hermes_ctl.sh restart
+```
+
+> 운영자 주의: 작업방 채널을 자동 생성하지 못하는 환경(토큰 권한 부족·서버 미가동)이면, Mattermost
+> **관리자 패널 → 팀 → 채널 생성**으로 공개 채널을 만들고 참여 봇 3개를 멤버로 추가한 뒤,
+> 채널 ID를 `channels.json`(시크릿, `.gitignore`)에 입력한다. `channels.json.example` 의
+> `"정책기획실":"CHANNEL_ID"` 는 자리표시자이며 실제 ID를 커밋하지 않는다.
+
 ### CEO 에이전트 업데이트 파이프라인 (자연어로 에이전트 정의 수정)
 
 전용 방 **`CEO-에이전트관리`** 에서 CEO가 자연어로 피드백하면 **에이전트 관리 봇**(`ceo_admin_runtime.py`)이:
@@ -129,7 +184,7 @@ pwsh ./hermes_ctl.ps1 restart
 | `genz_config.json` | 이다은 봇 Mattermost 토큰·사용자 ID |
 | `gyaru_config.json` | 최지현 봇 Mattermost 토큰·사용자 ID |
 | `channels.json` | 채널명 → 채널 ID 매핑 (Mattermost 관리자 패널에서 확인) |
-| `teams.json` | 선언적 팀·라우팅 데이터(팀방·보고라인·팀에이전트·상향대상). 새 팀 추가는 여기 블록 1개로 |
+| `teams.json` | 선언적 팀·라우팅 데이터(팀방·보고라인·팀에이전트·상향대상) + `collab_rooms`(여러 에이전트 공동 작업방). 새 팀/협업방 추가는 여기 블록 1개로 |
 | `agents/_shared/common_rules.md` | 전 에이전트 공통 규칙(런타임이 상속 주입). 시크릿 아님, git 추적 |
 
 인증: OpenRouter 키(기존) 재사용. 신규 API 키 요구 없음.

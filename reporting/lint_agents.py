@@ -57,6 +57,19 @@ def main():
     if orch.get("role") and orch["role"] not in role_names:
         warnings.append(f"[orchestrator] role '{orch['role']}'에 대응하는 agents/*.md 가 없음")
 
+    # collab_rooms 참여자가 그 작업방 채널을 실제로 구독(channels)하는지 교차 확인
+    name2channels = {m.get("name"): set(m.get("channels", [])) for m in roles.values()}
+    for room in teams.get("collab_rooms", []):
+        ch = room.get("channel")
+        for who in room.get("participants", []):
+            if who not in role_names:
+                warnings.append(f"[collab_rooms:{room.get('id')}] 참여자 '{who}'에 대응하는 agents/*.md 가 없음")
+            elif ch and ch not in name2channels.get(who, set()):
+                errors.append(
+                    f"[collab_rooms:{room.get('id')}] 참여자 '{who}'의 channels에 작업방 '{ch}'가 없음 "
+                    f"(agents/<role>.md frontmatter channels에 추가해야 구독·송신됨)"
+                )
+
     for w in warnings:
         print(f"WARN  {w}")
     for e in errors:

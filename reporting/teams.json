@@ -1,5 +1,5 @@
 {
-  "_comment": "선언적 팀·라우팅 데이터. 런타임(hermes_runtime.py)이 이 데이터를 읽어 ROUTING 텍스트를 동적 생성한다. 새 팀 추가 = 여기 teams 블록 1개 + agents/<role>.md 1개 추가만으로 동작(파이썬 수정 0). 채널명은 channels.json에 실재해야 한다(린트가 검증).",
+  "_comment": "선언적 팀·라우팅 데이터. 런타임(hermes_runtime.py)이 이 데이터를 읽어 ROUTING 텍스트를 동적 생성한다. 새 팀 추가 = 여기 teams 블록 1개 + agents/<role>.md 1개 추가만으로 동작(파이썬 수정 0). 채널명은 channels.json에 실재해야 한다(린트가 검증). collab_rooms = 1팀 1에이전트 모델을 벗어나 여러 에이전트가 공동 참여하는 협업 작업방(예: CEO 정책·기획 과제). 참여 에이전트의 agents/<role>.md channels 에 해당 channel 을 추가해야 구독·송신이 열린다(린트가 교차 검증).",
 
   "orchestrator": {
     "role": "박민철",
@@ -25,6 +25,18 @@
       "report_channel": "개발-보고라인",
       "agent": "최지현",
       "escalate_to": "박민철"
+    }
+  ],
+
+  "collab_rooms": [
+    {
+      "id": "policy_planning",
+      "label": "정책기획",
+      "channel": "정책기획실",
+      "participants": ["박민철", "이다은", "최지현"],
+      "lead": "박민철",
+      "deliver_to": "CEO브리핑",
+      "desc": "CEO가 정책·기획 같은 범부서 과제를 게시하면 참여 에이전트가 각자 전문성으로 함께 기여하고, 리드가 취합·정리해 결과물을 CEO에게 제출하는 공동 작업방."
     }
   ]
 }

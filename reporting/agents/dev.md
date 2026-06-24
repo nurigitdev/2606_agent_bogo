@@ -4,7 +4,7 @@ username: jihyun
 config: genz
 primary: 개발팀
 aliases: 지현
-channels: 개발팀, 개발-보고라인
+channels: 개발팀, 개발-보고라인, 정책기획실
 ---
 <!--
 9섹션 구조. 공통 규칙(보고 포맷·언어·진행공유·완료조건·행동결정 스키마)은
