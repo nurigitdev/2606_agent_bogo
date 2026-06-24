@@ -122,6 +122,30 @@
 
 ---
 
+## CEO 대시보드 (한 곳에서 모니터링·지시)
+
+CEO가 Mattermost 채널을 일일이 오가지 않고 **브라우저 한 곳**(`http://127.0.0.1:8787`)에서 부서 현황을 보고 지시를 내리는 로컬 웹앱(`ceo_dashboard.py`). 기존 통신 인프라를 그대로 재사용한다 — `mm_client.MM`(REST), `channels.json`/`teams.json`/`agents/*.md`(`agent_schema`). 신규 의존성·신규 API 키 0(표준 라이브러리 `http.server`만 사용).
+
+화면 구성:
+- **부서별 현황 카드** — 팀 채널·보고라인·CEO브리핑의 최근 메시지를 12초 주기로 폴링 표시(작성자·시각·본문). 모니터링 채널은 `teams.json`에서 동적으로 결정된다(하드코딩 없음).
+- **CEO 지시 입력창** — 대상 채널 선택(기본 `CEO브리핑` → 박민철 비서실장에게 전달) 후 메시지 게시. 게시는 화이트리스트 채널로만 제한된다.
+- **에이전트 현황** — 등록 role 목록(`load_roles`)과 각 봇의 활성 여부(Mattermost user API), 담당 채널 표시.
+- **에이전트 관리 안내** — 정의 변경은 기존 `CEO-에이전트관리`(`ceo_admin_runtime`) 파이프라인으로 연계. 대시보드 자체는 정의 파일을 건드리지 않는다(모니터링·지시 전용).
+
+```bash
+# 수동 기동 (포트 기본 8787)
+.venv/bin/python ceo_dashboard.py
+# 포트 변경
+HERMES_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
+# 접속: http://127.0.0.1:8787   (외부 노출 안 됨 — 루프백 전용)
+```
+
+게시용 봇 토큰은 박민철(`nk_config.json`)을 재사용한다(CEO브리핑·양 보고라인 멤버라 읽기/쓰기 권한 보유). 토큰이 비어 있거나 플레이스홀더면 기동을 거부한다. 테스트: `.venv/bin/python -m unittest test_ceo_dashboard`.
+
+> 보안: 웹서버는 `127.0.0.1`에서만 listen하며 외부(0.0.0.0)로 바꾸지 않는다. 인증 게이트가 없는 로컬 전용 대시보드이므로, 원격 접근이 필요하면 SSH 로컬 포워딩 등 별도 인증 경계를 둔다.
+
+---
+
 ## 가장 쉬운 시작 — 더블클릭 (macOS)
 
 터미널 타이핑이 귀찮으면 프로젝트 루트의 **`헤르메스 시작.command`** 파일을 Finder에서 더블클릭한다.
@@ -132,6 +156,22 @@
 
 내부적으로 `reporting/hermes_ctl.sh` 를 호출할 뿐이라 동작은 아래 명령들과 동일하다.
 (처음 다운로드 시 `우클릭 → 열기` 한 번으로 Gatekeeper 허용)
+
+## 가장 쉬운 시작 — 더블클릭 (Windows)
+
+mac 절과 완전 대칭. 프로젝트 루트의 **`헤르메스 시작.bat`** 파일을 탐색기에서 더블클릭한다.
+
+- 아직 미등록이면 → 자동으로 `setup`(venv+의존성+config+**Task Scheduler** 등록) 수행
+- 이미 상시 가동 등록돼 있으면 → 중복 등록 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
+- 끝나면 현재 상태(역할별 Task State)를 한국어로 표시하고, 오류 시 창이 닫히지 않고(`pause`) 원인을 보여준다
+
+내부 동작: `헤르메스 시작.bat`(UTF-8 `chcp 65001`, `cd /d "%~dp0"` 로 한글·공백 경로 고정)
+→ `헤르메스 시작.launcher.ps1`(가동 상태 감지·분기 본체)
+→ `reporting\hermes_ctl.ps1 {setup|restart|status}`. mac 의 `.command`→`hermes_ctl.sh` 경로와 1:1 등가다.
+
+- 가동 상태는 `Get-ScheduledTask -TaskName "Hermes_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.hermes` 등가).
+- PowerShell 7(`pwsh`)이 있으면 그것을, 없으면 Windows 기본 `powershell` 5.1 을 자동으로 사용한다.
+- 처음이라면 `python.org 3.12`(설치 시 "Add to PATH" 체크) 설치 후 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
 
 ---
 
