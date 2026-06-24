@@ -294,88 +294,309 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def build_index_html():
-    """단일 정적 HTML(외부 빌드체인 0, vanilla JS). 채널·기본값은 런타임 API 로 주입."""
+    """단일 정적 HTML(외부 빌드체인 0, vanilla JS). 채널·기본값은 런타임 API 로 주입.
+
+    시각: MiniMax 디자인 시스템(모노크롬 + 제품색 인코딩, DM Sans, pill 버튼,
+    그라데이션 제품 카드 32px / 조용한 흰 문서 카드 16px 라디우스 대비). CSS 토큰은
+    :root 변수로 선언. 서버/API/JS 동작 계약(element id·fetch 형식)은 전부 보존한다.
+    """
     return """<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hermes CEO 대시보드</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0f1419; --card:#1a212b; --line:#28323e; --txt:#e6edf3;
-          --mut:#8b97a5; --accent:#3b82f6; --ok:#22c55e; --bad:#ef4444; }
+  :root {
+    /* ── 색 토큰: 모노크롬 베이스 ── */
+    --color-ink:#0a0a0a;          /* 헤드라인 / CTA / primary 버튼 배경 */
+    --color-charcoal:#1f1f1f;     /* 본문 */
+    --color-slate:#52525b;        /* 보조 텍스트 */
+    --color-steel:#71717a;        /* 비활성·메타 */
+    --color-stone:#a1a1aa;        /* 가장 흐린 텍스트 */
+    --color-canvas:#ffffff;       /* 배경 */
+    --color-surface:#f4f4f5;      /* 섹션·비활성 배경 */
+    --color-surface-2:#fafafa;    /* 입력 배경 */
+    --color-hairline:#e4e4e7;     /* 1px 보더 */
+    --color-hairline-strong:#d4d4d8;
+    /* ── 브랜드/제품색: '제품 정체성 카드'에만 ── */
+    --brand-coral:#ff4d3d;        /* CEO 시그니처 */
+    --brand-coral-2:#ff7a45;
+    --brand-magenta:#d61f69;      /* 인사총무 */
+    --brand-magenta-2:#ec4899;
+    --brand-blue:#2563eb;         /* 개발(Hailuo) */
+    --brand-blue-2:#3b82f6;
+    --brand-purple:#7c3aed;       /* 관리 */
+    --brand-purple-2:#a855f7;
+    /* ── 상태색 ── */
+    --ok:#15803d; --ok-bg:#dcfce7;
+    --bad:#b91c1c; --bad-bg:#fee2e2;
+    /* ── 스페이싱(4px 베이스, 8px 증분) ── */
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+    --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px;
+    --space-12:48px; --space-16:64px; --space-20:80px;
+    /* ── 라디우스: 라디우스 대비가 시그니처 ── */
+    --radius-product:32px;        /* 그라데이션 제품 카드 */
+    --radius-doc:16px;            /* 조용한 흰 문서 카드 */
+    --radius-sm:12px;             /* 입력·내부 요소 */
+    --radius-pill:9999px;         /* 모든 버튼·뱃지 */
+    --shadow-float:0 8px 28px rgba(10,10,10,.10);
+  }
   * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",
-         "Malgun Gothic",sans-serif; background:var(--bg); color:var(--txt); font-size:14px; }
-  header { padding:14px 20px; border-bottom:1px solid var(--line);
-           display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  header h1 { font-size:17px; margin:0; }
-  .pill { font-size:12px; color:var(--mut); }
-  .wrap { max-width:1200px; margin:0 auto; padding:18px 20px 60px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
-          padding:14px 16px; min-height:160px; }
-  .card h2 { font-size:14px; margin:0 0 4px; display:flex; justify-content:space-between; align-items:center; }
-  .badge { font-size:11px; padding:2px 8px; border-radius:999px; background:#243140; color:var(--mut); }
-  .badge.team { background:#1e3a5f; color:#93c5fd; }
-  .badge.report { background:#3b2f1e; color:#fcd34d; }
-  .badge.briefing { background:#2d1e3b; color:#d8b4fe; }
-  .msgs { margin-top:8px; max-height:260px; overflow-y:auto; }
-  .msg { padding:6px 0; border-top:1px solid var(--line); }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0;
+    font-family:"DM Sans","Inter","Helvetica Neue",Arial,
+      "Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+    background:var(--color-canvas); color:var(--color-charcoal);
+    font-size:16px; line-height:1.5; word-break:keep-all;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ── 상단 검정 promo-banner(한 줄, radius 0) ── */
+  .promo-banner {
+    background:var(--color-ink); color:#fff;
+    font-size:13px; font-weight:500; letter-spacing:-.01em;
+    text-align:center; padding:9px 20px;
+  }
+  .promo-banner b { font-weight:600; }
+
+  /* ── 상단 흰 네비 바 ── */
+  header {
+    position:sticky; top:0; z-index:20;
+    background:rgba(255,255,255,.88); backdrop-filter:saturate(180%) blur(12px);
+    border-bottom:1px solid var(--color-hairline);
+    padding:var(--space-4) var(--space-6);
+    display:flex; align-items:center; gap:var(--space-4); flex-wrap:wrap;
+  }
+  .brand { display:flex; align-items:center; gap:var(--space-3); }
+  .logo-mark {
+    width:30px; height:30px; border-radius:9px; flex:0 0 auto;
+    background:var(--color-ink); color:#fff;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:15px; letter-spacing:-.02em;
+  }
+  header h1 {
+    font-size:18px; font-weight:600; letter-spacing:-.02em;
+    margin:0; color:var(--color-ink);
+  }
+  .nav-meta { margin-left:auto; display:flex; align-items:center; gap:var(--space-3); flex-wrap:wrap; }
+  .pill {
+    font-size:12px; font-weight:500; color:var(--color-steel);
+    letter-spacing:-.01em;
+  }
+  .chip {
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:12px; font-weight:500; color:var(--color-slate);
+    background:var(--color-surface); border:1px solid var(--color-hairline);
+    border-radius:var(--radius-pill); padding:6px 12px; white-space:nowrap;
+  }
+  .chip .live-dot {
+    width:7px; height:7px; border-radius:50%;
+    background:var(--ok); box-shadow:0 0 0 3px var(--ok-bg);
+  }
+
+  .wrap { max-width:1240px; margin:0 auto; padding:var(--space-10) var(--space-6) var(--space-20); }
+
+  /* ── 섹션 헤더 ── */
+  .section-head { margin:var(--space-12) 0 var(--space-5); }
+  .section-head:first-child { margin-top:0; }
+  .section-title {
+    font-size:32px; font-weight:600; letter-spacing:-1px;
+    color:var(--color-ink); margin:0; line-height:1.15;
+  }
+  .section-sub {
+    font-size:14px; font-weight:400; color:var(--color-steel);
+    margin:var(--space-2) 0 0; letter-spacing:-.01em;
+  }
+
+  /* ── 부서 카드 그리드: 그라데이션 제품 카드 ── */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:var(--space-5); }
+  .card {
+    border-radius:var(--radius-product);
+    padding:var(--space-8);
+    min-height:200px; color:#fff;
+    display:flex; flex-direction:column;
+    background:linear-gradient(150deg,#3f3f46 0%,#27272a 100%);
+    overflow:hidden;
+  }
+  /* 제품색 인코딩 — 채널/팀을 제품처럼 색 부여 */
+  .card.k-blue    { background:linear-gradient(150deg,var(--brand-blue-2) 0%,var(--brand-blue) 100%); }
+  .card.k-magenta { background:linear-gradient(150deg,var(--brand-magenta-2) 0%,var(--brand-magenta) 100%); }
+  .card.k-coral   { background:linear-gradient(150deg,var(--brand-coral-2) 0%,var(--brand-coral) 100%); }
+  .card.k-purple  { background:linear-gradient(150deg,var(--brand-purple-2) 0%,var(--brand-purple) 100%); }
+  .card h2 {
+    font-size:20px; font-weight:600; letter-spacing:-.02em; margin:0 0 var(--space-4);
+    display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-3);
+    line-height:1.2;
+  }
+  /* 뱃지: pill. 제품 카드 위에서는 반투명 흰 글래스 */
+  .badge {
+    flex:0 0 auto;
+    font-size:12px; font-weight:600; letter-spacing:-.01em;
+    padding:5px 12px; border-radius:var(--radius-pill);
+    background:rgba(255,255,255,.20); color:#fff;
+    backdrop-filter:blur(4px); white-space:nowrap;
+  }
+  .badge.team {}
+  .badge.report { background:rgba(255,255,255,.14); }
+  .badge.briefing { background:rgba(255,255,255,.26); }
+  /* 카드 내부 메시지 영역: 제품색 위 반투명 흰 패널 */
+  .msgs {
+    margin-top:auto; max-height:280px; overflow-y:auto;
+    background:rgba(255,255,255,.92); border-radius:var(--radius-sm);
+    padding:var(--space-2) var(--space-4); color:var(--color-charcoal);
+  }
+  .msg { padding:var(--space-3) 0; border-top:1px solid var(--color-hairline); }
   .msg:first-child { border-top:none; }
-  .msg .who { color:var(--accent); font-weight:600; font-size:12px; }
-  .msg .when { color:var(--mut); font-size:11px; margin-left:6px; }
-  .msg .body { white-space:pre-wrap; word-break:break-word; margin-top:2px; line-height:1.45; }
-  .empty { color:var(--mut); font-size:12px; padding:10px 0; }
-  .section-title { font-size:13px; color:var(--mut); margin:26px 0 10px; text-transform:uppercase; letter-spacing:.04em; }
-  .composer { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
-  .composer .row { display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; align-items:center; }
-  select, textarea, button { font-family:inherit; font-size:14px; }
-  select { background:#0d1117; color:var(--txt); border:1px solid var(--line);
-           border-radius:7px; padding:8px 10px; }
-  textarea { width:100%; min-height:78px; background:#0d1117; color:var(--txt);
-             border:1px solid var(--line); border-radius:7px; padding:10px; resize:vertical; }
-  button { background:var(--accent); color:#fff; border:none; border-radius:7px;
-           padding:9px 18px; cursor:pointer; font-weight:600; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .roster { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
-  .agent { background:var(--card); border:1px solid var(--line); border-radius:9px; padding:12px 14px; }
-  .agent .nm { font-weight:600; }
-  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
-  .dot.on { background:var(--ok); } .dot.off { background:var(--bad); }
-  .agent .meta { color:var(--mut); font-size:12px; margin-top:4px; line-height:1.5; }
-  .note { color:var(--mut); font-size:12px; margin-top:8px; }
-  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
-           background:#243140; border:1px solid var(--line); color:var(--txt);
-           padding:10px 18px; border-radius:8px; opacity:0; transition:opacity .25s; pointer-events:none; }
-  .toast.show { opacity:1; }
-  a { color:var(--accent); }
+  .msg .who { color:var(--color-ink); font-weight:600; font-size:13px; letter-spacing:-.01em; }
+  .msg .when { color:var(--color-steel); font-size:12px; margin-left:6px; font-weight:400; }
+  .msg .body {
+    white-space:pre-wrap; word-break:break-word; margin-top:var(--space-1);
+    line-height:1.5; font-size:14px; color:var(--color-charcoal);
+  }
+  .empty { color:var(--color-steel); font-size:13px; padding:var(--space-3) 0; font-weight:400; }
+  .msgs .empty { color:var(--color-steel); }
+  /* 제품 카드 골격(메시지 로드 전) 상태 텍스트 */
+  .card > .msgs:only-of-type { }
+
+  /* ── CEO 지시: 떠있는 흰 패널(약한 그림자 허용) ── */
+  .composer {
+    background:var(--color-canvas);
+    border:1px solid var(--color-hairline);
+    border-radius:var(--radius-doc);
+    padding:var(--space-6);
+    box-shadow:var(--shadow-float);
+  }
+  .composer .row { display:flex; gap:var(--space-3); margin-bottom:var(--space-3); flex-wrap:wrap; align-items:center; }
+  .composer label { font-size:13px; font-weight:600; color:var(--color-slate); letter-spacing:-.01em; }
+  select, textarea, button { font-family:inherit; }
+  select {
+    background:var(--color-surface-2); color:var(--color-charcoal);
+    border:1px solid var(--color-hairline-strong);
+    border-radius:var(--radius-pill); padding:9px 16px;
+    font-size:14px; font-weight:500; cursor:pointer; min-height:40px;
+  }
+  select:focus { outline:none; border-color:var(--color-ink); }
+  textarea {
+    width:100%; min-height:96px;
+    background:var(--color-surface-2); color:var(--color-charcoal);
+    border:1px solid var(--color-hairline-strong);
+    border-radius:var(--radius-sm); padding:var(--space-4); resize:vertical;
+    font-size:16px; line-height:1.5; letter-spacing:-.01em;
+  }
+  textarea::placeholder { color:var(--color-stone); }
+  textarea:focus { outline:none; border-color:var(--color-ink); }
+  /* 모든 버튼 pill. primary = 검정 pill */
+  button {
+    background:var(--color-ink); color:#fff; border:none;
+    border-radius:var(--radius-pill); padding:11px 24px;
+    cursor:pointer; font-weight:600; font-size:14px; letter-spacing:-.01em;
+    min-height:44px; transition:transform .12s ease, opacity .12s ease;
+  }
+  button:hover { opacity:.88; }
+  button:active { transform:translateY(1px); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+
+  /* ── 에이전트 현황: 조용한 흰 문서 카드(flat, hairline 보더) ── */
+  .roster { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:var(--space-4); }
+  .agent {
+    background:var(--color-canvas);
+    border:1px solid var(--color-hairline);
+    border-radius:var(--radius-doc);
+    padding:var(--space-5);
+  }
+  .agent .nm {
+    font-weight:600; font-size:16px; letter-spacing:-.02em; color:var(--color-ink);
+    display:flex; align-items:center; gap:6px;
+  }
+  .agent .nm .pill { color:var(--color-stone); font-weight:500; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .dot.on { background:var(--ok); box-shadow:0 0 0 3px var(--ok-bg); }
+  .dot.off { background:var(--color-stone); box-shadow:0 0 0 3px var(--color-surface); }
+  .agent .meta {
+    color:var(--color-steel); font-size:13px; margin-top:var(--space-3); line-height:1.6;
+    letter-spacing:-.01em;
+  }
+  .note {
+    color:var(--color-slate); font-size:13px; margin-top:var(--space-5); line-height:1.6;
+    background:var(--color-surface); border:1px solid var(--color-hairline);
+    border-radius:var(--radius-doc); padding:var(--space-5); letter-spacing:-.01em;
+  }
+  .note b { color:var(--color-ink); font-weight:600; }
+
+  /* ── 토스트: 떠있는 패널 ── */
+  .toast {
+    position:fixed; bottom:var(--space-6); left:50%; transform:translateX(-50%) translateY(8px);
+    background:var(--color-ink); color:#fff;
+    padding:12px 22px; border-radius:var(--radius-pill);
+    font-size:14px; font-weight:500; letter-spacing:-.01em;
+    opacity:0; transition:opacity .25s ease, transform .25s ease;
+    pointer-events:none; box-shadow:var(--shadow-float);
+  }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  a { color:var(--color-ink); font-weight:500; }
+
+  /* ── 반응형 ── */
+  @media (max-width:1024px){
+    .grid { grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); }
+    .roster { grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
+    .section-title { font-size:28px; }
+    .wrap { padding:var(--space-8) var(--space-5) var(--space-16); }
+  }
+  @media (max-width:768px){
+    body { font-size:15px; }
+    .grid { grid-template-columns:1fr; }
+    .roster { grid-template-columns:1fr; }
+    .card { padding:var(--space-6); border-radius:24px; min-height:0; }
+    .section-title { font-size:24px; letter-spacing:-.5px; }
+    .nav-meta { width:100%; margin-left:0; }
+    .composer .row { gap:var(--space-2); }
+    select { width:100%; }
+  }
 </style>
 </head>
 <body>
+<div class="promo-banner">루프백 전용(127.0.0.1) · CEO 단독 콘솔 · <b>외부에 노출되지 않습니다</b></div>
 <header>
-  <h1>Hermes CEO 대시보드</h1>
-  <span class="pill" id="clock"></span>
-  <span class="pill">자동 새로고침 <span id="poll">12</span>초 · 루프백 전용(127.0.0.1)</span>
+  <div class="brand">
+    <span class="logo-mark">H</span>
+    <h1>Hermes CEO 대시보드</h1>
+  </div>
+  <div class="nav-meta">
+    <span class="pill" id="clock"></span>
+    <span class="chip"><span class="live-dot"></span>자동 새로고침 <span id="poll">12</span>초</span>
+  </div>
 </header>
 <div class="wrap">
-  <div class="section-title">부서별 현황</div>
+  <div class="section-head">
+    <h2 class="section-title">부서별 현황</h2>
+    <p class="section-sub">각 채널의 최근 활동을 12초마다 폴링해 보여줍니다.</p>
+  </div>
   <div class="grid" id="cards"></div>
 
-  <div class="section-title">CEO 지시</div>
+  <div class="section-head">
+    <h2 class="section-title">CEO 지시</h2>
+    <p class="section-sub">기본 CEO브리핑 → 박민철(비서실장)에게 전달됩니다.</p>
+  </div>
   <div class="composer">
     <div class="row">
       <label for="ch">대상 채널</label>
       <select id="ch"></select>
-      <span class="pill">기본 CEO브리핑 → 박민철(비서실장)에게 전달</span>
     </div>
     <textarea id="msg" placeholder="지시 내용을 입력하세요. 예) 개발팀 이번 주 출시 일정 정리해서 올려주세요."></textarea>
-    <div class="row" style="margin-top:10px; justify-content:flex-end;">
+    <div class="row" style="margin-top:var(--space-4); margin-bottom:0; justify-content:flex-end;">
       <button id="send">지시 전송</button>
     </div>
   </div>
 
-  <div class="section-title">에이전트 현황</div>
+  <div class="section-head">
+    <h2 class="section-title">에이전트 현황</h2>
+    <p class="section-sub">role 목록과 봇 활성 여부 · 담당 채널.</p>
+  </div>
   <div class="roster" id="roster"></div>
   <div class="note" id="adminNote"></div>
 </div>
@@ -392,6 +613,17 @@ function fmtTime(ms){ if(!ms) return ""; const d=new Date(ms);
 function toast(t){ const el=document.getElementById('toast'); el.textContent=t;
   el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2600); }
 
+// 제품색 인코딩: 채널의 kind + team_label 을 제품처럼 색 클래스로 매핑.
+//   브리핑=Coral(시그니처) · 개발=Blue · 인사총무=Magenta · 관리=Purple.
+function colorClass(c){
+  if(c.kind==='briefing') return 'k-coral';
+  const lab = (c.team_label||'');
+  if(lab.indexOf('개발')>=0) return 'k-blue';
+  if(lab.indexOf('인사')>=0||lab.indexOf('총무')>=0) return 'k-magenta';
+  if(c.kind==='report') return 'k-purple';
+  return 'k-blue';
+}
+
 async function api(path, opts){ const r=await fetch(path,opts);
   const d=await r.json().catch(()=>({error:'응답 파싱 실패'}));
   if(!r.ok) throw new Error(d.error||('HTTP '+r.status)); return d; }
@@ -399,10 +631,10 @@ async function api(path, opts){ const r=await fetch(path,opts);
 async function loadChannels(){
   const d = await api('/api/channels');
   channels = d.channels; defaultPost = d.default_post_channel;
-  // 현황 카드 골격
+  // 현황 카드 골격(제품색 카드)
   const cards = document.getElementById('cards'); cards.innerHTML='';
   channels.forEach(c=>{
-    const el=document.createElement('div'); el.className='card';
+    const el=document.createElement('div'); el.className='card '+colorClass(c);
     el.innerHTML = `<h2>${esc(c.name)} <span class="badge ${c.kind}">`+
       `${c.kind==='team'?'팀':c.kind==='report'?'보고라인':'브리핑'}</span></h2>`+
       `<div class="msgs" id="m_${c.id}"><div class="empty">불러오는 중…</div></div>`;
