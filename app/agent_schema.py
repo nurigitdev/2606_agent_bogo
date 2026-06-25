@@ -26,6 +26,58 @@ LEARN_PLACEHOLDER_PREFIX = "TODO_"
 # hermes_runtime 의 저장 로직과 여기 system_prompt 의 강조 렌더가 같은 값을 공유한다.
 CORRECTION_PREFIX = "[교정]"
 
+# ── 에이전트 개조 의도 판별(공용 단일 출처) ─────────────────────────────────────
+# ceo_admin_runtime(개조 파이프라인)과 hermes_runtime(학습 누적 오염 방지)이 같은 기준을
+# 공유해야 한다. ceo_admin 은 이 판별로 '적용/반려' 단독 명령을 분기하고, hermes_runtime 은
+# '개조 지시·적용/반려'를 학습 노트 누적에서 경량 제외한다(정밀 판정·실행은 ceo_admin 의 LLM
+# parse_intent 가 담당하고, 여기 휴리스틱은 LLM 없이 빠르게 거르는 1차 필터다).
+ADMIN_APPLY_WORDS = ("적용", "반영", "승인", "확정")
+ADMIN_REJECT_WORDS = ("반려", "취소", "폐기", "거부", "안 해", "안해")
+
+# 개조 의도를 시사하는 동사·명사 키워드(에이전트 이름 토큰과 AND 결합해야 개조로 판정).
+# '고쳐'는 개조에도 교정에도 쓰이나, 아래 looks_like_definition_edit 가 '이름 토큰 동반(AND)'
+# 을 요구하므로 단순 "그거 틀렸어 고쳐"(이름 없음)는 개조로 빠지지 않고 교정으로 정상 누적된다.
+DEFINITION_EDIT_WORDS = (
+    "바꿔", "수정", "고쳐", "줄여", "늘려", "추가", "페르소나", "정의", "말투", "톤",
+    "역할", "프롬프트", "개조", "변경해", "바꿔라", "수정해",
+)
+
+
+def is_admin_short_command(text, words):
+    """'적용'/'반려' 등 명령어가 짧은 단독 응답으로 온 경우에만 명령으로 인정한다.
+
+    변경 지시문(예: '박민철 보고에 적용 사례를 추가해') 안에 키워드가 섞여 오판하는 것을
+    막는다. 인정 조건: (a) 구두점·공백 제거 후 정확 일치, 또는 (b) <=6자 단답이면서 포함.
+    """
+    norm = "".join(ch for ch in text if ch.isalnum())  # 공백·구두점·이모지 제거
+    for w in words:
+        if norm == "".join(ch for ch in w if ch.isalnum()):
+            return True
+    if len(text) <= 6:
+        return any(w in text for w in words)
+    return False
+
+
+def is_admin_command(text):
+    """'적용' 또는 '반려' 단독 명령인지 여부(개조 파이프라인의 승인/폐기 신호)."""
+    return (is_admin_short_command(text, ADMIN_APPLY_WORDS)
+            or is_admin_short_command(text, ADMIN_REJECT_WORDS))
+
+
+def looks_like_definition_edit(text, role_tokens):
+    """LLM 없이 '에이전트 정의 개조 의도'를 경량 추정한다(1차 필터, 정밀 판정 아님).
+
+    조건(AND): 개조 키워드 1개 이상 포함 + 등록 에이전트 토큰(role/name/username) 1개 이상
+    등장. 이름 토큰 동반을 AND 로 강제해, 이름 없는 단순 교정("그거 틀렸어 고쳐")이 개조로
+    오분류되지 않게 한다. role_tokens 는 호출측이 ROLES 에서 구성해 넘기는 토큰 set.
+    """
+    if not text or not role_tokens:
+        return False
+    has_word = any(w in text for w in DEFINITION_EDIT_WORDS)
+    if not has_word:
+        return False
+    return any(tok and tok in text for tok in role_tokens)
+
 # ── ReAct / tool use 단일 출처 ────────────────────────────────────────────────
 # decide()가 단발 LLM 호출 → 다단계 에이전트 루프로 전환되면서, 매 반복의 출력 스키마와
 # 안전 도구 화이트리스트를 여기(데이터/스키마 단일 출처)에 둔다. hermes_runtime 은 이 정의를

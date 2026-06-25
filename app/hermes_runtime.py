@@ -72,6 +72,13 @@ ALIASES = SPEC["aliases"]
 PRIMARY = SPEC["primary"]
 SUBS = set(SPEC["channels"])
 NAME2USER = {r["name"]: r["username"] for r in ROLES.values()}
+# 등록된 모든 에이전트의 식별 토큰(role 키 + 이름 + username) 합집합. 학습방 누적 시
+# '에이전트 개조 지시'를 경량 판별(A.looks_like_definition_edit)하는 데 쓴다 — 정의 개조는
+# 행동 노하우가 아니므로 학습 노트에 쌓지 않는다(정밀 판정·실행은 ceo_admin_runtime 담당).
+ROLE_TOKENS = set()
+for _rk, _rm in ROLES.items():
+    ROLE_TOKENS.update({_rk, _rm.get("name", ""), _rm.get("username", "")})
+ROLE_TOKENS.discard("")
 MEM_PATH = os.path.join(HERE, f"memory_{ROLE}.json")
 # 학습방 채널명(이 역할에 학습방이 선언돼 있을 때만). 매 이벤트에서 현재 방이
 # 학습방인지 판별하는 데 쓴다.
@@ -709,7 +716,16 @@ async def run():
             # 학습방 트리거: 이 역할의 학습방에 사람이 올린 메시지(교정·노하우·정책)는
             # 휘발 없이 학습 노트에 영구 누적한다. 봇 메아리는 누적하지 않는다.
             # 누적은 게이트(멘션 여부)와 무관 — 학습방의 모든 사람 발화가 학습 대상.
-            if LEARN_CHANNEL and cname == LEARN_CHANNEL and not is_bot and text.strip():
+            # 단, '에이전트 정의 개조 지시'와 '적용/반려 명령'은 행동 노하우가 아니므로
+            # 누적에서 경량 제외한다(정밀 판정·실행은 ceo_admin_runtime 의 LLM 이 담당).
+            # looks_like_definition_edit 는 '개조 키워드 + 에이전트 이름 토큰 동반(AND)'이라,
+            # 이름 없는 단순 교정("그거 틀렸어 고쳐")은 제외되지 않고 교정으로 정상 누적된다.
+            _learn_body = text.strip()
+            _is_edit_or_cmd = bool(_learn_body) and (
+                A.is_admin_command(_learn_body)
+                or A.looks_like_definition_edit(_learn_body, ROLE_TOKENS))
+            if (LEARN_CHANNEL and cname == LEARN_CHANNEL and not is_bot
+                    and text.strip() and not _is_edit_or_cmd):
                 sp_name = speaker(p["user_id"])
                 body = text.strip()
                 if is_correction_feedback(body):

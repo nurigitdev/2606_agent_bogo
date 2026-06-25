@@ -6,7 +6,7 @@
   - 비밀번호 평문 미저장(PBKDF2 해시만), 상수시간 비교
   - 세션: 토큰 추측 불가 길이, 생성/조회/만료/폐기
   - role 매핑: ceo/staff/admin 정확
-  - 채널 권한: ceo=전체, staff=자기채널만, admin=전체+에이전트관리
+  - 채널 권한: ceo=전체, staff=자기채널만, admin=전체(WHITELIST). 개조는 역할별 학습방 전용.
   - 게시 권한: staff 가 자기 채널 외 게시 불가(서버측 강제)
   - 부제 제거 회귀: 메인/로그인 HTML 에 보조 설명 텍스트가 남지 않았는가
 """
@@ -101,11 +101,10 @@ class ChannelAuthorizationTest(unittest.TestCase):
         names = {c["name"] for c in D.channels_for_role(self._ident("ceo"))}
         self.assertEqual(names, set(D.WHITELIST_NAMES))
 
-    def test_admin_sees_all_plus_admin_channel(self):
+    def test_admin_sees_all_whitelist(self):
+        # 개조 전용 채널 폐지 후: admin 은 WHITELIST(팀/보고라인/브리핑) 전체를 본다.
         names = {c["name"] for c in D.channels_for_role(self._ident("admin"))}
-        self.assertTrue(set(D.WHITELIST_NAMES).issubset(names))
-        if D.ADMIN_CHANNEL:
-            self.assertIn(D.ADMIN_CHANNEL, names)
+        self.assertEqual(names, set(D.WHITELIST_NAMES))
 
     def test_staff_sees_only_own_channels(self):
         ident = self._ident("staff", ["개발팀", "개발-보고라인"])
@@ -122,10 +121,10 @@ class ChannelAuthorizationTest(unittest.TestCase):
         self.assertNotIn("CEO브리핑", allowed)
         self.assertNotIn("인사총무팀", allowed)
 
-    def test_admin_can_post_admin_channel(self):
-        if not D.ADMIN_CHANNEL:
-            self.skipTest("ADMIN_CHANNEL 없음")
-        self.assertIn(D.ADMIN_CHANNEL, D.post_channels_for_role(self._ident("admin")))
+    def test_admin_can_post_whitelist(self):
+        # admin 은 WHITELIST 전체에 게시할 수 있다(전체 화이트리스트 = 게시 허용 집합).
+        allowed = D.post_channels_for_role(self._ident("admin"))
+        self.assertEqual(allowed, set(D.WHITELIST_NAMES))
 
 
 class PostMessageAnyTest(unittest.TestCase):
@@ -137,10 +136,9 @@ class PostMessageAnyTest(unittest.TestCase):
     def tearDown(self):
         D.mm = self._orig
 
-    def test_post_any_to_admin_channel(self):
-        if not D.ADMIN_CHANNEL:
-            self.skipTest("ADMIN_CHANNEL 없음")
-        res = D.post_message_any(D.ADMIN_CHANNEL, "관리 지시")
+    def test_post_any_to_existing_channel(self):
+        # post_message_any 는 channels.json 에 실재하는 채널이면 게시(권한은 호출측 강제).
+        res = D.post_message_any("CEO브리핑", "지시")
         self.assertEqual(res["id"], "p1")
 
     def test_post_any_rejects_nonexistent(self):

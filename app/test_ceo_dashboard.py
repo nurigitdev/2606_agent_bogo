@@ -49,8 +49,9 @@ class WhitelistTest(unittest.TestCase):
         self.assertIn("개발팀", names)
         self.assertIn("인사총무팀", names)
         self.assertIn("개발-보고라인", names)
-        # 전용 파이프라인 채널은 모니터링 화이트리스트에서 제외.
-        self.assertNotIn("CEO-에이전트관리", names)
+        # 개조 전용 학습방은 모니터링 화이트리스트에서 제외(역할별 ceo_admin 파이프라인 전용).
+        self.assertNotIn("비서실-학습방", names)
+        self.assertNotIn("개발-학습방", names)
 
     def test_whitelist_ids_match_channels_json(self):
         for c in D.WHITELIST:
@@ -116,8 +117,10 @@ class PostTest(unittest.TestCase):
             D.post_message("CEO브리핑", "x" * 4001)
 
     def test_post_rejects_unlisted_channel(self):
+        # 화이트리스트(팀/보고라인/브리핑) 밖 채널은 post_message 가 막는다.
+        # 학습방(개조 전용)도 모니터링 화이트리스트에 없어 차단된다.
         with self.assertRaises(ValueError):
-            D.post_message("CEO-에이전트관리", "막혀야 함")
+            D.post_message("비서실-학습방", "막혀야 함")
         self.assertEqual(len(self.fake.posted), 0)
 
 

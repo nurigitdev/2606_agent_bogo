@@ -6,7 +6,7 @@ CEO 가 Mattermost 의 여러 채널(인사총무팀/개발팀/보고라인/CEO�
   (a) 부서별 현황 카드  — 각 채널 최근 N건을 mm_client.history 로 폴링 표시
   (b) 지시 입력창       — 선택 채널(기본 CEO브리핑 → 박민철)에 메시지 게시
   (c) 에이전트 현황     — agent_schema.load_roles 의 role 목록 + 봇 활성 여부
-  (d) 에이전트 관리 연계 — 기존 ceo_admin_runtime(CEO-에이전트관리) 파이프라인 안내
+  (d) 에이전트 개조 연계 — 역할별 학습방에서 자연어 지시 → ceo_admin_runtime 파이프라인 안내
 
 설계 원칙(기존 Hermes 인프라 그대로 재사용, 신규 의존성·신규 API 키 0):
   - 통신:   mm_client.MM(REST) — 토큰은 박민철(nk_config.json)을 재사용. 박민철은
@@ -54,7 +54,7 @@ ID2NAME = {v: k for k, v in CHANNELS.items()}
 def _build_whitelist():
     """대시보드가 다룰 채널 화이트리스트를 teams.json·orchestrator 정의에서 동적 구성.
 
-    팀 채널/보고라인 + CEO 브리핑만 허용한다(CEO-에이전트관리는 전용 파이프라인이라 제외).
+    팀 채널/보고라인 + CEO 브리핑만 허용한다(학습방은 역할별 개조 전용 파이프라인이라 제외).
     채널명이 channels.json 에 실재하는 것만 통과시켜, 정의 누락 시 조용히 빠진다.
     반환: [{name, id, kind, team_label}] 순서 보존 리스트.
     """
@@ -77,8 +77,8 @@ def _build_whitelist():
 
 WHITELIST = _build_whitelist()
 WHITELIST_NAMES = {c["name"] for c in WHITELIST}
-# 에이전트 관리 전용 채널(admin 전용). 화이트리스트에는 없지만 admin 은 접근 가능.
-ADMIN_CHANNEL = "CEO-에이전트관리" if "CEO-에이전트관리" in CHANNELS else None
+# 에이전트 개조는 역할별 학습방(ceo_admin_runtime)에서 처리한다. 대시보드는 모니터링·지시
+# 전용이므로 별도 관리 채널을 두지 않는다(admin 도 WHITELIST 만 보고 게시).
 
 # ── 인증·세션 (ceo_auth) ─────────────────────────────────────────────────────
 ACCOUNTS = AUTH.load_accounts()
@@ -89,18 +89,12 @@ COOKIE_NAME = "hermes_sid"
 def channels_for_role(identity):
     """로그인 신원(role)이 모니터링/조회할 수 있는 채널 화이트리스트를 반환.
 
-    ceo/admin → 전체 화이트리스트(admin 은 + 에이전트관리 채널).
+    ceo/admin → 전체 화이트리스트(팀/보고라인/브리핑). 에이전트 개조는 학습방 전용 파이프라인.
     staff     → accounts_config 의 staff_channels 중 실재하는 것만.
     """
     role = identity["role"]
-    if role == "ceo":
+    if role in ("ceo", "admin"):
         return list(WHITELIST)
-    if role == "admin":
-        extra = []
-        if ADMIN_CHANNEL:
-            extra = [{"name": ADMIN_CHANNEL, "id": CHANNELS[ADMIN_CHANNEL],
-                      "kind": "admin", "team_label": "관리"}]
-        return list(WHITELIST) + extra
     # staff: 자기 부서 채널만.
     allowed = set(identity.get("staff_channels", []))
     return [c for c in WHITELIST if c["name"] in allowed]
@@ -182,8 +176,8 @@ def fetch_history(channel_name, n=8):
 def fetch_history_any(channel_name, n=8):
     """채널 권한 검사 없이 history 조회(채널 권한은 호출측 role 기준이 강제).
 
-    fetch_history 와 동일하지만 화이트리스트 제한이 없어, admin 의 에이전트관리 채널처럼
-    모니터링 화이트리스트 밖이지만 권한이 허용된 채널을 조회할 수 있다.
+    fetch_history 와 동일하지만 화이트리스트 제한이 없어, 모니터링 화이트리스트 밖이지만
+    권한이 허용된 채널을 조회할 수 있다(범용 헬퍼).
     """
     if channel_name not in CHANNELS:
         raise ValueError(f"존재하지 않는 채널: {channel_name}")
@@ -243,8 +237,8 @@ def post_message(channel_name, text):
 def post_message_any(channel_name, text):
     """채널 게시(빈문자·길이 검증). 채널 권한은 호출측(role 기준)이 강제하므로,
 
-    여기서는 channels.json 에 실재하는 채널이기만 하면 게시한다. admin 의 에이전트관리
-    채널처럼 모니터링 화이트리스트 밖이지만 권한이 허용된 채널을 위해 분리한다.
+    여기서는 channels.json 에 실재하는 채널이기만 하면 게시한다. 모니터링 화이트리스트
+    밖이지만 권한이 허용된 채널을 위해 분리한다(범용 헬퍼).
     """
     if channel_name not in CHANNELS:
         raise ValueError(f"존재하지 않는 채널: {channel_name}")
@@ -385,7 +379,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/roles":
             if ident["role"] == "staff":  # 직원은 에이전트 현황 접근 불가.
                 return self._json({"error": "권한 없음"}, 403)
-            return self._json({"roles": roster(), "admin_channel": ADMIN_CHANNEL})
+            return self._json({"roles": roster()})
         if path == "/api/history":
             return self._get_history(u, ident)
         return self._json({"error": "not found"}, 404)
@@ -734,7 +728,7 @@ def build_index_html():
     pill/lg/md/sm 라디우스 분리·weight 300/400/600·active scale 0.95·hover 비의존)을 계승.
     - ceo:   부서별 현황(전체) + 지시 송신(전체 채널) + 에이전트 현황
     - staff: 자기 부서 현황 + 자기 채널 송신 (에이전트 현황·전체지시 제거)
-    - admin: 에이전트관리 중심 + 전체 채널/현황 + 에이전트 현황
+    - admin: 전체 채널/현황 + 에이전트 현황(개조는 역할별 학습방 파이프라인에서)
     화면 골격은 JS 가 role 로 구성하므로 서버는 동일 HTML 을 모든 role 에 보낸다.
     DOM 계약(cards/ch/roster/adminNote/toast id, card/msgs/agent class)은 보존한다.
     """
@@ -775,15 +769,13 @@ function toast(t){ const el=document.getElementById('toast'); el.textContent=t;
 
 function colorClass(c){
   if(c.kind==='briefing') return 'k-coral';
-  if(c.kind==='admin') return 'k-admin';
   const lab=(c.team_label||'');
   if(lab.indexOf('개발')>=0) return 'k-blue';
   if(lab.indexOf('인사')>=0||lab.indexOf('총무')>=0) return 'k-magenta';
   if(c.kind==='report') return 'k-purple';
   return 'k-blue';
 }
-function kindLabel(k){ return k==='team'?'팀':k==='report'?'보고라인':
-  k==='admin'?'에이전트관리':'브리핑'; }
+function kindLabel(k){ return k==='team'?'팀':k==='report'?'보고라인':'브리핑'; }
 
 async function api(path, opts){
   const r=await fetch(path,opts);
@@ -869,9 +861,10 @@ async function loadRoster(){
     box.appendChild(el);
   });
   const note=document.getElementById('adminNote');
-  if(note && d.admin_channel){
-    note.innerHTML='에이전트 정의 변경은 <b>'+esc(d.admin_channel)+'</b> 채널에서 '
-      +'자연어 지시 → diff 미리보기 → <b>적용</b> (ceo_admin_runtime 파이프라인).';
+  if(note){
+    note.innerHTML='에이전트 정의 변경은 각 에이전트의 <b>역할별 학습방</b>에서 '
+      +'자연어 지시 → diff 미리보기 → <b>적용</b> (ceo_admin_runtime 파이프라인). '
+      +'그 방에서는 그 방 담당 에이전트만 수정됩니다(방 격리).';
   }
 }
 

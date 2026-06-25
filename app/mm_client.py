@@ -103,3 +103,21 @@ class MM:
     def add_member(self, channel_id, user_id):
         """봇/에이전트 user 를 채널 멤버로 추가(멱등 — 이미 멤버면 Mattermost 가 그대로 반환)."""
         return self._req("POST", f"/channels/{channel_id}/members", {"user_id": user_id})
+
+    def delete_post(self, post_id):
+        """게시물 삭제(soft delete). 봇 본인이 올린 테스트 메시지 정리용."""
+        req = urllib.request.Request(
+            MM_BASE + f"/posts/{post_id}",
+            headers={"Authorization": f"Bearer {self.token}"},
+            method="DELETE")
+        urllib.request.urlopen(req, timeout=10).read()
+        return True
+
+    def delete_channel(self, channel_id):
+        """채널 아카이브(soft delete). 기존 메시지는 보존되고 채널만 비활성화된다."""
+        req = urllib.request.Request(
+            MM_BASE + f"/channels/{channel_id}",
+            headers={"Authorization": f"Bearer {self.token}"},
+            method="DELETE")
+        urllib.request.urlopen(req, timeout=10).read()
+        return True

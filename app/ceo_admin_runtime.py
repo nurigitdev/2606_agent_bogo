@@ -1,11 +1,16 @@
 """
-CEO 에이전트 업데이트 파이프라인 — '에이전트 관리자' 봇.
+에이전트 정의 개조 파이프라인 — '에이전트 관리자' 봇(역할별 학습방 기반).
 
-CEO가 전용 방('CEO-에이전트관리')에서 자연어로 에이전트 정의 변경을 지시하면:
-  1. 의도 파싱(LLM): 어떤 에이전트(role) + 무슨 변경
-  2. 해당 agents/<role>.md 를 LLM으로 재작성 → unified diff 미리보기를 방에 게시 (pending)
-  3. CEO "적용" → md 파일 반영 + git commit(한국어) + 운영본 동기화 + 해당 역할 데몬 리로드
-  4. CEO "반려/취소" → pending 폐기
+각 역할의 전용 학습방(teams.json learning_rooms)에서 그 방의 owner(=담당 에이전트)에
+대한 정의 변경을 자연어로 지시하면:
+  1. 의도 파싱(LLM): 무슨 변경(대상 role 은 그 방의 owner 로 강제 — 방 격리)
+  2. 해당 agents/<owner>.md 를 LLM으로 재작성 → unified diff 미리보기를 그 방에 게시 (pending)
+  3. "적용" → md 파일 반영 + git commit(한국어) + 운영본 동기화 + 해당 역할 데몬 리로드
+  4. "반려/취소" → 그 방의 pending 폐기
+
+방 격리(중요): 각 학습방에서는 그 방 owner 의 정의만 수정할 수 있다. 한 방의 '적용/반려'는
+그 방 owner 슬롯에만 작용한다(PENDING 은 role 별 dict). 다른 에이전트를 고치려면 그
+에이전트의 학습방에서 지시해야 한다.
 
 안전장치(하드 게이트):
   - 수정 가능 경로는 agents/*.md (페르소나) 뿐. 그 외 파일·시스템 명령 절대 불가.
@@ -80,31 +85,59 @@ def _resolve_repo():
 # 모든 md 쓰기·git·diff 의 기준(원본 repo). HERE(미러일 수 있음)와 분리한다.
 REPO = _resolve_repo()
 REPO_AGENTS = os.path.join(REPO, "agents")
-ADMIN_CHANNEL = "CEO-에이전트관리"
-# 이 파이프라인 전용 봇 토큰: 기존 박민철(nk) 봇을 재사용(이미 채널 멤버, 별도 봇 계정 생성 권한 불요).
+# 이 파이프라인 전용 봇 토큰: 기존 박민철(nk) 봇을 재사용. nk 봇은 system_admin 이라
+# REST 로 자기 자신을 학습방 멤버로 추가할 수 있다(아래 ensure_bot_membership 참조).
 ADMIN_CONFIG = "nk"
 
 CH = A.load_channels()
 ID2NAME = {v: k for k, v in CH.items()}
-if ADMIN_CHANNEL not in CH:
-    sys.stderr.write(f"channels.json 에 '{ADMIN_CHANNEL}' 채널이 없습니다. 먼저 채널을 생성·등록하세요.\n")
+TEAMS = A.load_teams()
+
+ROLES = A.load_roles()
+ROLE_BY_NAME = {m["name"]: r for r, m in ROLES.items()}  # 박민철 -> orchestrator
+ROLE_BY_USER = {m["username"]: r for r, m in ROLES.items()}  # minchul -> orchestrator
+
+# 수신할 학습방 맵: {채널명 -> owner role}. teams.json learning_rooms 에서, owner 가 실재
+# 역할이고 channel 이 channels.json 에 등록된 것만 채택한다. 단일 'CEO-에이전트관리' 방
+# 의존을 폐지하고, 역할별 학습방 N개를 동시 수신한다(방마다 그 owner 정의만 개조).
+LEARN_ROOMS = {}  # channel name -> owner role
+for _room in A.load_learning_rooms(TEAMS):
+    _ch, _owner = _room.get("channel"), _room.get("owner")
+    if _ch in CH and _owner in ROLES:
+        LEARN_ROOMS[_ch] = _owner
+if not LEARN_ROOMS:
+    sys.stderr.write(
+        "수신할 학습방이 없습니다. teams.json 의 learning_rooms 와 channels.json 정합성을 "
+        "확인하세요(owner 가 실재 역할이고 channel 이 channels.json 에 등록돼야 함).\n")
     raise SystemExit(2)
-ADMIN_CID = CH[ADMIN_CHANNEL]
+# CID 집합과 역맵(CID -> (채널명, owner role)). websocket 수신 필터·라우팅에 쓴다.
+LEARN_CIDS = {CH[ch] for ch in LEARN_ROOMS}
+CID_TO_ROOM = {CH[ch]: (ch, owner) for ch, owner in LEARN_ROOMS.items()}
 
 CFG = json.load(open(os.path.join(HERE, f"{ADMIN_CONFIG}_config.json"), encoding="utf-8"))
 BOT_ID = CFG["bot_id"]
 LLM = C.load_llm_config()
 mm = C.MM(CFG["bot_token"])
 
-ROLES = A.load_roles()
-ROLE_BY_NAME = {m["name"]: r for r, m in ROLES.items()}  # 박민철 -> orchestrator
-ROLE_BY_USER = {m["username"]: r for r, m in ROLES.items()}  # minchul -> orchestrator
+# 승인 대기 중인 변경안 — 방(owner role)별 dict. 한 방의 '적용/반려'는 그 방 owner
+# 슬롯에만 작용해, 다른 방 대기 건이 섞이지 않는다(방 격리). 같은 방에 새 변경 지시가
+# 오면 그 방 직전 대기 건만 덮어쓰여 폐기된다(미적용이므로 안전).
+# 형태: PENDING[role] = {"role","path","new_text","diff","summary"}.
+PENDING = {}
 
-# 승인 대기 중인 변경안. 단일 슬롯(최대 1건)만 유지한다 — '적용' 한 번에 누적된
-# 여러 건이 한꺼번에 커밋되는 것을 막아, 건별 명시 승인을 보장한다. 새 변경 지시가
-# 오면 직전 대기 건은 자동으로 덮어쓰여 폐기된다(미적용이므로 안전).
-# 형태: {"role","path","new_text","diff","summary"} 또는 None.
-PENDING = None
+
+def ensure_bot_membership():
+    """nk 봇(BOT_ID)을 모든 학습방 채널의 멤버로 보장한다(멱등, 기동 시 1회).
+
+    ceo_admin 이 nk 봇 토큰으로 각 학습방에 게시하려면 그 봇이 채널 멤버여야 한다.
+    nk 봇은 system_admin 이라 자기 자신을 추가할 수 있다. 이미 멤버면 무해, 실패해도
+    기동은 계속하고 경고만 남긴다(개별 방 게시 시점에 다시 시도될 수 있음).
+    """
+    for ch, cid in ((c, CH[c]) for c in LEARN_ROOMS):
+        try:
+            mm.add_member(cid, BOT_ID)
+        except Exception as e:
+            print(f"[CEO관리봇] 학습방 멤버십 보장 실패({ch}): {type(e).__name__} — 게시 시 재시도")
 
 
 def resolve_role(token):
@@ -132,36 +165,18 @@ def _llm(messages, json_mode):
                           max_tokens=2000, temperature=0.3, json_mode=json_mode)
 
 
-APPLY_WORDS = ("적용", "반영", "승인", "확정")
-REJECT_WORDS = ("반려", "취소", "폐기", "거부", "안 해", "안해")
-
-
-def _is_short_command(t, words):
-    """'적용'/'반려' 등 명령어가 짧은 단독 응답으로 온 경우에만 명령으로 인정한다.
-
-    변경 지시문(예: '박민철 보고에 적용 사례를 추가해') 안에 키워드가 섞여 들어가
-    오판하는 것을 막는다. 인정 조건:
-      - 정확히 그 단어이거나(구두점·공백 제거 후 일치), 또는
-      - 매우 짧은 응답(<=6자)이면서 그 단어를 포함.
-    """
-    norm = "".join(ch for ch in t if ch.isalnum())  # 공백·구두점·이모지 제거
-    for w in words:
-        wn = "".join(ch for ch in w if ch.isalnum())
-        if norm == wn:
-            return True
-    if len(t) <= 6:
-        return any(w in t for w in words)
-    return False
-
-
 def parse_intent(text):
-    """CEO 자연어 → {action, target, instruction}. action=update|apply|reject|help|none."""
+    """CEO 자연어 → {action, target, instruction}. action=update|apply|reject|help|none.
+
+    적용/반려 단독 명령 판별은 agent_schema 공용 함수(단일 출처)로 위임한다.
+    update 의 대상(target)은 추출하되, 방 격리상 handle()에서 owner_role 로 강제되므로
+    참고용이다."""
     t = text.strip()
     # 적용/반려는 짧은 단독 응답일 때만 명령으로 본다(LLM 불필요, 오판 위험 최소화).
     # 직전에 PENDING 이 없는데 '적용' 만 와도 handle()에서 안내 처리하므로 여기선 의도만 분류.
-    if _is_short_command(t, APPLY_WORDS):
+    if A.is_admin_short_command(t, A.ADMIN_APPLY_WORDS):
         return {"action": "apply"}
-    if _is_short_command(t, REJECT_WORDS):
+    if A.is_admin_short_command(t, A.ADMIN_REJECT_WORDS):
         return {"action": "reject"}
     if t in ("도움말", "help", "?", "사용법"):
         return {"action": "help"}
@@ -244,17 +259,15 @@ def git(args, check=True):
     return subprocess.run(["git", "-C", REPO, *args], capture_output=True, text=True, check=check)
 
 
-def apply_change():
-    """승인된 단일 대기 변경을 원본 repo 에 반영 + git commit + 미러 sync + 데몬 리로드.
+def apply_change(role):
+    """그 방(role)의 승인된 대기 변경을 원본 repo 에 반영 + git commit + 미러 sync + 리로드.
 
     실제 적용을 검증(커밋 생성·파일 내용 일치)한 뒤에만 '적용 완료'를 반환한다.
-    검증 실패 시 PENDING 을 유지해 재시도 가능하게 두고 실패 사유를 반환한다(거짓 양성 금지).
+    검증 실패 시 PENDING[role] 을 유지해 재시도 가능하게 두고 실패 사유를 반환한다(거짓 양성 금지).
     """
-    global PENDING
-    p = PENDING
+    p = PENDING.get(role)
     if not p:
         return "적용할 대기 변경이 없습니다."
-    role = p["role"]
     path = p["path"]
     # 하드 게이트: 원본 repo 의 agents/*.md 경로만 허용.
     agents_real = os.path.realpath(REPO_AGENTS)
@@ -294,7 +307,7 @@ def apply_change():
     # 4) 원본→미러 단방향 sync + 데몬 리로드(실패해도 커밋은 이미 영속).
     reload_note = _sync_and_reload(role)
 
-    PENDING = None
+    PENDING.pop(role, None)  # 그 방 슬롯만 정리(다른 방 대기 건 보존).
     # 메모리상의 ROLES 갱신(원본 파일 기준).
     ROLES[role] = A.parse_md(path)
     return f"적용 완료 ({commit_short}). {reload_note}"
@@ -327,56 +340,64 @@ def _sync_and_reload(role):
     return " / ".join(notes) if notes else "리로드 대상 없음"
 
 
-def handle(text):
-    """CEO 메시지 1건 처리 → 방에 게시할 응답 문자열(없으면 None)."""
-    global PENDING
+def handle(text, room_channel, owner_role):
+    """학습방 메시지 1건 처리 → 그 방에 게시할 응답 문자열(없으면 None).
+
+    방 격리: 이 방에서는 owner_role 의 정의만 수정한다. apply/reject 는 PENDING[owner_role]
+    슬롯에만 작용한다. update 는 parse_intent 가 다른 대상을 뽑아도 owner_role 로 강제하고,
+    어긋난 대상을 가리켰으면 안내 1줄을 덧붙인다(사용성 — 차단 대신 owner 로 진행).
+    """
+    owner_name = ROLES[owner_role]["name"]
     intent = parse_intent(text)
     act = intent.get("action")
 
     if act == "help":
         return ("📣 **에이전트 관리 봇 사용법**\n"
-                "- 변경: 예) `박민철 보고를 3줄로 줄여` → 수정안 diff 미리보기를 보여드립니다.\n"
+                f"- 이 방({room_channel})에서는 **{owner_name}** 의 정의만 수정합니다(방 격리).\n"
+                f"- 변경: 예) `{owner_name} 보고를 3줄로 줄여` → 수정안 diff 미리보기를 보여드립니다.\n"
                 "- 적용: 미리보기 후 `적용`(또는 반영/승인) → 파일 반영 + git 커밋 + 데몬 리로드.\n"
                 "- 반려: `반려`(또는 취소/폐기) → 대기 변경 폐기.\n"
                 "안전장치: agents/*.md(페르소나)만 수정합니다. 다른 파일·시스템 명령은 불가합니다.")
 
     if act == "apply":
-        if not PENDING:
+        if not PENDING.get(owner_role):
             return "적용할 대기 변경이 없습니다. 먼저 변경을 지시해 미리보기를 받으세요."
-        return "✅ **적용 결과**\n- " + apply_change()
+        return "✅ **적용 결과**\n- " + apply_change(owner_role)
 
     if act == "reject":
-        if not PENDING:
+        if not PENDING.get(owner_role):
             return "대기 중인 변경이 없습니다."
-        target = ROLES[PENDING["role"]]["name"]
-        PENDING = None
-        return f"📣 대기 변경을 폐기했습니다: {target}"
+        PENDING.pop(owner_role, None)
+        return f"📣 대기 변경을 폐기했습니다: {owner_name}"
 
     if act == "update":
-        role = resolve_role(intent.get("target"))
-        if not role:
-            avail = ", ".join(f"{m['name']}" for m in ROLES.values())
-            return f"⚠️ 대상 에이전트를 못 찾았습니다. 등록된 에이전트: {avail}"
+        # 방 격리: 대상은 무조건 이 방의 owner_role. parse_intent 가 다른 대상을 뽑았고
+        # 그게 owner 와 다른 실재 역할로 resolve 되면 안내 1줄을 덧붙이되, owner 로 진행한다.
+        note = ""
+        picked = resolve_role(intent.get("target"))
+        if picked and picked != owner_role:
+            note = (f"ℹ️ 이 방({room_channel})에서는 {owner_name}만 수정할 수 있습니다. "
+                    f"다른 에이전트는 그 에이전트의 학습방에서 수정하세요. → {owner_name} 기준으로 진행합니다.\n")
+        role = owner_role
         instruction = intent.get("instruction") or text
         try:
             path, original, new_text = rewrite_md(role, instruction)
         except Exception as e:
             return f"⚠️ 수정안 생성 중 오류: {str(e)[:160]}"
         if new_text.strip() == original.strip():
-            return f"변경 사항이 없습니다({ROLES[role]['name']}). 지시를 더 구체적으로 주세요."
+            return f"{note}변경 사항이 없습니다({owner_name}). 지시를 더 구체적으로 주세요."
         errs = frontmatter_ok(role, new_text)
         if errs:
-            return "⚠️ 수정안이 정의 규칙을 위반해 적용을 막았습니다:\n- " + "\n- ".join(errs)
+            return note + "⚠️ 수정안이 정의 규칙을 위반해 적용을 막았습니다:\n- " + "\n- ".join(errs)
         diff = make_diff(original, new_text, path)
         if not diff:
-            return "변경 사항이 없습니다."
-        # 단일 슬롯: 직전 대기 건이 있으면 덮어쓰며 폐기됨을 알린다(누적 일괄적용 방지).
-        prev = (f"(이전 대기 건 '{ROLES[PENDING['role']]['name']}' 은 폐기됩니다)\n"
-                if PENDING and PENDING["role"] != role else "")
-        PENDING = {"role": role, "path": path, "new_text": new_text,
-                   "diff": diff, "summary": instruction[:80]}
+            return f"{note}변경 사항이 없습니다."
+        # 이 방 슬롯: 직전 대기 건이 있으면 덮어쓰며 폐기됨을 알린다(누적 일괄적용 방지).
+        prev = ("(이 방의 이전 대기 건은 폐기됩니다)\n" if PENDING.get(role) else "")
+        PENDING[role] = {"role": role, "path": path, "new_text": new_text,
+                         "diff": diff, "summary": instruction[:80]}
         shown = diff if len(diff) < 3000 else diff[:3000] + "\n…(생략)"
-        return (f"📌 **{ROLES[role]['name']}({role}) 수정안 미리보기**\n{prev}지시: {instruction[:120]}\n\n"
+        return (f"📌 **{owner_name}({role}) 수정안 미리보기**\n{note}{prev}지시: {instruction[:120]}\n\n"
                 f"```diff\n{shown}\n```\n"
                 "적용하려면 `적용`, 취소하려면 `반려`라고 답해 주세요.")
 
@@ -394,11 +415,13 @@ def speaker_name(uid):
 async def run():
     # open_timeout: MM 부재 시 connect 무한 대기 방지. ping_*: 좀비 연결 감지로 백오프
     # 재접속 루프(run_forever)가 동작하게 한다.
+    # 기동 시 봇을 각 학습방 멤버로 보장(멱등) — 그래야 nk 봇 토큰으로 게시 가능.
+    ensure_bot_membership()
     async with websockets.connect("ws://localhost:8065/api/v4/websocket",
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": CFG["bot_token"]}}))
-        print(f"에이전트 관리 봇 가동 — 방:{ADMIN_CHANNEL} 모델:{LLM['model']}")
+        print(f"에이전트 개조 봇 가동 — 학습방:{', '.join(LEARN_ROOMS)} 모델:{LLM['model']}")
         async for raw in ws:
             ev = json.loads(raw)
             if ev.get("event") != "posted":
@@ -406,23 +429,25 @@ async def run():
             p = json.loads(ev["data"]["post"])
             if p.get("user_id") == BOT_ID:        # 메아리 차단
                 continue
-            if p.get("channel_id") != ADMIN_CID:  # 전용 방만 수신
+            cid = p.get("channel_id")
+            if cid not in LEARN_CIDS:             # 학습방들만 수신
                 continue
+            room_channel, owner_role = CID_TO_ROOM[cid]
             text = p.get("message", "")
             if not text.strip():
                 continue
             try:
-                reply = await asyncio.to_thread(handle, text)
+                reply = await asyncio.to_thread(handle, text, room_channel, owner_role)
             except Exception as e:
-                print(f"HANDLE-FAIL: {e}")
+                print(f"HANDLE-FAIL [{room_channel}]: {e}")
                 try:
-                    mm.post(ADMIN_CID, "⚠️ 처리 중 오류가 발생했습니다. 다시 시도해 주세요.")
+                    mm.post(cid, "⚠️ 처리 중 오류가 발생했습니다. 다시 시도해 주세요.")
                 except Exception:
                     pass
                 continue
             if reply:
                 try:
-                    mm.post(ADMIN_CID, reply)
+                    mm.post(cid, reply)
                 except Exception as e:
                     print("post-err", e)
 
