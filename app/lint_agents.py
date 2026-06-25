@@ -70,6 +70,27 @@ def main():
                     f"(agents/<role>.md frontmatter channels에 추가해야 구독·송신됨)"
                 )
 
+    # learning_rooms 교차 검증:
+    #  - owner 가 실제 role(파일명 stem)인지
+    #  - owner 역할의 agents/<role>.md channels 에 학습방 채널이 있어야 구독·누적됨
+    #  - channels.json 의 학습방 채널 ID 가 아직 placeholder(TODO_)면 WARN(런타임 무해, 실배선 전)
+    for room in teams.get("learning_rooms", []):
+        rid = room.get("id")
+        owner = room.get("owner")
+        ch = room.get("channel")
+        if owner and owner not in roles:
+            errors.append(f"[learning_rooms:{rid}] owner '{owner}'에 대응하는 agents/{owner}.md 가 없음")
+        elif owner and ch and ch not in set(roles[owner].get("channels", [])):
+            errors.append(
+                f"[learning_rooms:{rid}] owner '{owner}'의 channels에 학습방 '{ch}'가 없음 "
+                f"(agents/{owner}.md frontmatter channels에 추가해야 구독·학습 누적됨)"
+            )
+        if ch and str(channels.get(ch, "")).startswith(A.LEARN_PLACEHOLDER_PREFIX):
+            warnings.append(
+                f"[learning_rooms:{rid}] 채널 '{ch}'의 Mattermost ID가 placeholder({channels.get(ch)}) — "
+                "실제 채널 생성 후 channels.json에 ID를 채워야 학습방 메시지가 수신된다(런타임은 그전까지 무해 동작)"
+            )
+
     for w in warnings:
         print(f"WARN  {w}")
     for e in errors:

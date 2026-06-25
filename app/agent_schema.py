@@ -18,6 +18,10 @@ COMMON_RULES_PATH = os.path.join(SHARED_DIR, "common_rules.md")
 REQUIRED_FIELDS = ("name", "username", "config", "primary", "channels")
 LIST_FIELDS = ("aliases", "channels")
 
+# 학습방 채널 ID 가 아직 실제 Mattermost ID 로 채워지지 않았음을 나타내는 placeholder 접두.
+# channels.json 의 학습방 값이 이 접두로 시작하면 "미배선"으로 간주(린트 WARN, 런타임은 무해 동작).
+LEARN_PLACEHOLDER_PREFIX = "TODO_"
+
 
 def parse_md(path):
     """agents/*.md 한 파일을 {필드..., prompt} dict로 파싱."""
@@ -61,6 +65,20 @@ def load_teams():
 
 def load_channels():
     return json.load(open(os.path.join(HERE, "channels.json"), encoding="utf-8"))
+
+
+def load_learning_rooms(teams):
+    """teams.json 의 learning_rooms 목록(없으면 빈 리스트)."""
+    return teams.get("learning_rooms", [])
+
+
+def learning_room_for_role(teams, role):
+    """주어진 role(파일명 stem)의 전용 학습방 정의를 반환. 없으면 None.
+    런타임이 '이 역할의 학습방 채널은 무엇인가'를 알아내는 단일 출처."""
+    for room in load_learning_rooms(teams):
+        if room.get("owner") == role:
+            return room
+    return None
 
 
 def validate_roles(roles, valid_channels):
@@ -132,6 +150,31 @@ def validate_teams(teams, valid_channels):
         deliver = room.get("deliver_to")
         if deliver and deliver not in valid_channels:
             errors.append(f"[collab_rooms:{rid}] deliver_to 미정의 채널: '{deliver}'")
+    # learning_rooms(역할별 전용 학습방) 정합성 검사
+    learn_ids = set()
+    learn_owners = set()
+    learn_channels = set()
+    for room in teams.get("learning_rooms", []):
+        rid = room.get("id", "?")
+        if rid in learn_ids:
+            errors.append(f"[learning_rooms] room id 중복: '{rid}'")
+        learn_ids.add(rid)
+        owner = room.get("owner")
+        if not owner:
+            errors.append(f"[learning_rooms:{rid}] 필수 필드 누락: owner")
+        elif owner in learn_owners:
+            errors.append(f"[learning_rooms:{rid}] owner '{owner}' 중복 (역할당 학습방 1개)")
+        else:
+            learn_owners.add(owner)
+        ch = room.get("channel")
+        if not ch:
+            errors.append(f"[learning_rooms:{rid}] 필수 필드 누락: channel")
+        elif ch not in valid_channels:
+            errors.append(f"[learning_rooms:{rid}] channel 미정의: '{ch}' (channels.json에 없음)")
+        elif ch in learn_channels:
+            errors.append(f"[learning_rooms:{rid}] channel '{ch}' 중복 (학습방끼리 채널 공유 금지)")
+        else:
+            learn_channels.add(ch)
     return errors
 
 
@@ -140,6 +183,7 @@ def build_routing(teams):
     orch = teams.get("orchestrator", {})
     tlist = teams.get("teams", [])
     rooms = teams.get("collab_rooms", [])
+    learn_rooms = teams.get("learning_rooms", [])
     orch_name = orch.get("role", "박민철")
     brief = orch.get("briefing_channel", "")
     principal = orch.get("principal", "CEO")
@@ -162,6 +206,19 @@ def build_routing(teams):
             f"- {room['channel']}: {names}이 함께 참여하는 협업 작업방. "
             f"{principal}이 정책·기획 같은 범부서 과제를 게시하면 각자 전문성으로 기여하고, "
             f"리드 {room.get('lead', orch_name)}이 취합·정리해 '{room.get('deliver_to', brief)}'에 제출한다."
+        )
+    # 역할별 전용 학습방: 채널 흐름 안내(owner role → 사람 이름 매핑)
+    name_by_role = {"orchestrator": orch_name}
+    for t in tlist:
+        if t.get("id"):
+            name_by_role[t["id"]] = t.get("agent", t["id"])
+    for lr in learn_rooms:
+        owner = lr.get("owner", "")
+        owner_name = name_by_role.get(owner, owner)
+        lines.append(
+            f"- {lr['channel']}: {owner_name} 전용 학습방. 여기 올라온 교정·노하우·정책은 "
+            f"휘발 없이 '학습 노트'에 영구 누적되어 {owner_name}이 매 응답에 자동 참고한다. "
+            f"(다른 역할의 학습 노트는 절대 주입되지 않는다 — 방 격리)"
         )
 
     lines.append("")
@@ -207,18 +264,26 @@ def build_routing(teams):
     return "\n".join(lines)
 
 
-def system_prompt(spec, common_rules, routing, memo="", room_memo=""):
+def system_prompt(spec, common_rules, routing, memo="", room_memo="", learn_note=""):
     """에이전트 시스템 프롬프트 조립: 페르소나(고유) + 공유규칙(상속) + 라우팅(데이터) + 메모.
 
-    메모리 2층 구조:
-      - room_memo: 현재 방(채널)의 공유 기억. 같은 방에 들어온 모든 에이전트가 공유.
+    메모리 3층 구조:
+      - learn_note: 이 역할 전용 '학습 노트'(persistent, 영구 누적·휘발 안 됨).
+                    학습방에 쌓인 교정·노하우·정책을 매 회차 [팀 학습 노트]로 주입.
+                    역할별 1개 파일이라 타 역할 학습노트는 절대 주입되지 않는다(방 격리).
+      - room_memo: 현재 방(채널)의 공유 기억(롤링 6줄, 휘발). 같은 방의 모든 에이전트가 공유.
                    다른 방 처리 시엔 주입되지 않아 방 경계로 정보 누출이 차단된다.
-      - memo: 역할(에이전트) 개인의 진행 메모. 방과 무관하게 유지.
-    기존 memo 단일 인자 호출과의 하위 호환을 위해 room_memo는 기본값 빈 문자열.
+      - memo: 역할(에이전트) 개인의 진행 메모(롤링 6줄, 휘발). 방과 무관하게 유지.
+    기존 호출과의 하위 호환을 위해 room_memo·learn_note는 기본값 빈 문자열.
     """
     parts = [spec["prompt"]]
     if common_rules:
         parts.append("\n\n===== 전 에이전트 공통 규칙 (상속) =====\n" + common_rules)
+    if learn_note:
+        parts.append(
+            "\n\n[팀 학습 노트] (내 학습방에 영구 누적된 교정·노하우·정책 — 매 판단에 반영하라)\n"
+            + learn_note
+        )
     if room_memo:
         parts.append("\n\n[이 방의 공유 기억]\n" + room_memo)
     if memo:

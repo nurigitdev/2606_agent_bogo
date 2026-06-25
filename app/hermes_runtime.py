@@ -46,6 +46,8 @@ VALID_CHANNELS = set(CH)
 TEAMS = A.load_teams()
 COMMON_RULES = A.load_common_rules()
 ROUTING = A.build_routing(TEAMS)
+# 이 역할 전용 학습방 정의(없으면 None). owner == ROLE 매칭.
+LEARN_ROOM = A.learning_room_for_role(TEAMS, ROLE)
 
 # 기동 시 가벼운 스키마 검증 — 정의가 깨졌으면 폭주 전에 멈춘다(fail-fast).
 _errs = A.validate_roles(ROLES, VALID_CHANNELS) + A.validate_teams(TEAMS, VALID_CHANNELS)
@@ -70,6 +72,9 @@ PRIMARY = SPEC["primary"]
 SUBS = set(SPEC["channels"])
 NAME2USER = {r["name"]: r["username"] for r in ROLES.values()}
 MEM_PATH = os.path.join(HERE, f"memory_{ROLE}.json")
+# 학습방 채널명(이 역할에 학습방이 선언돼 있을 때만). 매 이벤트에서 현재 방이
+# 학습방인지 판별하는 데 쓴다.
+LEARN_CHANNEL = (LEARN_ROOM or {}).get("channel", "")
 
 if KEY:
     os.environ.setdefault("OPENROUTER_API_KEY", KEY)
@@ -130,6 +135,41 @@ def save_mem(line):
     lines.append(line)
     json.dump({"summary": "\n".join(lines[-6:])},
               open(MEM_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+
+
+# ── 메모리 3층: 역할별 '학습 노트'(persistent, 영구 누적 — 휘발 안 됨) ─────────
+# 일반 방 메모리(memory_ch_*.json)와 역할 개인 메모(memory_{ROLE}.json)는 최근 6줄만
+# 남기고 롤링 폐기된다. 학습방에 쌓이는 교정·노하우·정책은 그렇게 사라지면 안 되므로,
+# 역할당 1개 전용 파일(memory_learn_{ROLE}.json)에 줄을 잘라내지 않고 누적 저장한다.
+#  - 역할별 1개 파일이라 ROLE 경계가 곧 격리 경계 → 타 역할 학습 노트는 절대 섞이지 않는다.
+#  - 롤링이 없으므로 학습방에 N줄을 넣으면 N줄이 그대로 보존된다(persistent 단언의 근거).
+# 같은 줄(공백 정규화 후)이 이미 있으면 중복 저장하지 않는다(같은 교훈 반복 누적 방지).
+
+def learn_path(role):
+    return os.path.join(HERE, f"memory_learn_{role}.json")
+
+
+def load_learn_note(role=None):
+    """이 역할(기본 ROLE)의 학습 노트 전체 문자열. 파일 없으면 빈 문자열."""
+    role = role or ROLE
+    try:
+        return json.load(open(learn_path(role), encoding="utf-8")).get("notes", "")
+    except Exception:
+        return ""
+
+
+def save_learn_note(line, role=None):
+    """학습 노트에 한 줄을 영구 누적(롤링 없음). 동일 줄은 중복 저장 안 함."""
+    role = role or ROLE
+    line = (line or "").strip().replace("\n", " ")
+    if not line:
+        return
+    existing = [x for x in load_learn_note(role).split("\n") if x.strip()]
+    if line in existing:
+        return
+    existing.append(line)
+    json.dump({"notes": "\n".join(existing)},
+              open(learn_path(role), "w", encoding="utf-8"), ensure_ascii=False)
 
 
 # ── 메모리 2층 구조: 방(채널)별 공유 메모리 ───────────────────────────────
@@ -219,9 +259,14 @@ def _validate(d):
 
 
 def decide(cname, channel_id, sp, text):
-    # 방 공유 기억(채널별) + 개인 진행 메모(역할별)를 함께 주입.
+    # 메모리 3층 주입:
+    #  - learn_note: 이 역할 전용 학습 노트(persistent). 방과 무관하게 항상 주입한다.
+    #    역할별 1개 파일이라 타 역할 학습노트는 구조적으로 섞이지 않는다(방 격리 유지).
+    #  - room_memo: 현재 방(채널)의 공유 기억(롤링).
+    #  - memo: 역할 개인 진행 메모(롤링).
     sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
-                             memo=load_mem(), room_memo=load_room_mem(channel_id))
+                             memo=load_mem(), room_memo=load_room_mem(channel_id),
+                             learn_note=load_learn_note())
     convo = "\n".join(history(channel_id))
     user = f"[현재 방: {cname}]\n[최근 대화]\n{convo}\n\n[방금 들어온 메시지] {sp}: {text}"
     last = ""
@@ -301,6 +346,13 @@ async def run():
                 continue
             is_bot = p.get("props", {}).get("from_bot") == "true"
             text = p.get("message", "")
+            # 학습방 트리거: 이 역할의 학습방에 사람이 올린 메시지(교정·노하우·정책)는
+            # 휘발 없이 학습 노트에 영구 누적한다. 봇 메아리는 누적하지 않는다.
+            # 누적은 게이트(멘션 여부)와 무관 — 학습방의 모든 사람 발화가 학습 대상.
+            if LEARN_CHANNEL and cname == LEARN_CHANNEL and not is_bot and text.strip():
+                sp_name = speaker(p["user_id"])
+                save_learn_note(f"{sp_name}: {text.strip()[:300]}")
+                print(f"[{NAME}] 학습 노트 누적 ← {LEARN_CHANNEL}: {text.strip()[:40]}")
             if not gate(text, is_bot, cname):
                 continue
             try:
