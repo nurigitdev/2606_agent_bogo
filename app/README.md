@@ -124,7 +124,7 @@
 
 ## CEO 대시보드 (한 곳에서 모니터링·지시)
 
-CEO가 Mattermost 채널을 일일이 오가지 않고 **브라우저 한 곳**(`http://127.0.0.1:8787`)에서 부서 현황을 보고 지시를 내리는 로컬 웹앱(`ceo_dashboard.py`). 기존 통신 인프라를 그대로 재사용한다 — `mm_client.MM`(REST), `channels.json`/`teams.json`/`agents/*.md`(`agent_schema`). 신규 의존성·신규 API 키 0(표준 라이브러리 `http.server`만 사용).
+CEO가 Mattermost 채널을 일일이 오가지 않고 **브라우저 한 곳**(`http://127.0.0.1:8642`)에서 부서 현황을 보고 지시를 내리는 로컬 웹앱(`ceo_dashboard.py`). 기존 통신 인프라를 그대로 재사용한다 — `mm_client.MM`(REST), `channels.json`/`teams.json`/`agents/*.md`(`agent_schema`). 신규 의존성·신규 API 키 0(표준 라이브러리 `http.server`만 사용).
 
 화면 구성:
 - **부서별 현황 카드** — 팀 채널·보고라인·CEO브리핑의 최근 메시지를 12초 주기로 폴링 표시(작성자·시각·본문). 모니터링 채널은 `teams.json`에서 동적으로 결정된다(하드코딩 없음).
@@ -133,11 +133,11 @@ CEO가 Mattermost 채널을 일일이 오가지 않고 **브라우저 한 곳**(
 - **에이전트 관리 안내** — 정의 변경은 기존 `CEO-에이전트관리`(`ceo_admin_runtime`) 파이프라인으로 연계. 대시보드 자체는 정의 파일을 건드리지 않는다(모니터링·지시 전용).
 
 ```bash
-# 수동 기동 (포트 기본 8787)
+# 수동 기동 (포트 기본 8642)
 .venv/bin/python ceo_dashboard.py
 # 포트 변경
 HERMES_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
-# 접속: http://127.0.0.1:8787   (외부 노출 안 됨 — 루프백 전용)
+# 접속: http://127.0.0.1:8642   (외부 노출 안 됨 — 루프백 전용)
 ```
 
 게시용 봇 토큰은 박민철(`nk_config.json`)을 재사용한다(CEO브리핑·양 보고라인 멤버라 읽기/쓰기 권한 보유). 토큰이 비어 있거나 플레이스홀더면 기동을 거부한다. 테스트: `.venv/bin/python -m unittest test_ceo_dashboard`.

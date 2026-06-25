@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 루프백 전용. 외부(0.0.0.0)로 절대 바꾸지 말 것 — 인증 게이트 없는 로컬 대시보드다.
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "8787"))
+PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "8642"))
 
 # 게시에 쓸 봇: 박민철(nk). CEO브리핑·양 보고라인의 멤버이므로 읽기/쓰기가 가능하다.
 # 별도 봇 계정·신규 토큰 생성 없이 기존 토큰을 재사용한다.
