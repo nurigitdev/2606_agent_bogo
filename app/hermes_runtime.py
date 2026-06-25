@@ -621,7 +621,7 @@ def decide(cname, channel_id, sp, text):
             d = B.decide_via_official(
                 SPEC, COMMON_RULES, ROUTING, cname, convo, sp, text,
                 memo=load_mem(), room_memo=load_room_mem(channel_id),
-                learn_note=load_learn_note())
+                learn_note=load_learn_note(), role=ROLE)
         except Exception as e:
             print(f"OFFICIAL-BRAIN-ERR [{NAME}] {cname}: {type(e).__name__}: {e} → fallback")
             d = None
@@ -687,7 +687,11 @@ async def run():
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
         brain = "공식hermes" if B.is_official_available() else "커스텀(공식 미가용)"
-        print(f"{NAME}({ROLE}) 가동[두뇌:{brain}] 공식모델:{B.OFFICIAL_MODEL} "
+        if B.is_official_available() and B.RECURSIVE_LEARNING:
+            sess = f" 영속세션:{B.session_name(ROLE)} 홈:{B.role_home(ROLE)}"
+        else:
+            sess = " (재귀학습 OFF — 단발 무상태)"
+        print(f"{NAME}({ROLE}) 가동[두뇌:{brain}]{sess} 공식모델:{B.OFFICIAL_MODEL} "
               f"fallback모델:{MODEL} 구독:{SUBS}")
         async for raw in ws:
             ev = json.loads(raw)
