@@ -26,6 +26,120 @@ LEARN_PLACEHOLDER_PREFIX = "TODO_"
 # hermes_runtime 의 저장 로직과 여기 system_prompt 의 강조 렌더가 같은 값을 공유한다.
 CORRECTION_PREFIX = "[교정]"
 
+# ── ReAct / tool use 단일 출처 ────────────────────────────────────────────────
+# decide()가 단발 LLM 호출 → 다단계 에이전트 루프로 전환되면서, 매 반복의 출력 스키마와
+# 안전 도구 화이트리스트를 여기(데이터/스키마 단일 출처)에 둔다. hermes_runtime 은 이 정의를
+# 그대로 읽어 (a) 시스템 프롬프트에 ReAct 지침을 주입하고 (b) OpenRouter tools 파라미터를
+# 구성하며 (c) 도구 이름 화이트리스트를 강제한다(저장 정의 ↔ 실행 강제 불일치 방지).
+
+# 읽기형 안전 도구 이름(임의 셸·파일쓰기·외부망 없음). finalize 는 '최종 응답 확정' 특수 도구.
+TOOL_GET_ROOM_MEMORY = "get_room_memory"     # 현재 방 공유 기억 조회(읽기)
+TOOL_GET_LEARN_NOTE = "get_learn_note"       # 내 학습 노트(교정·노하우) 조회(읽기)
+TOOL_GET_CHANNEL_HISTORY = "get_channel_history"  # 채널 최근 대화/현황 조회(읽기)
+TOOL_FINALIZE = "finalize"                   # 최종 응답 확정(루프 즉시 탈출)
+
+# 안전 도구 화이트리스트(이 집합 밖의 tool_call 은 런타임이 거부한다 — fail-closed).
+SAFE_TOOL_NAMES = (
+    TOOL_GET_ROOM_MEMORY,
+    TOOL_GET_LEARN_NOTE,
+    TOOL_GET_CHANNEL_HISTORY,
+    TOOL_FINALIZE,
+)
+
+# finalize 가 확정해야 하는 최종 행동 결정 필드(기존 단발 decide() 출력 스키마와 동일 계약).
+# ReAct 루프는 이 필드들을 finalize 도구의 arguments 로 받아 그대로 행동 결정 dict 로 쓴다.
+FINALIZE_FIELDS = (
+    "act", "target_channel", "message", "mentions", "ack", "ack_channel",
+    "importance", "task_status", "memo", "reason", "learn_applied", "learn_basis",
+)
+
+
+def react_tool_specs(include_finalize=True):
+    """OpenRouter(OpenAI 호환) function calling 의 tools 파라미터 스펙을 반환한다.
+    읽기형 도구 + finalize(최종 응답 확정). 모든 도구는 부작용 없는 안전 화이트리스트.
+    include_finalize=False 면 reflexion 등 finalize 강제 단계에서 읽기 도구를 숨길 수 있다."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": TOOL_GET_ROOM_MEMORY,
+                "description": "현재 처리 중인 방(채널)의 공유 기억을 읽는다. 같은 방 다른 에이전트가 남긴 맥락 확인용. 부작용 없음(읽기 전용).",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": TOOL_GET_LEARN_NOTE,
+                "description": "내 전용 학습 노트(과거 교정·노하우·정책)를 다시 읽는다. 같은 실수 반복 방지·정책 확인용. 부작용 없음(읽기 전용).",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": TOOL_GET_CHANNEL_HISTORY,
+                "description": "현재 방의 최근 대화/현황을 더 많이 다시 읽는다(기본보다 깊게). 맥락이 부족할 때만 사용. 부작용 없음(읽기 전용).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"n": {"type": "integer", "description": "가져올 최근 메시지 수(상한 적용됨)"}},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+    if include_finalize:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": TOOL_FINALIZE,
+                "description": "추론·도구 조회가 끝나 최종 행동을 확정할 때 호출한다. 이 도구를 호출하면 에이전트 루프가 즉시 끝난다. 송신하지 않을 거면 act=false 로 finalize 하라.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "act": {"type": "boolean", "description": "메시지를 송신할지(true) 침묵할지(false)"},
+                        "target_channel": {"type": "string", "description": "송신 대상 채널명(채널 목록 안에서만)"},
+                        "message": {"type": "string", "description": "송신 본문"},
+                        "mentions": {"type": "array", "items": {"type": "string"}, "description": "멘션할 사람 이름 목록"},
+                        "ack": {"type": "string", "description": "수신 확인/중간 보고 본문(선택)"},
+                        "ack_channel": {"type": "string", "description": "ack 송신 채널명(선택)"},
+                        "importance": {"type": "string", "enum": ["routine", "decision_needed", ""]},
+                        "task_status": {"type": "string", "enum": ["open", "closed", ""]},
+                        "memo": {"type": "string", "description": "이 방/개인 메모에 남길 한 줄(선택)"},
+                        "reason": {"type": "string", "description": "이 결정의 한 줄 근거"},
+                        "learn_applied": {"type": "boolean", "description": "[반드시 지킬 교정]을 반영했으면 true"},
+                        "learn_basis": {"type": "string", "description": "어느 교정을 어떻게 지켰는지 한 줄"},
+                    },
+                    "required": ["act"],
+                    "additionalProperties": False,
+                },
+            },
+        })
+    return tools
+
+
+def react_system_addendum(max_steps):
+    """system_prompt 에 덧붙일 ReAct(thought→self_critique→action) 작동 지침.
+    매 반복마다 (1) thought 로 추론, (2) self_critique 로 자기비평, (3) 필요한 읽기 도구를
+    호출하거나 충분하면 finalize 한다. 무거운 모델 교체 없이 같은 모델의 다단계 추론으로
+    에이전트급 실행력을 흉내낸다. 비용 통제를 위해 반복 상한을 명시 주입한다."""
+    return (
+        "\n\n===== 에이전트 작동 방식 (ReAct 다단계 루프) =====\n"
+        f"너는 단발 응답이 아니라 최대 {max_steps}단계까지 스스로 추론·도구조회·자기비평을 "
+        "반복한 뒤 최종 행동을 확정하는 에이전트다. 각 단계에서 다음을 지켜라:\n"
+        "1) thought: 지금 무엇을 판단해야 하는지 1~2문장으로 추론한다.\n"
+        "2) self_critique: 직전 추론/맥락의 빈틈·위험·교정 위반 가능성을 스스로 비평한다.\n"
+        "3) action: 맥락이 부족하면 읽기 도구(get_room_memory/get_learn_note/get_channel_history)를 "
+        "호출해 사실을 더 모으고, 충분하면 finalize 도구로 최종 행동을 확정한다.\n"
+        "규칙:\n"
+        "- 같은 읽기 도구를 의미 없이 반복 호출하지 마라(이미 본 정보 재요청 금지).\n"
+        "- 송신할 게 없으면 finalize(act=false)로 즉시 끝내라(침묵도 유효한 결정).\n"
+        f"- 반드시 {max_steps}단계 안에 finalize 하라. 마지막 단계에서는 무조건 finalize 한다.\n"
+        "- finalize 의 인자(act·target_channel·message·mentions·importance·task_status·memo·reason·"
+        "learn_applied·learn_basis)가 곧 너의 최종 행동 결정이다. 채널·멘션은 라우팅 규칙을 따른다.\n"
+        "- 도구 호출 없이 일반 텍스트만 길게 늘어놓지 마라. 행동은 finalize 로만 확정된다."
+    )
+
 
 def parse_md(path):
     """agents/*.md 한 파일을 {필드..., prompt} dict로 파싱."""
@@ -268,7 +382,25 @@ def build_routing(teams):
     return "\n".join(lines)
 
 
-def system_prompt(spec, common_rules, routing, memo="", room_memo="", learn_note=""):
+def reflexion_prompt(corrections):
+    """Reflexion 자기검증 패스용 지침. 확정 직전 같은 모델이 (a)교정 위반 (b)지시 충족
+    (c)근거 충분성을 점검해 finalize 를 재확정한다. 무거운 다중 모델 호출 없이 경량 1패스."""
+    base = (
+        "\n\n===== 최종 점검(Reflexion) =====\n"
+        "방금 정한 최종 행동을 확정하기 전에 스스로 점검하라:\n"
+        "(a) 교정 위반: [반드시 지킬 교정]을 어긴 부분이 있는가?\n"
+        "(b) 지시 충족: 방금 들어온 메시지가 요구한 것을 실제로 충족했는가?\n"
+        "(c) 근거 충분: 송신할 내용에 빠진 사실·맥락은 없는가?\n"
+        "문제가 있으면 수정해서, 없으면 그대로, finalize 도구로 최종 행동을 다시 확정하라. "
+        "반드시 finalize 도구만 호출한다(다른 도구·일반 텍스트 금지)."
+    )
+    if corrections:
+        base += "\n특히 아래 교정을 다시 확인하라:\n" + "\n".join(corrections)
+    return base
+
+
+def system_prompt(spec, common_rules, routing, memo="", room_memo="", learn_note="",
+                  react_steps=0):
     """에이전트 시스템 프롬프트 조립: 페르소나(고유) + 공유규칙(상속) + 라우팅(데이터) + 메모.
 
     메모리 3층 구조:
@@ -313,4 +445,8 @@ def system_prompt(spec, common_rules, routing, memo="", room_memo="", learn_note
         parts.append("\n\n[내 개인 메모]\n" + memo)
     parts.append("\n\n===== 라우팅 (teams.json 기반) =====\n" + routing)
     parts.append(f"\n[너] 이름:{spec['name']} / 주 담당 방:{spec['primary']}")
+    # ReAct 다단계 작동 지침은 라우팅·역할 정보 뒤에 마지막으로 주입한다(작동 방식이
+    # 가장 최근 맥락으로 모델 머리에 남도록). react_steps<=0 이면 단발 모드(하위 호환).
+    if react_steps and react_steps > 0:
+        parts.append(react_system_addendum(react_steps))
     return "".join(parts)

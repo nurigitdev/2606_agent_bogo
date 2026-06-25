@@ -90,6 +90,30 @@ _sent = []
 BACKSTOP_WINDOW = 60
 BACKSTOP_MAX = 10
 
+
+def _env_int(name, default, lo, hi):
+    """환경변수에서 정수 설정을 읽되 [lo, hi] 범위로 강제 클램프(비용 폭주·오설정 방지)."""
+    try:
+        v = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        v = default
+    return max(lo, min(hi, v))
+
+
+# ── 에이전트 루프 비용·지연 통제 파라미터(전부 env 조정 가능, 안전 범위로 클램프) ─────
+# REACT_MAX_STEPS: ReAct 루프 1회 decide 당 LLM 호출 상한(thought→action 반복 수).
+#   기본 4. 1~8 로 클램프 — 단발(1) 대비 호출 증가를 구조적으로 상한 안에 가둔다.
+REACT_MAX_STEPS = _env_int("HERMES_REACT_MAX_STEPS", 4, 1, 8)
+# 도구 결과를 observation 으로 환류할 때 토큰 폭주를 막는 문자 절단 상한.
+TOOL_RESULT_MAX_CHARS = _env_int("HERMES_TOOL_RESULT_MAX_CHARS", 1200, 200, 6000)
+# get_channel_history 도구가 한 번에 가져올 수 있는 최근 메시지 수 상한.
+TOOL_HISTORY_MAX = _env_int("HERMES_TOOL_HISTORY_MAX", 24, 4, 60)
+# Reflexion 최종 점검 패스 활성화 여부(1=on, 0=off). on 이어도 패스는 정확히 1회만.
+REFLEXION_ON = _env_int("HERMES_REFLEXION", 1, 0, 1) == 1
+# 도구 호출 결과 토큰 절단과 별개로, decide 1회의 전체 LLM 호출 절대 상한(무한루프 백스톱).
+#   = ReAct 단계(REACT_MAX_STEPS) + Reflexion(최대 1) + 형식오류 재시도 여유(1).
+LLM_CALL_HARD_CAP = REACT_MAX_STEPS + 2
+
 # 이 봇이 가장 최근에 실제 송신한 (원지시 맥락, 응답 본문). 학습방에서 교정이 들어왔을 때
 # '원지시'와 '잘못된출력'을 자동으로 채우는 데 쓴다. 프로세스 메모리(휘발) — 교정의 보조 맥락일 뿐,
 # 핵심인 교정 내용 자체는 학습 노트에 영구 저장된다.
@@ -109,6 +133,25 @@ def call_llm(messages, model, max_tokens=1500):
         method="POST")
     r = json.loads(urllib.request.urlopen(req, timeout=60).read())
     return r["choices"][0]["message"]["content"]
+
+
+def call_llm_msg(messages, model, tools=None, tool_choice=None, max_tokens=1500):
+    """OpenRouter chat completion — tools(function calling) 지원판.
+    단발 call_llm 과 달리 메시지 객체 전체(content + tool_calls)를 반환해 ReAct 루프가
+    도구 호출을 환류할 수 있게 한다. tools 가 없으면 일반 호출과 동일하게 동작한다.
+    JSON response_format 은 tools 와 함께 쓰지 않는다(도구 호출 응답과 충돌하므로)."""
+    payload = {"model": model, "messages": messages, "max_tokens": max_tokens,
+               "temperature": 0.4}
+    if tools:
+        payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+    req = urllib.request.Request(
+        BASE_URL + "/chat/completions", data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+        method="POST")
+    r = json.loads(urllib.request.urlopen(req, timeout=60).read())
+    return r["choices"][0]["message"]
 
 
 def _strip_fence(s):
@@ -388,53 +431,172 @@ def self_check(d, corrections):
     return ""
 
 
+def _truncate(s):
+    """도구 결과를 observation 으로 환류할 때 토큰 폭주를 막기 위한 문자 절단."""
+    s = s or ""
+    if len(s) <= TOOL_RESULT_MAX_CHARS:
+        return s
+    return s[:TOOL_RESULT_MAX_CHARS] + " …(절단됨)"
+
+
+def run_tool(name, args, channel_id):
+    """안전 도구 화이트리스트 디스패처(읽기 전용). 화이트리스트 밖 이름은 fail-closed 로 거부.
+    임의 셸·파일쓰기·외부망 도구는 존재하지 않는다 — 여기서 다루는 도구는 전부 부작용 없는 조회."""
+    if name not in A.SAFE_TOOL_NAMES:
+        return f"[거부] 허용되지 않은 도구: {name}"
+    if name == A.TOOL_GET_ROOM_MEMORY:
+        return _truncate(load_room_mem(channel_id) or "(이 방 공유 기억 없음)")
+    if name == A.TOOL_GET_LEARN_NOTE:
+        return _truncate(load_learn_note() or "(학습 노트 없음)")
+    if name == A.TOOL_GET_CHANNEL_HISTORY:
+        n = TOOL_HISTORY_MAX
+        try:
+            req_n = int((args or {}).get("n", TOOL_HISTORY_MAX))
+            n = max(1, min(TOOL_HISTORY_MAX, req_n))  # 상한 강제(토큰·지연 통제)
+        except (TypeError, ValueError):
+            n = TOOL_HISTORY_MAX
+        return _truncate("\n".join(history(channel_id, n=n)) or "(대화 없음)")
+    # finalize 는 루프에서 직접 처리되므로 여기 도달하지 않는다(안전망).
+    return "[거부] 알 수 없는 도구"
+
+
+def _finalize_args_to_decision(args):
+    """finalize 도구의 arguments(dict) → 기존 행동 결정 dict. 누락 필드는 기존 단발 스키마
+    기본값으로 채워 _validate/송신부 계약을 그대로 유지한다(스키마 호환)."""
+    args = args if isinstance(args, dict) else {}
+    d = {}
+    for k in A.FINALIZE_FIELDS:
+        if k in args:
+            d[k] = args[k]
+    if "act" not in d:
+        d["act"] = False  # act 누락 = 침묵(보수적 기본값)
+    return d
+
+
+def _extract_tool_calls(msg):
+    """LLM 메시지 객체에서 tool_calls 리스트를 정규화해 (name, args, raw) 리스트로 반환.
+    args 는 JSON 문자열일 수 있으므로 dict 로 파싱(실패 시 빈 dict)."""
+    out = []
+    for tc in (msg.get("tool_calls") or []):
+        fn = tc.get("function") or {}
+        name = fn.get("name") or ""
+        raw_args = fn.get("arguments")
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args) if raw_args.strip() else {}
+            except Exception:
+                args = {}
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            args = {}
+        out.append((name, args, tc))
+    return out
+
+
+def _react_loop(sysmsg, user, corrections, channel_id, calls):
+    """ReAct 다단계 루프: 매 반복 모델이 thought/critique 후 읽기 도구를 호출하거나 finalize.
+    calls = [현재까지 LLM 호출 수] (가변 리스트로 호출자와 카운터 공유 — 하드캡 백스톱용).
+    반환: (행동 결정 dict, 경고/사유). finalize 도구 호출 시 즉시 탈출(조기 종료)."""
+    tools = A.react_tool_specs(include_finalize=True)
+    messages = [{"role": "system", "content": sysmsg}, {"role": "user", "content": user}]
+    last = ""
+    for step in range(REACT_MAX_STEPS):
+        if len(calls) >= LLM_CALL_HARD_CAP:
+            last = "hardcap"
+            break
+        # 마지막 단계에서는 finalize 를 강제(무한 도구호출·미확정 방지).
+        force_final = (step == REACT_MAX_STEPS - 1)
+        tool_choice = {"type": "function", "function": {"name": A.TOOL_FINALIZE}} if force_final else "auto"
+        calls[0] += 1
+        try:
+            msg = call_llm_msg(messages, MODEL, tools=tools, tool_choice=tool_choice)
+        except Exception as e:
+            last = f"llm:{e}"
+            break
+        tcs = _extract_tool_calls(msg)
+        if not tcs:
+            # 도구 호출 없이 텍스트만 → finalize 하도록 한 번 더 유도(다음 단계에서 강제됨).
+            messages.append({"role": "assistant", "content": msg.get("content") or ""})
+            messages.append({"role": "user",
+                             "content": "행동은 finalize 도구로만 확정된다. finalize 를 호출하라."})
+            last = "no-tool-call"
+            continue
+        # assistant 의 tool_calls 메시지를 대화에 추가(프로토콜상 tool 응답 전 필수).
+        messages.append({"role": "assistant", "content": msg.get("content") or "",
+                         "tool_calls": msg.get("tool_calls")})
+        finalized = None
+        for name, args, tc in tcs:
+            if name == A.TOOL_FINALIZE:
+                finalized = _finalize_args_to_decision(args)
+                break
+            obs = run_tool(name, args, channel_id)
+            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                             "name": name, "content": obs})
+        if finalized is not None:
+            return finalized, last  # 조기 종료: finalize 즉시 탈출
+        # finalize 가 아니면 다음 반복으로(도구 observation 이 messages 에 환류된 상태).
+    return None, last or "no-finalize"
+
+
+def _reflexion_pass(sysmsg, user, decision, corrections, channel_id, calls):
+    """Reflexion 자기검증 1패스(정확히 1회). 확정된 결정을 같은 모델에 다시 보여 주고
+    (교정위반·지시충족·근거충분) 점검 후 finalize 로 재확정하게 한다. 실패하면 원결정 유지."""
+    if len(calls) >= LLM_CALL_HARD_CAP:
+        return decision
+    tools = A.react_tool_specs(include_finalize=True)
+    review = (user + "\n\n[직전에 확정한 최종 행동]\n" + json.dumps(decision, ensure_ascii=False)
+              + A.reflexion_prompt(corrections))
+    messages = [{"role": "system", "content": sysmsg}, {"role": "user", "content": review}]
+    calls[0] += 1
+    try:
+        msg = call_llm_msg(messages, MODEL, tools=tools,
+                           tool_choice={"type": "function", "function": {"name": A.TOOL_FINALIZE}})
+    except Exception as e:
+        print(f"REFLEXION-SKIP [{NAME}] 점검 호출 실패, 원결정 유지: {e}")
+        return decision
+    for name, args, _tc in _extract_tool_calls(msg):
+        if name == A.TOOL_FINALIZE:
+            revised = _finalize_args_to_decision(args)
+            if _validate(revised) == "":
+                return revised
+    return decision  # 재확정 실패 시 원결정 유지(보수적)
+
+
 def decide(cname, channel_id, sp, text):
-    # 메모리 3층 주입:
+    # 메모리 3층 주입(단발 모드와 동일 계약):
     #  - learn_note: 이 역할 전용 학습 노트(persistent). 방과 무관하게 항상 주입한다.
-    #    역할별 1개 파일이라 타 역할 학습노트는 구조적으로 섞이지 않는다(방 격리 유지).
     #  - room_memo: 현재 방(채널)의 공유 기억(롤링).
     #  - memo: 역할 개인 진행 메모(롤링).
+    # decide()는 더 이상 단발 LLM 호출이 아니라 ReAct 다단계 루프 + (선택)Reflexion 으로
+    # 행동을 확정한다. 비용 통제: ReAct 단계 상한·도구 결과 절단·finalize 조기탈출·하드캡.
     corrections = load_corrections()
     sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
                              memo=load_mem(), room_memo=load_room_mem(channel_id),
-                             learn_note=load_learn_note())
+                             learn_note=load_learn_note(), react_steps=REACT_MAX_STEPS)
     convo = "\n".join(history(channel_id))
     user = f"[현재 방: {cname}]\n[최근 대화]\n{convo}\n\n[방금 들어온 메시지] {sp}: {text}"
-    last = ""
-    warn = ""  # 직전 시도 실패 사유(형식 오류 또는 교정 모순)를 다음 시도에 경고로 주입.
-    for attempt in range(2):
-        model = MODEL if attempt == 0 else FALLBACK
-        u = user if not warn else user + "\n\n[경고] " + warn + " 설명 없이 유효한 JSON 객체 하나만 출력하라."
-        try:
-            out = call_llm([{"role": "system", "content": sysmsg},
-                            {"role": "user", "content": u}], model)
-        except Exception as e:
-            last = f"llm:{e}"
-            warn = "직전 호출이 실패했다."
-            continue
-        try:
-            d = json.loads(_strip_fence(out), strict=False)
-        except Exception as e:
-            last = f"parse:{e}"
-            warn = "직전 출력이 형식 오류였다."
-            continue
-        why = _validate(d)
-        if why:
-            last = f"validate:{why}"
-            warn = "직전 출력이 스키마를 위반했다."
-            continue
-        # 경량 self-check: 주입된 교정과 모순되면 1회 재생성 신호를 준다(1패스 수준).
-        conflict = self_check(d, corrections)
-        if conflict and attempt == 0:
-            print(f"SELF-CHECK [{NAME}] 교정 모순 감지 → 재생성: {conflict}")
-            last = f"selfcheck:{conflict}"
-            warn = f"직전 응답이 [반드시 지킬 교정]과 모순됐다({conflict}). 교정을 반드시 반영하라."
-            continue
+    calls = [0]  # 이 decide 1회의 누적 LLM 호출 수(하드캡 백스톱용 — 가변 공유).
+    d, why = _react_loop(sysmsg, user, corrections, channel_id, calls)
+    if d is None:
+        raise ValueError(f"decide: react 루프가 finalize 없이 종료됨({why})")
+    bad = _validate(d)
+    if bad:
+        raise ValueError(f"decide: finalize 결정 스키마 위반({bad})")
+    # 경량 self-check: 주입된 교정과 모순 신호.
+    conflict = self_check(d, corrections)
+    # Reflexion 자기검증 1패스(교정 모순이거나 reflexion on 일 때). 정확히 1회만.
+    if conflict or REFLEXION_ON:
         if conflict:
-            # 재생성 후에도 모순이면 차단하지 않되 로그로 남긴다(silent 통과 방지).
-            print(f"SELF-CHECK-WARN [{NAME}] 재생성 후에도 교정 모순 잔존: {conflict}")
-        return d
-    raise ValueError(f"decide invalid after retries: {last}")
+            print(f"SELF-CHECK [{NAME}] 교정 모순 감지 → Reflexion 재확정: {conflict}")
+        d2 = _reflexion_pass(sysmsg, user, d, corrections, channel_id, calls)
+        if d2 is not d:
+            d = d2
+            conflict = self_check(d, corrections)
+    if conflict:
+        # Reflexion 후에도 모순이면 차단하지 않되 로그로 남긴다(silent 통과 방지).
+        print(f"SELF-CHECK-WARN [{NAME}] Reflexion 후에도 교정 모순 잔존: {conflict}")
+    return d
 
 
 def post(channel_id, message):
