@@ -685,6 +685,29 @@ def can_send(cname):
     return cname in SUBS
 
 
+def ensure_bot_membership():
+    """기동 시 BOT_ID를 자신의 구독 채널 전체 멤버로 보장(멱등, 1회).
+
+    system_user 봇은 채널 멤버여야만 POST할 수 있다. 멤버십이 빠지면
+    메시지 수신(WS)은 되지만 POST는 403이 된다. 기동 때 한 번 추가해서
+    미래 채널 누락을 방지한다. 이미 멤버면 Mattermost가 무해하게 반환한다.
+    """
+    for ch_name in SUBS:
+        ch_id = CH.get(ch_name)
+        if not ch_id:
+            continue
+        try:
+            req = urllib.request.Request(
+                MM + f"/channels/{ch_id}/members",
+                data=json.dumps({"user_id": BOT_ID}).encode(),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {TOKEN}"},
+                method="POST")
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as e:
+            print(f"[{NAME}] 채널 멤버십 보장 실패({ch_name}): {type(e).__name__} — 계속 진행")
+
+
 async def run():
     # open_timeout: MM 부재 시 connect 가 무한 대기하지 않게 상한을 둔다.
     # ping_interval/ping_timeout: keepalive ping 으로 좀비 연결(반쯤 끊긴 소켓)을 감지해
@@ -693,6 +716,7 @@ async def run():
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
+        ensure_bot_membership()
         brain = "공식hermes" if B.is_official_available() else "커스텀(공식 미가용)"
         if B.is_official_available() and B.RECURSIVE_LEARNING:
             sess = f" 영속세션:{B.session_name(ROLE)} 홈:{B.role_home(ROLE)}"
