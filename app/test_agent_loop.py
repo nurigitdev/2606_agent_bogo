@@ -195,6 +195,7 @@ def test_reflexion_single_pass():
 def test_reflexion_corrects_violation():
     """교정위반 감지: 교정된 '잘못된출력'이 그대로 들어오면 self_check 가 잡고 Reflexion 으로 교정된다."""
     # 교정: '12월31일' 이 잘못된출력 → 응답에 다시 등장하면 모순.
+    orig_load_corrections = H.load_corrections  # [회귀수정] 원본 보존 후 finally 에서 복원
     H.load_corrections = lambda role=None: [
         H.CORRECTION_PREFIX + " 잘못된출력=12월31일 ||| 교정=종료 6개월 전"]
     script = [
@@ -215,7 +216,9 @@ def test_reflexion_corrects_violation():
         d = _base_decide(fake)
     finally:
         H.REFLEXION_ON = old_reflex
-        H.load_corrections = lambda role=None: []
+        # [회귀수정] 빈 lambda 로 덮으면 후속 테스트의 load_corrections 가 영구 오염된다.
+        # 원본 함수를 복원해 전역 상태 누출을 막는다(test 간 격리).
+        H.load_corrections = orig_load_corrections
     assert "12월31일" not in d["message"], f"교정 위반이 Reflexion 으로 제거돼야 함: {d}"
     assert "6개월" in d["message"], f"교정된 올바른 답으로 재확정돼야 함: {d}"
     assert fake.call_count == 2, f"Reflexion 1회만(총 2회) 호출돼야 함: {fake.call_count}회"

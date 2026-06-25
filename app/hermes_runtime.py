@@ -22,6 +22,8 @@ import websockets
 
 import agent_schema as A
 import hermes_brain as B
+import vault_integration as V  # Vault RAG·영속 어댑터(graceful — 실패해도 기존 동작 보존)
+import vault_schema as VS      # 노트 태그 슬러그 등 스키마 유틸(채널명 안전화)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -49,6 +51,8 @@ COMMON_RULES = A.load_common_rules()
 ROUTING = A.build_routing(TEAMS)
 # 이 역할 전용 학습방 정의(없으면 None). owner == ROLE 매칭.
 LEARN_ROOM = A.learning_room_for_role(TEAMS, ROLE)
+# 이 역할의 팀 label(Vault 노트 team 필드·RAG 메타필터용). 팀 없으면 빈 문자열(오케스트레이터/ceo).
+TEAM_LABEL = V.team_of_role(TEAMS, ROLE)
 
 # 기동 시 가벼운 스키마 검증 — 정의가 깨졌으면 폭주 전에 멈춘다(fail-fast).
 _errs = A.validate_roles(ROLES, VALID_CHANNELS) + A.validate_teams(TEAMS, VALID_CHANNELS)
@@ -571,13 +575,14 @@ def _reflexion_pass(sysmsg, user, decision, corrections, channel_id, calls):
     return decision  # 재확정 실패 시 원결정 유지(보수적)
 
 
-def _decide_fallback(cname, channel_id, sp, text, corrections):
+def _decide_fallback(cname, channel_id, sp, text, corrections, learn_note=None):
     """커스텀 두뇌(보존된 fallback): ReAct 다단계 루프 + (선택)Reflexion 자기검증.
     공식 hermes 두뇌 호출이 실패/타임아웃/파싱실패일 때만 쓰인다. 비용 통제:
     ReAct 단계 상한·도구 결과 절단·finalize 조기탈출·하드캡·Reflexion 최대 1회."""
     sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
                              memo=load_mem(), room_memo=load_room_mem(channel_id),
-                             learn_note=load_learn_note(), react_steps=REACT_MAX_STEPS)
+                             learn_note=learn_note if learn_note is not None else load_learn_note(),
+                             react_steps=REACT_MAX_STEPS)
     convo = "\n".join(history(channel_id))
     user = f"[현재 방: {cname}]\n[최근 대화]\n{convo}\n\n[방금 들어온 메시지] {sp}: {text}"
     calls = [0]  # 이 decide 1회의 누적 LLM 호출 수(하드캡 백스톱용 — 가변 공유).
@@ -621,6 +626,13 @@ def decide(cname, channel_id, sp, text):
       - memo      : 역할 개인 진행 메모(롤링).
     """
     corrections = load_corrections()
+    base_learn = load_learn_note()
+    # [Vault RAG 주입] 현재 메시지/방 맥락으로 관련 과거 보고·피드백 top-k 를 회수해 학습노트
+    # 슬롯에 덧붙인다. 기존 역할별 세션 누적·학습노트와 '공존'하며 중복 라인은 어댑터가 거른다.
+    # 실패/미설치 시 빈 문자열 → 기존 동작 그대로(graceful). 방 격리: role/team 메타필터로 한정.
+    rag_ctx = V.retrieve_context(f"{text}\n{cname}", role=ROLE, team=TEAM_LABEL,
+                                 existing_text=base_learn)
+    learn_for_brain = (base_learn + ("\n" + rag_ctx if rag_ctx else "")).strip()
     # ── 1차: 공식 hermes 두뇌 ───────────────────────────────────────────────
     if B.USE_OFFICIAL_BRAIN and B.resolve_hermes_bin():
         convo = "\n".join(history(channel_id))
@@ -628,7 +640,7 @@ def decide(cname, channel_id, sp, text):
             d = B.decide_via_official(
                 SPEC, COMMON_RULES, ROUTING, cname, convo, sp, text,
                 memo=load_mem(), room_memo=load_room_mem(channel_id),
-                learn_note=load_learn_note(), role=ROLE)
+                learn_note=learn_for_brain, role=ROLE)
         except Exception as e:
             print(f"OFFICIAL-BRAIN-ERR [{NAME}] {cname}: {type(e).__name__}: {e} → fallback")
             d = None
@@ -645,7 +657,8 @@ def decide(cname, channel_id, sp, text):
         else:
             print(f"OFFICIAL-BRAIN-MISS [{NAME}] {cname}: 공식 두뇌 응답 없음/파싱 실패 → fallback")
     # ── 2차: 보존된 커스텀 ReAct 두뇌(fallback) ─────────────────────────────
-    return _decide_fallback(cname, channel_id, sp, text, corrections)
+    # 공식 경로와 동일하게 RAG 주입판 학습노트를 넘겨 회수 컨텍스트를 일관되게 제공한다.
+    return _decide_fallback(cname, channel_id, sp, text, corrections, learn_note=learn_for_brain)
 
 
 def post(channel_id, message):
@@ -760,11 +773,19 @@ async def run():
                     orig = _last_response.get("context", "")
                     if save_correction(orig, wrong, fix):
                         print(f"[{NAME}] 교정 학습 ← {LEARN_CHANNEL}: 교정={fix[:40]}")
+                        # [Vault 영속] 교정도 검색 가능한 feedback 노트로 영구 보존.
+                        V.persist_feedback(ROLE, TEAM_LABEL, summary=f"교정: {fix[:120]}",
+                                           body=f"원지시: {orig}\n잘못된출력: {wrong}\n교정: {fix}",
+                                           kind="correction")
                     else:
                         save_learn_note(f"{sp_name}: {body[:300]}")
+                        V.persist_feedback(ROLE, TEAM_LABEL, summary=body[:120],
+                                           body=f"{sp_name}: {body[:300]}", kind="note")
                 else:
                     save_learn_note(f"{sp_name}: {body[:300]}")
                     print(f"[{NAME}] 학습 노트 누적 ← {LEARN_CHANNEL}: {body[:40]}")
+                    V.persist_feedback(ROLE, TEAM_LABEL, summary=body[:120],
+                                       body=f"{sp_name}: {body[:300]}", kind="note")
             if not gate(text, is_bot, cname):
                 continue
             try:
@@ -818,10 +839,16 @@ async def run():
             if memo:
                 save_room_mem(cid, memo)
                 save_mem(f"[{cname}] {memo}")
+                # [Vault 영속] 롤링 메모와 병행해 Vault 에도 보고 노트로 남긴다(회귀 0).
+                V.persist_report(ROLE, TEAM_LABEL, summary=memo,
+                                 body=f"방: {cname}\n사유: {(d.get('reason') or '')[:200]}",
+                                 tags=["memo", VS.safe_slug(cname)])
             elif d.get("task_status") == "closed":
                 done = f"{cname} 처리완료: {(d.get('reason') or '')[:60]}"
                 save_room_mem(cid, done)
                 save_mem(done)
+                V.persist_report(ROLE, TEAM_LABEL, summary=done,
+                                 body=f"방: {cname}", tags=["closed"])
 
 
 async def run_forever():

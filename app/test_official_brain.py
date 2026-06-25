@@ -94,7 +94,7 @@ def test_official_failure_falls_back():
     H.history = lambda channel_id, n=12: ["사람: 보고 처리해줘"]
     fb = {"v": 0}
 
-    def _fb(cname, channel_id, sp, text, corrections):
+    def _fb(cname, channel_id, sp, text, corrections, learn_note=None):
         fb["v"] += 1
         return _valid_decision(message="fallback 결정")
 

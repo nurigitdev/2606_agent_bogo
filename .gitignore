@@ -39,6 +39,14 @@ app/logs/
 # DB
 hub/hub.db
 
+# Vault RAG 로컬 인덱스(파생물 — 재생성 가능, 대용량). Vault md 노트는 커밋, 인덱스는 제외.
+app/vault/.rag_index.db
+app/vault/.rag_index.db-*
+**/.rag_index.db
+**/.rag_index.db-*
+# Vault writer 임시·락 파일(런타임 전용)
+app/vault/**/*.lock
+
 # ──────────────────────────────────────────────
 # 툴링 / IDE
 # ──────────────────────────────────────────────
