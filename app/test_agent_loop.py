@@ -21,7 +21,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.argv = ["hermes_runtime.py", "orchestrator"]
 
 import hermes_runtime as H  # noqa: E402
+import hermes_brain as B  # noqa: E402
 import agent_schema as A  # noqa: E402
+
+# 이 파일은 두뇌 교체 후 '보존된 커스텀 ReAct 두뇌(fallback 경로)'를 검증한다.
+# decide()는 공식 hermes 두뇌를 먼저 시도하므로, 여기서는 공식 두뇌를 끄고(USE_OFFICIAL_BRAIN
+# =False) fallback(_decide_fallback = ReAct+Reflexion)만 타도록 강제한다. 이로써 기존
+# ReAct/도구/Reflexion 안전망이 fallback 으로서 여전히 정상 동작함을 회귀 검증한다.
+B.USE_OFFICIAL_BRAIN = False
 
 
 def _msg_with_tool_calls(calls):

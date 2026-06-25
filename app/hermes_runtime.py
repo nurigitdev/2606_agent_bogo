@@ -21,6 +21,7 @@ import urllib.request
 import websockets
 
 import agent_schema as A
+import hermes_brain as B
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -563,14 +564,10 @@ def _reflexion_pass(sysmsg, user, decision, corrections, channel_id, calls):
     return decision  # 재확정 실패 시 원결정 유지(보수적)
 
 
-def decide(cname, channel_id, sp, text):
-    # 메모리 3층 주입(단발 모드와 동일 계약):
-    #  - learn_note: 이 역할 전용 학습 노트(persistent). 방과 무관하게 항상 주입한다.
-    #  - room_memo: 현재 방(채널)의 공유 기억(롤링).
-    #  - memo: 역할 개인 진행 메모(롤링).
-    # decide()는 더 이상 단발 LLM 호출이 아니라 ReAct 다단계 루프 + (선택)Reflexion 으로
-    # 행동을 확정한다. 비용 통제: ReAct 단계 상한·도구 결과 절단·finalize 조기탈출·하드캡.
-    corrections = load_corrections()
+def _decide_fallback(cname, channel_id, sp, text, corrections):
+    """커스텀 두뇌(보존된 fallback): ReAct 다단계 루프 + (선택)Reflexion 자기검증.
+    공식 hermes 두뇌 호출이 실패/타임아웃/파싱실패일 때만 쓰인다. 비용 통제:
+    ReAct 단계 상한·도구 결과 절단·finalize 조기탈출·하드캡·Reflexion 최대 1회."""
     sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
                              memo=load_mem(), room_memo=load_room_mem(channel_id),
                              learn_note=load_learn_note(), react_steps=REACT_MAX_STEPS)
@@ -597,6 +594,51 @@ def decide(cname, channel_id, sp, text):
         # Reflexion 후에도 모순이면 차단하지 않되 로그로 남긴다(silent 통과 방지).
         print(f"SELF-CHECK-WARN [{NAME}] Reflexion 후에도 교정 모순 잔존: {conflict}")
     return d
+
+
+def decide(cname, channel_id, sp, text):
+    """이 봇의 '처리 두뇌' 단일 진입점. 두뇌는 공식 Nous Hermes Agent(`hermes chat`)로
+    통일한다. Mattermost 입출력·채널 라우팅·방 격리·메모리 3층은 이 함수 밖(run/저장부)이
+    그대로 담당하고, 여기서는 '한 메시지 → 행동 결정 dict' 변환만 한다.
+
+    경로:
+      1) 공식 두뇌(hermes_brain.decide_via_official): 페르소나·공통규칙·라우팅·교정/학습/
+         방메모·대화이력·출력계약을 합성한 query 를 공식 hermes 에 비대화식으로 1회 던져
+         행동 결정 JSON 을 받는다(1메시지=1호출, --max-turns/timeout 으로 폭주·무한대기 차단).
+      2) 실패/타임아웃/JSON 파싱 실패/스키마 위반 → 보존된 커스텀 ReAct 두뇌로 graceful
+         fallback(_decide_fallback). 두뇌만 교체됐을 뿐 기존 안전망은 그대로 살아 있다.
+
+    메모리 3층 주입 계약(공식·fallback 동일):
+      - learn_note: 이 역할 전용 학습 노트(persistent, 교정 포함). 방과 무관하게 항상 주입.
+      - room_memo : 현재 방(채널)의 공유 기억(롤링). 다른 방엔 주입 안 됨(방 격리).
+      - memo      : 역할 개인 진행 메모(롤링).
+    """
+    corrections = load_corrections()
+    # ── 1차: 공식 hermes 두뇌 ───────────────────────────────────────────────
+    if B.USE_OFFICIAL_BRAIN and B.resolve_hermes_bin():
+        convo = "\n".join(history(channel_id))
+        try:
+            d = B.decide_via_official(
+                SPEC, COMMON_RULES, ROUTING, cname, convo, sp, text,
+                memo=load_mem(), room_memo=load_room_mem(channel_id),
+                learn_note=load_learn_note())
+        except Exception as e:
+            print(f"OFFICIAL-BRAIN-ERR [{NAME}] {cname}: {type(e).__name__}: {e} → fallback")
+            d = None
+        if d is not None:
+            bad = _validate(d)
+            if bad:
+                print(f"OFFICIAL-BRAIN-BADSCHEMA [{NAME}] {cname}: {bad} → fallback")
+            else:
+                conflict = self_check(d, corrections)
+                if conflict:
+                    # 공식 두뇌가 교정과 모순된 결정을 냈으면 silent 통과시키지 않고 로그.
+                    print(f"SELF-CHECK-WARN [{NAME}] 공식 두뇌 교정 모순 잔존: {conflict}")
+                return d
+        else:
+            print(f"OFFICIAL-BRAIN-MISS [{NAME}] {cname}: 공식 두뇌 응답 없음/파싱 실패 → fallback")
+    # ── 2차: 보존된 커스텀 ReAct 두뇌(fallback) ─────────────────────────────
+    return _decide_fallback(cname, channel_id, sp, text, corrections)
 
 
 def post(channel_id, message):
@@ -644,7 +686,9 @@ async def run():
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
-        print(f"{NAME}({ROLE}) 가동[Hermes] 모델:{MODEL} 폴백:{FALLBACK} 구독:{SUBS}")
+        brain = "공식hermes" if B.is_official_available() else "커스텀(공식 미가용)"
+        print(f"{NAME}({ROLE}) 가동[두뇌:{brain}] 공식모델:{B.OFFICIAL_MODEL} "
+              f"fallback모델:{MODEL} 구독:{SUBS}")
         async for raw in ws:
             ev = json.loads(raw)
             if ev.get("event") != "posted":

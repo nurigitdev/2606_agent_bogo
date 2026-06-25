@@ -141,6 +141,104 @@ def react_system_addendum(max_steps):
     )
 
 
+# ── 공식 Nous Hermes Agent(`hermes chat`) 두뇌 통일 — 단일 출처 ─────────────────
+# decide()의 처리 두뇌를 커스텀 urllib OpenRouter 직접호출에서 공식 hermes CLI 로 통일한다.
+# 공식 hermes 는 system-prompt 주입용 별도 플래그가 없고(rules/SOUL/AGENTS 자동주입만 있음),
+# 봇 머신의 무관한 SOUL.md/AGENTS.md 가 섞이면 페르소나가 오염되므로 `--ignore-rules` 로
+# 기본 주입을 끄고, 우리의 페르소나·공통규칙·라우팅·교정·학습·방메모·대화이력·출력계약을
+# 전부 하나의 query(-q) 로 합성해 주입한다(주입 단일 경로 → 계약 일관).
+# 공식 두뇌는 자유서술 대신 '행동 결정 JSON' 한 덩어리만 출력하도록 강제한다(기존 finalize
+# 스키마와 동일 계약 → 송신부·검증부를 그대로 재사용, 두뇌만 교체).
+
+def finalize_schema_instruction():
+    """공식 hermes 두뇌가 반드시 따라야 할 출력 계약. 자유서술·도구·설명 없이
+    행동 결정 JSON 객체 하나만 출력하게 강제한다(기존 FINALIZE_FIELDS 스키마와 동일).
+    이 JSON 이 곧 송신/검증부가 소비하는 행동 결정이다(두뇌 교체 후에도 계약 불변)."""
+    return (
+        "\n\n===== 출력 계약 (반드시 지킬 것) =====\n"
+        "너는 위 맥락을 바탕으로 '이 메시지에 대해 무엇을 할지'를 결정해, "
+        "아래 필드를 가진 JSON 객체 **하나만** 출력한다. 설명·인사·코드펜스·여는 말 금지. "
+        "오직 JSON 한 덩어리만 출력하라.\n"
+        "{\n"
+        '  "act": true|false,            // 메시지를 송신할지(true)/침묵할지(false)\n'
+        '  "target_channel": "채널명",   // 송신 대상 채널(아래 채널 목록 안에서만). 침묵이면 빈 문자열\n'
+        '  "message": "송신 본문",       // act=true 일 때 보낼 내용\n'
+        '  "mentions": ["사람이름"],     // 멘션할 사람 이름 목록(없으면 빈 배열)\n'
+        '  "ack": "수신확인 본문",        // 중간보고/수신확인(선택, 없으면 빈 문자열)\n'
+        '  "ack_channel": "채널명",      // ack 송신 채널(선택)\n'
+        '  "importance": "routine"|"decision_needed"|"",\n'
+        '  "task_status": "open"|"closed"|"",\n'
+        '  "memo": "이 방/개인 메모 한 줄", // 남길 메모(선택)\n'
+        '  "reason": "이 결정의 한 줄 근거",\n'
+        '  "learn_applied": true|false,  // [반드시 지킬 교정]을 반영했으면 true\n'
+        '  "learn_basis": "어느 교정을 어떻게 지켰는지 한 줄"\n'
+        "}\n"
+        "규칙:\n"
+        "- 송신할 게 없으면 act=false 로 침묵하라(침묵도 유효한 결정).\n"
+        "- 채널·멘션은 위 라우팅 규칙을 반드시 따른다(권한 밖 채널 송신 금지).\n"
+        "- [반드시 지킬 교정]이 있으면 절대 위반하지 말고, learn_applied=true 로 표기하라.\n"
+        "- 반드시 JSON 객체 하나만. 그 앞뒤로 어떤 글자도 출력하지 마라."
+    )
+
+
+def official_brain_query(spec, common_rules, routing, cname, convo, speaker_name,
+                         text, memo="", room_memo="", learn_note=""):
+    """공식 hermes 두뇌(`hermes chat -q`)에 통째로 줄 단일 query 를 합성한다.
+    기존 system_prompt(페르소나+공통규칙+라우팅+메모리 3층) 조립을 그대로 재사용하되,
+    공식 CLI 에는 system 슬롯이 없으므로 시스템 지침 + 현재 방/대화/메시지 + 출력계약을
+    하나의 user query 문자열로 이어 붙인다. react_steps=0 으로 ReAct 지침은 넣지 않는다
+    (공식 두뇌는 자체 ReAct 루프를 가지므로 우리 루프 지침은 불필요·충돌)."""
+    sysmsg = system_prompt(spec, common_rules, routing, memo=memo,
+                           room_memo=room_memo, learn_note=learn_note, react_steps=0)
+    user_block = (
+        "\n\n===== 지금 처리할 상황 =====\n"
+        f"[현재 방: {cname}]\n[최근 대화]\n{convo}\n\n"
+        f"[방금 들어온 메시지] {speaker_name}: {text}"
+    )
+    return sysmsg + user_block + finalize_schema_instruction()
+
+
+def _strip_fence(s):
+    """LLM 출력에서 코드펜스를 벗기고 첫 { ~ 마지막 } 사이만 추출(JSON 강건 파싱용).
+    hermes_runtime._strip_fence / mm_client.strip_fence 와 동일 로직(여기 자체 보유 →
+    공식 두뇌 출력 파싱이 외부 모듈 의존 없이 닫혀 동작)."""
+    s = (s or "").strip()
+    if s.startswith("```"):
+        s = s.split("\n", 1)[1] if "\n" in s else s
+        if s.endswith("```"):
+            s = s.rsplit("```", 1)[0]
+        if s.lstrip().startswith("json"):
+            s = s.lstrip()[4:]
+    i, j = s.find("{"), s.rfind("}")
+    if i != -1 and j != -1 and j > i:
+        s = s[i:j + 1]
+    return s.strip()
+
+
+def parse_official_brain_output(raw):
+    """공식 hermes CLI(-Q) stdout 에서 행동 결정 JSON 을 추출해 dict 로 반환.
+    -Q 모드 출력은 'session_id: ...' 메타 라인 + 응답 본문이 섞여 나오므로,
+    session_id/usage 류 메타 라인을 걷어내고 strip_fence 로 첫 { ~ 마지막 } 만 파싱한다.
+    파싱 실패 시 None(→ 호출부가 fallback 으로 전환)."""
+    if not raw:
+        return None
+    lines = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        # CLI 메타 라인 제거(응답 본문이 아님).
+        if s.startswith("session_id:") or s.startswith("usage:") or s.startswith("cost:"):
+            continue
+        lines.append(ln)
+    body = _strip_fence("\n".join(lines))
+    if not body:
+        return None
+    try:
+        d = json.loads(body)
+    except Exception:
+        return None
+    return d if isinstance(d, dict) else None
+
+
 def parse_md(path):
     """agents/*.md 한 파일을 {필드..., prompt} dict로 파싱."""
     txt = open(path, encoding="utf-8").read()
