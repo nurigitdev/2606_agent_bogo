@@ -296,9 +296,10 @@ class Handler(BaseHTTPRequestHandler):
 def build_index_html():
     """단일 정적 HTML(외부 빌드체인 0, vanilla JS). 채널·기본값은 런타임 API 로 주입.
 
-    시각: MiniMax 디자인 시스템(모노크롬 + 제품색 인코딩, DM Sans, pill 버튼,
-    그라데이션 제품 카드 32px / 조용한 흰 문서 카드 16px 라디우스 대비). CSS 토큰은
-    :root 변수로 선언. 서버/API/JS 동작 계약(element id·fetch 형식)은 전부 보존한다.
+    시각: Apple 웹 디자인 시스템(SF Pro 타이포, 단일 Action Blue #0066cc 액센트,
+    교차 명암 풀블리드 타일이 섹션 divider, 시스템 그림자 단 1개, pill/lg/sm/md
+    라디우스 문법 분리, weight 300/400/600/700 래더). CSS 토큰은 :root 변수로 선언.
+    서버/API/JS 동작 계약(element id·class·fetch 형식)은 전부 보존한다.
     """
     return """<!DOCTYPE html>
 <html lang="ko">
@@ -306,254 +307,268 @@ def build_index_html():
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hermes CEO 대시보드</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
 <style>
   :root {
-    /* ── 색 토큰: 모노크롬 베이스 ── */
-    --color-ink:#0a0a0a;          /* 헤드라인 / CTA / primary 버튼 배경 */
-    --color-charcoal:#1f1f1f;     /* 본문 */
-    --color-slate:#52525b;        /* 보조 텍스트 */
-    --color-steel:#71717a;        /* 비활성·메타 */
-    --color-stone:#a1a1aa;        /* 가장 흐린 텍스트 */
-    --color-canvas:#ffffff;       /* 배경 */
-    --color-surface:#f4f4f5;      /* 섹션·비활성 배경 */
-    --color-surface-2:#fafafa;    /* 입력 배경 */
-    --color-hairline:#e4e4e7;     /* 1px 보더 */
-    --color-hairline-strong:#d4d4d8;
-    /* ── 브랜드/제품색: '제품 정체성 카드'에만 ── */
-    --brand-coral:#ff4d3d;        /* CEO 시그니처 */
-    --brand-coral-2:#ff7a45;
-    --brand-magenta:#d61f69;      /* 인사총무 */
-    --brand-magenta-2:#ec4899;
-    --brand-blue:#2563eb;         /* 개발(Hailuo) */
-    --brand-blue-2:#3b82f6;
-    --brand-purple:#7c3aed;       /* 관리 */
-    --brand-purple-2:#a855f7;
-    /* ── 상태색 ── */
-    --ok:#15803d; --ok-bg:#dcfce7;
-    --bad:#b91c1c; --bad-bg:#fee2e2;
-    /* ── 스페이싱(4px 베이스, 8px 증분) ── */
+    /* ── 텍스트 잉크: 순검정 금지, Apple #1d1d1f ── */
+    --ink:#1d1d1f;            /* 헤드라인 / 본문 잉크 */
+    --ink-soft:#424245;       /* 보조 본문 */
+    --ink-muted:#6e6e73;      /* 메타·캡션 */
+    --ink-faint:#86868b;      /* 가장 흐린 텍스트 */
+    /* ── 단일 액센트: Action Blue. 제2 액센트 없음 ── */
+    --blue:#0066cc;           /* 모든 인터랙티브: 링크·CTA·포커스 */
+    --blue-sky:#2997ff;       /* 다크 배경 위 인라인 링크 전용 */
+    --focus:#0071e3;          /* 포커스 링 */
+    /* ── 표면 ── */
+    --nav-black:#000000;      /* 글로벌 nav 바 전용(진짜 검정) */
+    --canvas:#ffffff;         /* 주 캔버스(라이트 타일) */
+    --parchment:#f5f5f7;      /* 교차 라이트 타일·푸터 */
+    --tile-dark:#1d1d1f;      /* 풀블리드 near-black 타일 */
+    --tile-dark-2:#2a2a2c;    /* near-black 위 내부 패널 */
+    --tile-dark-3:#252527;    /* near-black 위 입력 */
+    --hairline:#e0e0e0;       /* 유틸리티 카드 1px hairline */
+    --hairline-soft:#d2d2d7;  /* 입력 보더 */
+    /* 다크 타일 위 텍스트 */
+    --on-dark:#ffffff;
+    --on-dark-muted:#cccccc;
+    /* ── 상태 도트(기능 신호, 액센트 아님) ── */
+    --ok:#1d8a4e;
+    --off:#86868b;
+    /* ── 스페이싱(8px 베이스) ── */
     --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
     --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px;
     --space-12:48px; --space-16:64px; --space-20:80px;
-    /* ── 라디우스: 라디우스 대비가 시그니처 ── */
-    --radius-product:32px;        /* 그라데이션 제품 카드 */
-    --radius-doc:16px;            /* 조용한 흰 문서 카드 */
-    --radius-sm:12px;             /* 입력·내부 요소 */
-    --radius-pill:9999px;         /* 모든 버튼·뱃지 */
-    --shadow-float:0 8px 28px rgba(10,10,10,.10);
+    /* ── 라디우스 문법: 섞지 말 것 ── */
+    --r-pill:9999px;          /* 블루 CTA·검색입력·옵션칩 */
+    --r-lg:18px;              /* 유틸리티 카드 */
+    --r-md:11px;              /* Pearl 버튼 */
+    --r-sm:8px;               /* 다크 유틸 버튼 */
+    /* ── 시스템 그림자: 단 하나. 제품/주요 비주얼에만 ── */
+    --shadow:rgba(0,0,0,0.22) 3px 5px 30px;
   }
   * { box-sizing:border-box; }
   html { -webkit-text-size-adjust:100%; }
   body {
     margin:0;
-    font-family:"DM Sans","Inter","Helvetica Neue",Arial,
-      "Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
-    background:var(--color-canvas); color:var(--color-charcoal);
-    font-size:16px; line-height:1.5; word-break:keep-all;
-    -webkit-font-smoothing:antialiased;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",
+      "Apple SD Gothic Neo",system-ui,Inter,"Malgun Gothic",sans-serif;
+    background:var(--canvas); color:var(--ink);
+    font-size:17px; font-weight:400; line-height:1.47148; letter-spacing:-0.374px;
+    word-break:keep-all; -webkit-font-smoothing:antialiased;
   }
+  a { color:var(--blue); font-weight:400; text-decoration:none; }
+  a:hover { text-decoration:underline; }
 
-  /* ── 상단 검정 promo-banner(한 줄, radius 0) ── */
+  /* ── 글로벌 nav: 진짜 검정 #000, 높이 44px ── */
   .promo-banner {
-    background:var(--color-ink); color:#fff;
-    font-size:13px; font-weight:500; letter-spacing:-.01em;
-    text-align:center; padding:9px 20px;
+    background:var(--nav-black); color:var(--on-dark);
+    height:44px; display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:400; letter-spacing:-0.12px;
+    padding:0 22px; text-align:center;
   }
   .promo-banner b { font-weight:600; }
 
-  /* ── 상단 흰 네비 바 ── */
+  /* ── 상단 흰 네비 바(콘텐츠 헤더) ── */
   header {
     position:sticky; top:0; z-index:20;
-    background:rgba(255,255,255,.88); backdrop-filter:saturate(180%) blur(12px);
-    border-bottom:1px solid var(--color-hairline);
-    padding:var(--space-4) var(--space-6);
+    background:rgba(255,255,255,.82);
+    -webkit-backdrop-filter:saturate(180%) blur(20px);
+    backdrop-filter:saturate(180%) blur(20px);
+    border-bottom:1px solid var(--hairline);
+    padding:var(--space-4) var(--space-8);
     display:flex; align-items:center; gap:var(--space-4); flex-wrap:wrap;
   }
   .brand { display:flex; align-items:center; gap:var(--space-3); }
   .logo-mark {
-    width:30px; height:30px; border-radius:9px; flex:0 0 auto;
-    background:var(--color-ink); color:#fff;
+    width:30px; height:30px; border-radius:var(--r-sm); flex:0 0 auto;
+    background:var(--ink); color:var(--on-dark);
     display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:15px; letter-spacing:-.02em;
+    font-weight:600; font-size:15px; letter-spacing:-0.3px;
   }
   header h1 {
-    font-size:18px; font-weight:600; letter-spacing:-.02em;
-    margin:0; color:var(--color-ink);
+    font-size:19px; font-weight:600; letter-spacing:-0.32px;
+    margin:0; color:var(--ink);
   }
   .nav-meta { margin-left:auto; display:flex; align-items:center; gap:var(--space-3); flex-wrap:wrap; }
   .pill {
-    font-size:12px; font-weight:500; color:var(--color-steel);
-    letter-spacing:-.01em;
+    font-size:13px; font-weight:400; color:var(--ink-muted);
+    letter-spacing:-0.2px;
   }
+  /* status chip: 다크 유틸 버튼 문법(sm 라운드, ink bg) */
   .chip {
-    display:inline-flex; align-items:center; gap:6px;
-    font-size:12px; font-weight:500; color:var(--color-slate);
-    background:var(--color-surface); border:1px solid var(--color-hairline);
-    border-radius:var(--radius-pill); padding:6px 12px; white-space:nowrap;
+    display:inline-flex; align-items:center; gap:7px;
+    font-size:13px; font-weight:400; color:var(--on-dark);
+    background:var(--ink); border:none;
+    border-radius:var(--r-sm); padding:7px 13px; white-space:nowrap;
+    letter-spacing:-0.2px;
   }
   .chip .live-dot {
-    width:7px; height:7px; border-radius:50%;
-    background:var(--ok); box-shadow:0 0 0 3px var(--ok-bg);
+    width:6px; height:6px; border-radius:50%; background:var(--ok);
   }
 
-  .wrap { max-width:1240px; margin:0 auto; padding:var(--space-10) var(--space-6) var(--space-20); }
+  /* ── 콘텐츠 락 1440px ── */
+  .wrap { max-width:1440px; margin:0 auto; padding:0; }
+  /* 섹션을 풀블리드 타일로 구성: 색 전환 자체가 divider ── */
+  .tile { padding:var(--space-20) var(--space-8); }
+  .tile-light { background:var(--canvas); }
+  .tile-parchment { background:var(--parchment); }
+  .tile-dark { background:var(--tile-dark); }
+  .tile-inner { max-width:1280px; margin:0 auto; }
 
-  /* ── 섹션 헤더 ── */
-  .section-head { margin:var(--space-12) 0 var(--space-5); }
-  .section-head:first-child { margin-top:0; }
+  /* ── 섹션 헤더: 헤드라인 위 64px+ 공기 ── */
+  .section-head { margin:0 0 var(--space-12); }
   .section-title {
-    font-size:32px; font-weight:600; letter-spacing:-1px;
-    color:var(--color-ink); margin:0; line-height:1.15;
+    font-size:40px; font-weight:600; letter-spacing:-0.374px;
+    color:var(--ink); margin:0; line-height:1.1;
   }
+  .tile-dark .section-title { color:var(--on-dark); }
   .section-sub {
-    font-size:14px; font-weight:400; color:var(--color-steel);
-    margin:var(--space-2) 0 0; letter-spacing:-.01em;
+    font-size:19px; font-weight:400; color:var(--ink-muted);
+    margin:var(--space-3) 0 0; letter-spacing:-0.32px; line-height:1.4;
   }
+  .tile-dark .section-sub { color:var(--on-dark-muted); }
 
-  /* ── 부서 카드 그리드: 그라데이션 제품 카드 ── */
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:var(--space-5); }
+  /* ── 부서 카드 그리드: near-black 타일 위 내부 패널 ── */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:var(--space-6); }
   .card {
-    border-radius:var(--radius-product);
-    padding:var(--space-8);
-    min-height:200px; color:#fff;
+    border-radius:var(--r-lg);
+    padding:var(--space-6);
+    min-height:220px; color:var(--on-dark);
     display:flex; flex-direction:column;
-    background:linear-gradient(150deg,#3f3f46 0%,#27272a 100%);
+    background:var(--tile-dark-2);
     overflow:hidden;
   }
-  /* 제품색 인코딩 — 채널/팀을 제품처럼 색 부여 */
-  .card.k-blue    { background:linear-gradient(150deg,var(--brand-blue-2) 0%,var(--brand-blue) 100%); }
-  .card.k-magenta { background:linear-gradient(150deg,var(--brand-magenta-2) 0%,var(--brand-magenta) 100%); }
-  .card.k-coral   { background:linear-gradient(150deg,var(--brand-coral-2) 0%,var(--brand-coral) 100%); }
-  .card.k-purple  { background:linear-gradient(150deg,var(--brand-purple-2) 0%,var(--brand-purple) 100%); }
+  /* 채널 종류 표식: 좌측 4px 액센트 레일(단일 블루) + 무채 변주.
+     색을 늘리지 않고 위계만 — k-coral(브리핑)만 블루로 신호. */
+  .card.k-coral   { box-shadow:inset 4px 0 0 var(--blue); }
+  .card.k-blue    { box-shadow:inset 4px 0 0 rgba(255,255,255,.55); }
+  .card.k-magenta { box-shadow:inset 4px 0 0 rgba(255,255,255,.38); }
+  .card.k-purple  { box-shadow:inset 4px 0 0 rgba(255,255,255,.24); }
   .card h2 {
-    font-size:20px; font-weight:600; letter-spacing:-.02em; margin:0 0 var(--space-4);
+    font-size:21px; font-weight:600; letter-spacing:-0.34px; margin:0 0 var(--space-4);
     display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-3);
-    line-height:1.2;
+    line-height:1.2; color:var(--on-dark);
   }
-  /* 뱃지: pill. 제품 카드 위에서는 반투명 흰 글래스 */
+  /* 뱃지: pill. 다크 타일 위 외곽선 ghost */
   .badge {
     flex:0 0 auto;
-    font-size:12px; font-weight:600; letter-spacing:-.01em;
-    padding:5px 12px; border-radius:var(--radius-pill);
-    background:rgba(255,255,255,.20); color:#fff;
-    backdrop-filter:blur(4px); white-space:nowrap;
+    font-size:12px; font-weight:400; letter-spacing:-0.1px;
+    padding:4px 11px; border-radius:var(--r-pill);
+    background:transparent; color:var(--on-dark-muted);
+    border:1px solid rgba(255,255,255,.28); white-space:nowrap;
   }
-  .badge.team {}
-  .badge.report { background:rgba(255,255,255,.14); }
-  .badge.briefing { background:rgba(255,255,255,.26); }
-  /* 카드 내부 메시지 영역: 제품색 위 반투명 흰 패널 */
+  .badge.briefing { color:var(--blue-sky); border-color:rgba(41,151,255,.5); }
+  /* 카드 내부 메시지 영역: 다크 위 한 단계 밝은 패널 */
   .msgs {
     margin-top:auto; max-height:280px; overflow-y:auto;
-    background:rgba(255,255,255,.92); border-radius:var(--radius-sm);
-    padding:var(--space-2) var(--space-4); color:var(--color-charcoal);
+    background:var(--canvas); border-radius:var(--r-md);
+    padding:var(--space-2) var(--space-4); color:var(--ink);
   }
-  .msg { padding:var(--space-3) 0; border-top:1px solid var(--color-hairline); }
+  .msg { padding:var(--space-3) 0; border-top:1px solid var(--hairline); }
   .msg:first-child { border-top:none; }
-  .msg .who { color:var(--color-ink); font-weight:600; font-size:13px; letter-spacing:-.01em; }
-  .msg .when { color:var(--color-steel); font-size:12px; margin-left:6px; font-weight:400; }
+  .msg .who { color:var(--ink); font-weight:600; font-size:14px; letter-spacing:-0.2px; }
+  .msg .when { color:var(--ink-faint); font-size:12px; margin-left:7px; font-weight:400; }
   .msg .body {
     white-space:pre-wrap; word-break:break-word; margin-top:var(--space-1);
-    line-height:1.5; font-size:14px; color:var(--color-charcoal);
+    line-height:1.47; font-size:15px; color:var(--ink-soft);
   }
-  .empty { color:var(--color-steel); font-size:13px; padding:var(--space-3) 0; font-weight:400; }
-  .msgs .empty { color:var(--color-steel); }
-  /* 제품 카드 골격(메시지 로드 전) 상태 텍스트 */
-  .card > .msgs:only-of-type { }
+  .empty { color:var(--ink-muted); font-size:14px; padding:var(--space-3) 0; font-weight:400; }
+  .msgs .empty { color:var(--ink-muted); }
 
-  /* ── CEO 지시: 떠있는 흰 패널(약한 그림자 허용) ── */
+  /* ── CEO 지시: parchment 타일 위 흰 유틸리티 카드(그림자 없음) ── */
   .composer {
-    background:var(--color-canvas);
-    border:1px solid var(--color-hairline);
-    border-radius:var(--radius-doc);
+    background:var(--canvas);
+    border:1px solid var(--hairline);
+    border-radius:var(--r-lg);
     padding:var(--space-6);
-    box-shadow:var(--shadow-float);
   }
-  .composer .row { display:flex; gap:var(--space-3); margin-bottom:var(--space-3); flex-wrap:wrap; align-items:center; }
-  .composer label { font-size:13px; font-weight:600; color:var(--color-slate); letter-spacing:-.01em; }
+  .composer .row { display:flex; gap:var(--space-3); margin-bottom:var(--space-4); flex-wrap:wrap; align-items:center; }
+  .composer label { font-size:15px; font-weight:600; color:var(--ink); letter-spacing:-0.2px; }
   select, textarea, button { font-family:inherit; }
+  /* select: 옵션칩 → pill 문법 */
   select {
-    background:var(--color-surface-2); color:var(--color-charcoal);
-    border:1px solid var(--color-hairline-strong);
-    border-radius:var(--radius-pill); padding:9px 16px;
-    font-size:14px; font-weight:500; cursor:pointer; min-height:40px;
+    background:var(--canvas); color:var(--ink);
+    border:1px solid var(--hairline-soft);
+    border-radius:var(--r-pill); padding:9px 18px;
+    font-size:15px; font-weight:400; cursor:pointer; min-height:44px;
+    letter-spacing:-0.2px;
   }
-  select:focus { outline:none; border-color:var(--color-ink); }
+  select:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  /* textarea: 검색입력류 → 부드러운 사각(lg) + 블루 포커스 */
   textarea {
-    width:100%; min-height:96px;
-    background:var(--color-surface-2); color:var(--color-charcoal);
-    border:1px solid var(--color-hairline-strong);
-    border-radius:var(--radius-sm); padding:var(--space-4); resize:vertical;
-    font-size:16px; line-height:1.5; letter-spacing:-.01em;
+    width:100%; min-height:104px;
+    background:var(--canvas); color:var(--ink);
+    border:1px solid var(--hairline-soft);
+    border-radius:var(--r-lg); padding:var(--space-4); resize:vertical;
+    font-size:17px; line-height:1.47; letter-spacing:-0.374px;
   }
-  textarea::placeholder { color:var(--color-stone); }
-  textarea:focus { outline:none; border-color:var(--color-ink); }
-  /* 모든 버튼 pill. primary = 검정 pill */
+  textarea::placeholder { color:var(--ink-faint); }
+  textarea:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  /* button-primary: Action Blue pill, 흰 17px, padding 11x22 ── */
   button {
-    background:var(--color-ink); color:#fff; border:none;
-    border-radius:var(--radius-pill); padding:11px 24px;
-    cursor:pointer; font-weight:600; font-size:14px; letter-spacing:-.01em;
-    min-height:44px; transition:transform .12s ease, opacity .12s ease;
+    background:var(--blue); color:var(--on-dark); border:none;
+    border-radius:var(--r-pill); padding:11px 22px;
+    cursor:pointer; font-weight:400; font-size:17px; letter-spacing:-0.32px;
+    min-height:44px; transition:transform .14s ease;
   }
-  button:hover { opacity:.88; }
-  button:active { transform:translateY(1px); }
-  button:disabled { opacity:.4; cursor:not-allowed; }
+  button:active { transform:scale(0.95); }
+  button:disabled { opacity:.36; cursor:not-allowed; }
 
-  /* ── 에이전트 현황: 조용한 흰 문서 카드(flat, hairline 보더) ── */
-  .roster { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:var(--space-4); }
+  /* ── 에이전트 현황: 라이트 타일 위 흰 유틸리티 카드 ── */
+  .roster { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:var(--space-5); }
   .agent {
-    background:var(--color-canvas);
-    border:1px solid var(--color-hairline);
-    border-radius:var(--radius-doc);
-    padding:var(--space-5);
+    background:var(--canvas);
+    border:1px solid var(--hairline);
+    border-radius:var(--r-lg);
+    padding:var(--space-6);
   }
   .agent .nm {
-    font-weight:600; font-size:16px; letter-spacing:-.02em; color:var(--color-ink);
-    display:flex; align-items:center; gap:6px;
+    font-weight:600; font-size:17px; letter-spacing:-0.32px; color:var(--ink);
+    display:flex; align-items:center; gap:8px;
   }
-  .agent .nm .pill { color:var(--color-stone); font-weight:500; }
-  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
-  .dot.on { background:var(--ok); box-shadow:0 0 0 3px var(--ok-bg); }
-  .dot.off { background:var(--color-stone); box-shadow:0 0 0 3px var(--color-surface); }
+  .agent .nm .pill { color:var(--ink-faint); font-weight:400; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+  .dot.on { background:var(--ok); }
+  .dot.off { background:var(--off); }
   .agent .meta {
-    color:var(--color-steel); font-size:13px; margin-top:var(--space-3); line-height:1.6;
-    letter-spacing:-.01em;
+    color:var(--ink-muted); font-size:14px; margin-top:var(--space-3); line-height:1.6;
+    letter-spacing:-0.2px;
   }
+  /* note: parchment 타일 위 한 단계 더 들어간 안내 카드 */
   .note {
-    color:var(--color-slate); font-size:13px; margin-top:var(--space-5); line-height:1.6;
-    background:var(--color-surface); border:1px solid var(--color-hairline);
-    border-radius:var(--radius-doc); padding:var(--space-5); letter-spacing:-.01em;
+    color:var(--ink-soft); font-size:15px; margin-top:var(--space-6); line-height:1.6;
+    background:var(--parchment); border:1px solid var(--hairline);
+    border-radius:var(--r-lg); padding:var(--space-6); letter-spacing:-0.2px;
   }
-  .note b { color:var(--color-ink); font-weight:600; }
+  .note b { color:var(--ink); font-weight:600; }
 
-  /* ── 토스트: 떠있는 패널 ── */
+  /* ── 토스트: 떠있는 요소 → 시스템 그림자 1개 적용 ── */
   .toast {
-    position:fixed; bottom:var(--space-6); left:50%; transform:translateX(-50%) translateY(8px);
-    background:var(--color-ink); color:#fff;
-    padding:12px 22px; border-radius:var(--radius-pill);
-    font-size:14px; font-weight:500; letter-spacing:-.01em;
+    position:fixed; bottom:var(--space-8); left:50%; transform:translateX(-50%) translateY(8px);
+    background:var(--ink); color:var(--on-dark);
+    padding:13px 24px; border-radius:var(--r-pill);
+    font-size:15px; font-weight:400; letter-spacing:-0.2px;
     opacity:0; transition:opacity .25s ease, transform .25s ease;
-    pointer-events:none; box-shadow:var(--shadow-float);
+    pointer-events:none; box-shadow:var(--shadow);
   }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
-  a { color:var(--color-ink); font-weight:500; }
 
-  /* ── 반응형 ── */
+  /* ── 반응형: 1440 락 → 태블릿 2열 → 모바일 1열 ── */
   @media (max-width:1024px){
-    .grid { grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); }
-    .roster { grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
-    .section-title { font-size:28px; }
-    .wrap { padding:var(--space-8) var(--space-5) var(--space-16); }
+    .grid { grid-template-columns:repeat(2,1fr); }
+    .roster { grid-template-columns:repeat(2,1fr); }
+    .section-title { font-size:32px; }
+    .tile { padding:var(--space-16) var(--space-6); }
   }
   @media (max-width:768px){
-    body { font-size:15px; }
+    body { font-size:16px; }
     .grid { grid-template-columns:1fr; }
     .roster { grid-template-columns:1fr; }
-    .card { padding:var(--space-6); border-radius:24px; min-height:0; }
-    .section-title { font-size:24px; letter-spacing:-.5px; }
+    .card { min-height:0; }
+    .section-title { font-size:28px; letter-spacing:-0.5px; }
+    .section-sub { font-size:17px; }
     .nav-meta { width:100%; margin-left:0; }
+    header { padding:var(--space-4) var(--space-5); }
+    .tile { padding:var(--space-12) var(--space-5); }
     .composer .row { gap:var(--space-2); }
     select { width:100%; }
   }
@@ -572,33 +587,48 @@ def build_index_html():
   </div>
 </header>
 <div class="wrap">
-  <div class="section-head">
-    <h2 class="section-title">부서별 현황</h2>
-    <p class="section-sub">각 채널의 최근 활동을 12초마다 폴링해 보여줍니다.</p>
-  </div>
-  <div class="grid" id="cards"></div>
-
-  <div class="section-head">
-    <h2 class="section-title">CEO 지시</h2>
-    <p class="section-sub">기본 CEO브리핑 → 박민철(비서실장)에게 전달됩니다.</p>
-  </div>
-  <div class="composer">
-    <div class="row">
-      <label for="ch">대상 채널</label>
-      <select id="ch"></select>
+  <!-- 부서별 현황 — near-black 풀블리드 타일 -->
+  <section class="tile tile-dark">
+    <div class="tile-inner">
+      <div class="section-head">
+        <h2 class="section-title">부서별 현황</h2>
+        <p class="section-sub">각 채널의 최근 활동을 12초마다 폴링해 보여줍니다.</p>
+      </div>
+      <div class="grid" id="cards"></div>
     </div>
-    <textarea id="msg" placeholder="지시 내용을 입력하세요. 예) 개발팀 이번 주 출시 일정 정리해서 올려주세요."></textarea>
-    <div class="row" style="margin-top:var(--space-4); margin-bottom:0; justify-content:flex-end;">
-      <button id="send">지시 전송</button>
-    </div>
-  </div>
+  </section>
 
-  <div class="section-head">
-    <h2 class="section-title">에이전트 현황</h2>
-    <p class="section-sub">role 목록과 봇 활성 여부 · 담당 채널.</p>
-  </div>
-  <div class="roster" id="roster"></div>
-  <div class="note" id="adminNote"></div>
+  <!-- CEO 지시 — parchment 라이트 타일(색 전환이 divider) -->
+  <section class="tile tile-parchment">
+    <div class="tile-inner">
+      <div class="section-head">
+        <h2 class="section-title">CEO 지시</h2>
+        <p class="section-sub">기본 CEO브리핑 → 박민철(비서실장)에게 전달됩니다.</p>
+      </div>
+      <div class="composer">
+        <div class="row">
+          <label for="ch">대상 채널</label>
+          <select id="ch"></select>
+        </div>
+        <textarea id="msg" placeholder="지시 내용을 입력하세요. 예) 개발팀 이번 주 출시 일정 정리해서 올려주세요."></textarea>
+        <div class="row" style="margin-top:var(--space-4); margin-bottom:0; justify-content:flex-end;">
+          <button id="send">지시 전송</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 에이전트 현황 — 흰 라이트 타일 -->
+  <section class="tile tile-light">
+    <div class="tile-inner">
+      <div class="section-head">
+        <h2 class="section-title">에이전트 현황</h2>
+        <p class="section-sub">role 목록과 봇 활성 여부 · 담당 채널.</p>
+      </div>
+      <div class="roster" id="roster"></div>
+      <div class="note" id="adminNote"></div>
+    </div>
+  </section>
 </div>
 <div class="toast" id="toast"></div>
 
