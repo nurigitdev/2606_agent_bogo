@@ -22,6 +22,10 @@ LIST_FIELDS = ("aliases", "channels")
 # channels.json 의 학습방 값이 이 접두로 시작하면 "미배선"으로 간주(린트 WARN, 런타임은 무해 동작).
 LEARN_PLACEHOLDER_PREFIX = "TODO_"
 
+# 학습 노트 안에서 '반드시 지킬 교정' 항목을 나타내는 라인 접두(단일 출처).
+# hermes_runtime 의 저장 로직과 여기 system_prompt 의 강조 렌더가 같은 값을 공유한다.
+CORRECTION_PREFIX = "[교정]"
+
 
 def parse_md(path):
     """agents/*.md 한 파일을 {필드..., prompt} dict로 파싱."""
@@ -280,10 +284,29 @@ def system_prompt(spec, common_rules, routing, memo="", room_memo="", learn_note
     if common_rules:
         parts.append("\n\n===== 전 에이전트 공통 규칙 (상속) =====\n" + common_rules)
     if learn_note:
-        parts.append(
-            "\n\n[팀 학습 노트] (내 학습방에 영구 누적된 교정·노하우·정책 — 매 판단에 반영하라)\n"
-            + learn_note
-        )
+        # 학습 노트를 '교정'과 '일반'으로 분리 렌더한다. 교정은 같은 실수 반복을 막는
+        # 최우선 지침이므로 [반드시 지킬 교정] 강조 섹션으로 먼저·따로 주입하고,
+        # 나머지 노하우·정책은 [팀 학습 노트]로 일반 주입한다(우선순위 시각적 구분).
+        lines = [x for x in learn_note.split("\n") if x.strip()]
+        corrections = [x for x in lines if x.strip().startswith(CORRECTION_PREFIX)]
+        general = [x for x in lines if not x.strip().startswith(CORRECTION_PREFIX)]
+        if corrections:
+            parts.append(
+                "\n\n[반드시 지킬 교정] (과거 같은 실수로 교정받은 항목 — 절대 반복 금지, 최우선 준수)\n"
+                + "\n".join(corrections)
+            )
+        if general:
+            parts.append(
+                "\n\n[팀 학습 노트] (내 학습방에 영구 누적된 노하우·정책 — 매 판단에 반영하라)\n"
+                + "\n".join(general)
+            )
+        # self-check: 모델이 응답에 교정 반영 여부를 스스로 표기하게 한다(경량 1패스 검증 근거).
+        if corrections:
+            parts.append(
+                "\n\n[자기점검] 출력 JSON에 \"learn_applied\"(bool: 위 [반드시 지킬 교정]을 "
+                "이번 응답에 반영했으면 true)와 \"learn_basis\"(어느 교정을 어떻게 지켰는지 한 줄) "
+                "필드를 추가하라. 교정과 모순되는 응답은 금지다."
+            )
     if room_memo:
         parts.append("\n\n[이 방의 공유 기억]\n" + room_memo)
     if memo:

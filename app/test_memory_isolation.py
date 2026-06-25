@@ -178,6 +178,117 @@ def test_system_prompt_three_layer():
     print("[PASS] system_prompt 3층 분리 주입 통과")
 
 
+# ── 재귀학습 교정 루프 신규 테스트 ────────────────────────────────────────────
+
+def test_correction_save_structured():
+    """교정 저장은 원지시·잘못된출력·교정내용을 구조화해 [교정] 항목으로 누적한다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _isolate_learn_to_tmp(tmp)
+        ok = H.save_correction(
+            original="연차 촉진 기한 안내",
+            wrong="기한은 12월 31일이라고 답함",
+            fix="연차 사용 촉진 기한은 회계연도 종료 6개월 전이다",
+            role="hr")
+        assert ok is True, "유효 교정은 저장 성공해야 함"
+        corrections = H.load_corrections(role="hr")
+        assert len(corrections) == 1, f"교정 1건 누적돼야 함: {corrections}"
+        c = corrections[0]
+        assert c.startswith(H.CORRECTION_PREFIX), "교정 라인은 교정 접두로 시작해야 함"
+        assert "원지시=" in c and "잘못된출력=" in c and "교정=" in c, f"3요소 구조화 누락: {c}"
+        assert "6개월" in c, "교정 핵심 내용이 보존돼야 함"
+        # 교정 내용이 비면 저장 안 함
+        assert H.save_correction("o", "w", "", role="hr") is False, "빈 교정은 저장 안 함"
+        print("[PASS] 교정 구조화 저장(원지시·잘못된출력·교정) 통과")
+
+
+def test_correction_priority_injection():
+    """교정 항목은 [반드시 지킬 교정] 강조 섹션으로 일반 학습 노트와 분리·우선 렌더된다."""
+    note = (H.CORRECTION_PREFIX + " 원지시=X ||| 잘못된출력=틀린답 ||| 교정=올바른답\n"
+            "이다은: 일반 노하우 한 줄")
+    sp = A.system_prompt({"prompt": "p", "name": "n", "primary": "방"},
+                         "공통", "라우팅", learn_note=note)
+    assert "[반드시 지킬 교정]" in sp, "교정 강조 섹션 누락"
+    assert "올바른답" in sp, "교정 내용 주입 누락"
+    assert "[팀 학습 노트]" in sp and "일반 노하우" in sp, "일반 학습 노트 섹션 누락"
+    # 교정 섹션이 일반 학습 노트보다 앞에 와야 한다(최우선 각인).
+    assert sp.index("[반드시 지킬 교정]") < sp.index("[팀 학습 노트]"), "교정은 일반 노트보다 앞이어야 함"
+    # self-check 안내 필드가 함께 주입돼야 한다.
+    assert "learn_applied" in sp and "[자기점검]" in sp, "self-check 안내 누락"
+    # 교정이 없으면 강조 섹션·self-check 안내도 없어야 한다(하위 호환).
+    sp2 = A.system_prompt({"prompt": "p", "name": "n", "primary": "방"},
+                          "공통", "라우팅", learn_note="이다은: 일반만")
+    assert "[반드시 지킬 교정]" not in sp2 and "learn_applied" not in sp2, "교정 없으면 강조/자기점검 미주입"
+    assert "[팀 학습 노트]" in sp2, "일반 노트는 주입돼야 함"
+    print("[PASS] 교정 우선 주입 + self-check 안내 + 하위 호환 통과")
+
+
+def test_self_check_field_and_conflict():
+    """_validate는 learn_applied bool 을 허용하고, self_check는 교정 모순을 잡는다."""
+    corrections = [H.CORRECTION_PREFIX + " 잘못된출력=12월31일 ||| 교정=6개월전"]
+    # (1) learn_applied 비-bool 은 스키마 거부
+    assert H._validate({"act": True, "learn_applied": "yes"}) == "learn_applied", "비-bool 거부해야 함"
+    assert H._validate({"act": True, "learn_applied": True}) == "", "bool 은 통과해야 함"
+    # (2) 교정 무시(learn_applied=false + act=true) 모순 감지
+    assert H.self_check({"act": True, "learn_applied": False}, corrections), "교정 무시 모순 감지 실패"
+    # (3) 교정된 잘못된출력이 본문에 재등장하면 모순 감지
+    bad = {"act": True, "message": "연차 기한은 12월31일입니다"}
+    assert H.self_check(bad, corrections), "잘못된출력 재등장 모순 감지 실패"
+    # (4) 교정을 잘 지킨 응답은 모순 없음
+    good = {"act": True, "learn_applied": True, "message": "연차 기한은 종료 6개월전입니다"}
+    assert H.self_check(good, corrections) == "", f"정상 응답인데 모순 오탐: {H.self_check(good, corrections)}"
+    # (5) 교정이 없으면 self-check는 항상 통과
+    assert H.self_check(bad, []) == "", "교정 없으면 self-check 통과여야 함"
+    print("[PASS] self-check 필드 검증 + 교정 모순 감지 통과")
+
+
+def test_correction_feedback_parse():
+    """교정 트리거 감지 + 'X가 아니라 Y' 파싱."""
+    assert H.is_correction_feedback("그거 틀렸어, A가 아니라 B야"), "교정 트리거 감지 실패"
+    assert not H.is_correction_feedback("수고했어 잘했네"), "일반 칭찬을 교정으로 오탐"
+    wrong, fix = H.parse_correction("연차 기한은 12월31일이 아니라 6개월 전이야")
+    assert "12월31일" in wrong and "6개월" in fix, f"파싱 오류: wrong={wrong!r} fix={fix!r}"
+    # 가를 수 없으면 전체를 교정으로
+    w2, f2 = H.parse_correction("이건 그냥 정정해야 해")
+    assert w2 == "" and "정정" in f2, f"폴백 파싱 오류: {w2!r} {f2!r}"
+    print("[PASS] 교정 피드백 트리거 감지 + 파싱 통과")
+
+
+def test_learn_note_cap_pruning():
+    """무한 증식 방지: 상한 초과 시 일반 항목부터 정리되고 교정은 우선 보존된다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _isolate_learn_to_tmp(tmp)
+        role = "dev"
+        # 교정 3건 먼저 저장(보존 대상)
+        for i in range(3):
+            H.save_correction(f"orig{i}", f"wrong{i}", f"교정내용{i}", role=role)
+        # 일반 항목을 상한 훨씬 초과로 저장
+        for i in range(H.LEARN_MAX_LINES + 30):
+            H.save_learn_note(f"최지현: 일반항목{i}", role=role)
+        lines = [x for x in H.load_learn_note(role=role).split("\n") if x.strip()]
+        assert len(lines) <= H.LEARN_MAX_LINES, f"전체 상한 초과 — 정리 실패: {len(lines)}줄"
+        # 교정 3건은 모두 살아있어야 한다(우선 보존)
+        corrections = [x for x in lines if x.startswith(H.CORRECTION_PREFIX)]
+        assert len(corrections) == 3, f"교정이 정리돼 사라짐(우선 보존 실패): {len(corrections)}건"
+        for i in range(3):
+            assert any(f"교정내용{i}" in c for c in corrections), f"교정내용{i} 유실"
+        # 가장 오래된 일반 항목은 정리됐어야 한다
+        assert "일반항목0" not in H.load_learn_note(role=role), "오래된 일반 항목이 정리되지 않음"
+        print("[PASS] 학습 노트 상한 정리(교정 우선 보존, 오래된 일반 정리) 통과")
+
+
+def test_correction_role_isolation():
+    """교정도 역할 격리 — hr 교정이 dev 노트에 절대 새지 않는다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _isolate_learn_to_tmp(tmp)
+        H.save_correction("o", "w", "인사연차교정", role="hr")
+        H.save_correction("o", "w", "개발배포교정", role="dev")
+        hr_c = "\n".join(H.load_corrections(role="hr"))
+        dev_c = "\n".join(H.load_corrections(role="dev"))
+        assert "인사연차교정" in hr_c and "인사연차교정" not in dev_c, f"누출! hr 교정이 dev에: {dev_c!r}"
+        assert "개발배포교정" in dev_c and "개발배포교정" not in hr_c, f"누출! dev 교정이 hr에: {hr_c!r}"
+        print("[PASS] 교정 역할 격리(hr↔dev) 통과")
+
+
 def test_learning_room_for_role():
     """teams.json learning_rooms 에서 역할별 학습방을 정확히 조회한다."""
     teams = A.load_teams()
@@ -202,4 +313,12 @@ if __name__ == "__main__":
     test_learn_note_vs_room_mem_separation()
     test_system_prompt_three_layer()
     test_learning_room_for_role()
-    print("\n전체 테스트 통과 ✓ — 방 메모리 격리 + 역할 메모 회귀 + 학습 노트 persistent/격리/dedup + 프롬프트 3층 주입")
+    # 재귀학습 교정 루프 신규
+    test_correction_save_structured()
+    test_correction_priority_injection()
+    test_self_check_field_and_conflict()
+    test_correction_feedback_parse()
+    test_learn_note_cap_pruning()
+    test_correction_role_isolation()
+    print("\n전체 테스트 통과 ✓ — 메모리 3층 격리/회귀/persistent + 프롬프트 3층 주입 "
+          "+ 교정 구조화 저장·우선주입·self-check·상한정리·역할격리(재귀학습 닫힌 루프)")

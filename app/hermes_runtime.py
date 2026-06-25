@@ -90,6 +90,11 @@ _sent = []
 BACKSTOP_WINDOW = 60
 BACKSTOP_MAX = 10
 
+# 이 봇이 가장 최근에 실제 송신한 (원지시 맥락, 응답 본문). 학습방에서 교정이 들어왔을 때
+# '원지시'와 '잘못된출력'을 자동으로 채우는 데 쓴다. 프로세스 메모리(휘발) — 교정의 보조 맥락일 뿐,
+# 핵심인 교정 내용 자체는 학습 노트에 영구 저장된다.
+_last_response = {"context": "", "message": ""}
+
 # ROUTING 은 teams.json 으로부터 agent_schema.build_routing()이 동적 생성한다(상단에서 ROUTING 변수로 로드).
 # 보고/메시지 포맷·작성원칙·진행공유·행동결정 JSON 스키마는 agents/_shared/common_rules.md(COMMON_RULES)로 분리되어
 # system_prompt 조립 시 상속 주입된다. (이전의 통짜 하드코딩 ROUTING 문자열 제거됨.)
@@ -145,6 +150,18 @@ def save_mem(line):
 #  - 롤링이 없으므로 학습방에 N줄을 넣으면 N줄이 그대로 보존된다(persistent 단언의 근거).
 # 같은 줄(공백 정규화 후)이 이미 있으면 중복 저장하지 않는다(같은 교훈 반복 누적 방지).
 
+# 교정 항목 라인 접두. 학습 노트의 한 줄이 이 접두로 시작하면 '반드시 지킬 교정'으로
+# 취급한다. 일반 학습(노하우·정책 메모)과 구분해 (a) 프롬프트에서 강조 섹션으로 별도 렌더,
+# (b) 상한 정리 시 우선 보존, (c) 같은 실수 반복 억제의 1순위 근거로 쓴다.
+# agent_schema 를 단일 출처로 두고 그 값을 그대로 쓴다(저장 접두 ↔ 렌더 접두 불일치 방지).
+CORRECTION_PREFIX = A.CORRECTION_PREFIX
+# 학습 노트 무한 증식 방지 상한(전체 줄 수). 교정 항목은 이 상한에서 우선 보존되고,
+# 일반 항목이 오래된 것부터 정리된다. persistent 원칙은 유지하되 폭주만 막는 수준.
+LEARN_MAX_LINES = 40
+# 교정 항목 자체 상한(교정만 너무 많아져도 정리). 가장 오래된 교정부터 정리.
+LEARN_MAX_CORRECTIONS = 25
+
+
 def learn_path(role):
     return os.path.join(HERE, f"memory_learn_{role}.json")
 
@@ -158,18 +175,101 @@ def load_learn_note(role=None):
         return ""
 
 
+def _learn_lines(role):
+    return [x for x in load_learn_note(role).split("\n") if x.strip()]
+
+
+def _is_correction_line(line):
+    return line.strip().startswith(CORRECTION_PREFIX)
+
+
+def _write_learn_lines(lines, role):
+    json.dump({"notes": "\n".join(lines)},
+              open(learn_path(role), "w", encoding="utf-8"), ensure_ascii=False)
+
+
+def _prune_learn_lines(lines):
+    """무한 증식 방지: 전체 상한 초과 시 오래된 '일반' 항목부터 정리(교정은 우선 보존).
+    교정만으로도 상한을 넘으면 가장 오래된 교정부터 정리한다. persistent 유지·폭주 차단.
+    입력 순서(오래된→최신)를 보존한 채 정리된 리스트를 반환한다."""
+    corrections = [x for x in lines if _is_correction_line(x)]
+    # 교정 항목 자체 상한 — 가장 오래된 교정부터 버린다(비교정은 전부 보존).
+    if len(corrections) > LEARN_MAX_CORRECTIONS:
+        drop = set(corrections[: len(corrections) - LEARN_MAX_CORRECTIONS])
+        lines = [x for x in lines if not (_is_correction_line(x) and x in drop)]
+    # 전체 상한 — 일반 항목을 오래된 것부터 버린다(교정 보존).
+    while len([x for x in lines if x.strip()]) > LEARN_MAX_LINES:
+        idx = next((i for i, x in enumerate(lines) if not _is_correction_line(x)), None)
+        if idx is None:
+            # 남은 게 전부 교정이면 상한을 넘겨도 교정을 보호(우선 보존 원칙).
+            break
+        lines.pop(idx)
+    return lines
+
+
 def save_learn_note(line, role=None):
-    """학습 노트에 한 줄을 영구 누적(롤링 없음). 동일 줄은 중복 저장 안 함."""
+    """학습 노트에 한 줄을 영구 누적(롤링 없음). 동일 줄은 중복 저장 안 함.
+    저장 후 상한 정리를 적용해 무한 증식을 막되, 교정 항목은 우선 보존한다."""
     role = role or ROLE
     line = (line or "").strip().replace("\n", " ")
     if not line:
         return
-    existing = [x for x in load_learn_note(role).split("\n") if x.strip()]
+    existing = _learn_lines(role)
     if line in existing:
         return
     existing.append(line)
-    json.dump({"notes": "\n".join(existing)},
-              open(learn_path(role), "w", encoding="utf-8"), ensure_ascii=False)
+    existing = _prune_learn_lines(existing)
+    _write_learn_lines(existing, role)
+
+
+def save_correction(original, wrong, fix, role=None):
+    """교정 피드백을 구조화해 학습 노트에 '교정' 항목으로 영구 저장.
+    원지시(original)·잘못된출력(wrong)·교정내용(fix)을 한 줄로 직렬화한다.
+    다음 회차부터 [반드시 지킬 교정] 섹션으로 우선 주입되어 같은 실수 반복을 억제한다.
+    교정은 상한 정리에서 일반 항목보다 우선 보존된다."""
+    def _clean(s):
+        return (s or "").strip().replace("\n", " ").replace("|||", "/")
+    fix = _clean(fix)
+    if not fix:
+        return False
+    parts = [f"교정={fix}"]
+    orig = _clean(original)
+    wrong = _clean(wrong)
+    # 원지시·잘못된출력은 있으면 함께 기록(없어도 교정 내용만으로 유효).
+    line = CORRECTION_PREFIX + " " + " ||| ".join(
+        ([f"원지시={orig}"] if orig else []) + ([f"잘못된출력={wrong}"] if wrong else []) + parts)
+    save_learn_note(line, role=role)
+    return True
+
+
+def load_corrections(role=None):
+    """학습 노트 중 교정 항목만 추린 리스트(프롬프트 강조 렌더·self-check용)."""
+    role = role or ROLE
+    return [x for x in _learn_lines(role) if _is_correction_line(x)]
+
+
+# 교정 피드백 트리거 키워드. 학습방에서 사람이 이 표현을 쓰면 단순 노하우가 아니라
+# '직전 응답이 틀렸다'는 교정으로 간주해 교정 항목으로 구조화 저장한다.
+CORRECTION_TRIGGERS = ("틀렸", "틀린", "아니라", "아니고", "잘못", "정정", "고쳐",
+                       "그게 아니", "맞는 건", "맞는건", "오류", "수정해", "다시 해", "다시해")
+
+
+def is_correction_feedback(text):
+    """학습방 메시지가 '교정' 성격인지 판별. 트리거 키워드 포함 여부로 경량 판정."""
+    t = (text or "")
+    return any(k in t for k in CORRECTION_TRIGGERS)
+
+
+def parse_correction(text):
+    """사람 교정 메시지에서 (잘못된출력, 교정내용)을 경량 추출.
+    'X가 아니라 Y' / 'X 아니고 Y' 패턴이면 X=잘못, Y=교정. 못 가르면 전체를 교정으로.
+    무거운 LLM 호출 없이 규칙 기반 1패스로 처리한다."""
+    t = (text or "").strip()
+    for sep in ("가 아니라", "이 아니라", " 아니라", "가 아니고", "이 아니고", " 아니고"):
+        if sep in t:
+            wrong, fix = t.split(sep, 1)
+            return wrong.strip(" ,.'\"" ), fix.strip(" ,.'\"")
+    return "", t
 
 
 # ── 메모리 2층 구조: 방(채널)별 공유 메모리 ───────────────────────────────
@@ -255,6 +355,36 @@ def _validate(d):
         return "importance"
     if (d.get("task_status") or "") not in ("open", "closed", ""):
         return "task_status"
+    # self-check 필드(learn_applied)는 있으면 bool 이어야 한다. 없으면(하위 호환) 통과.
+    la = d.get("learn_applied")
+    if la is not None and la not in (True, False):
+        return "learn_applied"
+    return ""
+
+
+def self_check(d, corrections):
+    """경량 1패스 self-check: 주입된 교정과 현재 응답이 모순되는지 점검한다.
+    무거운 다중 LLM 호출 없이, 모델이 스스로 채운 learn_applied/learn_basis 필드와
+    교정 키워드의 응답 내 충돌 여부만 본다. 모순 의심 시 사유 문자열, 없으면 빈 문자열."""
+    if not corrections:
+        return ""
+    # (1) 교정이 주입됐는데 모델이 learn_applied=false 로 무시했다면 모순 신호.
+    if d.get("learn_applied") is False and d.get("act") is True:
+        return "learn_applied=false(교정 무시한 채 송신 시도)"
+    # (2) 교정의 '잘못된출력' 토큰이 이번 송신 본문에 그대로 다시 등장하면 재발 의심.
+    body = " ".join(str(d.get(k) or "") for k in ("message", "ack", "reason"))
+    if not body.strip():
+        return ""
+    for c in corrections:
+        wrong = ""
+        for seg in c.split("|||"):
+            # 첫 세그먼트에는 '[교정]' 접두가 붙으므로 startswith 대신 키 위치를 찾는다.
+            key = "잘못된출력="
+            if key in seg:
+                wrong = seg.split(key, 1)[1].strip()
+        # 잘못된출력이 5자 이상 의미 토큰일 때만(짧은 토큰 오탐 방지) 재등장 검사.
+        if len(wrong) >= 5 and wrong in body:
+            return f"교정된 잘못된출력 재등장: {wrong[:30]}"
     return ""
 
 
@@ -264,30 +394,46 @@ def decide(cname, channel_id, sp, text):
     #    역할별 1개 파일이라 타 역할 학습노트는 구조적으로 섞이지 않는다(방 격리 유지).
     #  - room_memo: 현재 방(채널)의 공유 기억(롤링).
     #  - memo: 역할 개인 진행 메모(롤링).
+    corrections = load_corrections()
     sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
                              memo=load_mem(), room_memo=load_room_mem(channel_id),
                              learn_note=load_learn_note())
     convo = "\n".join(history(channel_id))
     user = f"[현재 방: {cname}]\n[최근 대화]\n{convo}\n\n[방금 들어온 메시지] {sp}: {text}"
     last = ""
+    warn = ""  # 직전 시도 실패 사유(형식 오류 또는 교정 모순)를 다음 시도에 경고로 주입.
     for attempt in range(2):
         model = MODEL if attempt == 0 else FALLBACK
-        u = user if attempt == 0 else user + "\n\n[경고] 직전 출력이 형식 오류였다. 설명 없이 유효한 JSON 객체 하나만 출력하라."
+        u = user if not warn else user + "\n\n[경고] " + warn + " 설명 없이 유효한 JSON 객체 하나만 출력하라."
         try:
             out = call_llm([{"role": "system", "content": sysmsg},
                             {"role": "user", "content": u}], model)
         except Exception as e:
             last = f"llm:{e}"
+            warn = "직전 호출이 실패했다."
             continue
         try:
             d = json.loads(_strip_fence(out), strict=False)
         except Exception as e:
             last = f"parse:{e}"
+            warn = "직전 출력이 형식 오류였다."
             continue
         why = _validate(d)
-        if not why:
-            return d
-        last = f"validate:{why}"
+        if why:
+            last = f"validate:{why}"
+            warn = "직전 출력이 스키마를 위반했다."
+            continue
+        # 경량 self-check: 주입된 교정과 모순되면 1회 재생성 신호를 준다(1패스 수준).
+        conflict = self_check(d, corrections)
+        if conflict and attempt == 0:
+            print(f"SELF-CHECK [{NAME}] 교정 모순 감지 → 재생성: {conflict}")
+            last = f"selfcheck:{conflict}"
+            warn = f"직전 응답이 [반드시 지킬 교정]과 모순됐다({conflict}). 교정을 반드시 반영하라."
+            continue
+        if conflict:
+            # 재생성 후에도 모순이면 차단하지 않되 로그로 남긴다(silent 통과 방지).
+            print(f"SELF-CHECK-WARN [{NAME}] 재생성 후에도 교정 모순 잔존: {conflict}")
+        return d
     raise ValueError(f"decide invalid after retries: {last}")
 
 
@@ -329,7 +475,11 @@ def can_send(cname):
 
 
 async def run():
-    async with websockets.connect("ws://localhost:8065/api/v4/websocket") as ws:
+    # open_timeout: MM 부재 시 connect 가 무한 대기하지 않게 상한을 둔다.
+    # ping_interval/ping_timeout: keepalive ping 으로 좀비 연결(반쯤 끊긴 소켓)을 감지해
+    # 끊어준다 → run_forever 의 백오프 재접속 루프가 작동할 수 있게 한다.
+    async with websockets.connect("ws://localhost:8065/api/v4/websocket",
+                                  open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
         print(f"{NAME}({ROLE}) 가동[Hermes] 모델:{MODEL} 폴백:{FALLBACK} 구독:{SUBS}")
@@ -351,8 +501,20 @@ async def run():
             # 누적은 게이트(멘션 여부)와 무관 — 학습방의 모든 사람 발화가 학습 대상.
             if LEARN_CHANNEL and cname == LEARN_CHANNEL and not is_bot and text.strip():
                 sp_name = speaker(p["user_id"])
-                save_learn_note(f"{sp_name}: {text.strip()[:300]}")
-                print(f"[{NAME}] 학습 노트 누적 ← {LEARN_CHANNEL}: {text.strip()[:40]}")
+                body = text.strip()
+                if is_correction_feedback(body):
+                    # 교정 피드백: 직전 봇 응답을 '잘못된출력'으로, 그 응답의 맥락을 '원지시'로
+                    # 연결해 구조화 저장한다. 다음 회차부터 [반드시 지킬 교정]으로 우선 주입된다.
+                    wrong_from_text, fix = parse_correction(body)
+                    wrong = wrong_from_text or _last_response.get("message", "")
+                    orig = _last_response.get("context", "")
+                    if save_correction(orig, wrong, fix):
+                        print(f"[{NAME}] 교정 학습 ← {LEARN_CHANNEL}: 교정={fix[:40]}")
+                    else:
+                        save_learn_note(f"{sp_name}: {body[:300]}")
+                else:
+                    save_learn_note(f"{sp_name}: {body[:300]}")
+                    print(f"[{NAME}] 학습 노트 누적 ← {LEARN_CHANNEL}: {body[:40]}")
             if not gate(text, is_bot, cname):
                 continue
             try:
@@ -392,6 +554,9 @@ async def run():
                     try:
                         post(CH[tcn], body)
                         print(f"[{NAME}] → {tcn} ({d.get('reason', '')[:40]})")
+                        # 교정 연결용으로 직전 응답을 추적: 무엇(원지시 맥락)에 어떻게(본문) 답했는지.
+                        _last_response["context"] = f"{cname}에서 '{speaker(p['user_id'])}: {text[:80]}'에 대한 응답"
+                        _last_response["message"] = msg[:200]
                     except Exception as e:
                         print("post-err", e)
             # 메모리 2층 저장:
@@ -409,5 +574,28 @@ async def run():
                 save_mem(done)
 
 
+async def run_forever():
+    # MM 재접속 내성: MM 이 일시적으로 내려가거나(컨테이너 재시작/Colima 부팅 지연) WS 가
+    # 끊겨도 프로세스를 죽이지 않고 지수 백오프로 재연결한다. launchd KeepAlive 와 충돌하지
+    # 않는다 — 정상 운영 중에는 이 루프가 프로세스를 살려 두므로 KeepAlive 가 크래시-재시작
+    # 루프를 돌 일이 없고, 진짜 프로세스 사망(OOM 등) 시에만 KeepAlive 가 받쳐 준다(이중 안전망).
+    backoff = 2          # 첫 재시도 2s
+    backoff_max = 60     # 상한 60s — MM 콜드부팅을 흡수하되 폭주하지 않는 간격
+    while True:
+        try:
+            await run()
+            # run() 이 예외 없이 반환 = 서버가 WS 를 정상 종료 → 재접속 시도(정상 흐름).
+            print(f"[{NAME}] WS 종료됨 — 재접속 시도.")
+            backoff = 2
+        except (OSError, asyncio.TimeoutError, websockets.exceptions.WebSocketException) as e:
+            # 연결 실패/끊김류만 재시도 대상. (MM 부재·네트워크·핸드셰이크 실패 등)
+            print(f"[{NAME}] MM 연결 실패/끊김: {type(e).__name__}: {e} — {backoff}s 후 재접속.")
+        except Exception as e:
+            # 예기치 못한 오류도 프로세스를 죽이지 않고 재시도(장님 운영 방지: 로그 남김).
+            print(f"[{NAME}] 예기치 못한 오류: {type(e).__name__}: {e} — {backoff}s 후 재접속.")
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, backoff_max)
+
+
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(run_forever())
