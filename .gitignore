@@ -7,6 +7,8 @@
 # 봇 토큰·API 키가 들어있는 설정 파일 (*.example 만 커밋 허용)
 *_config.json
 !*_config.json.example
+# 데모 로그인 계정(PBKDF2 해시만, 평문 비번 없음) — 이식성 위해 추적 허용
+!app/accounts_config.json
 
 channels.json
 !channels.json.example

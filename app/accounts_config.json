@@ -1,0 +1,32 @@
+{
+  "_comment": "데모 기본 비밀번호는 모두 1111. pw_hash=PBKDF2-SHA256(200k, salt). 평문 미저장.",
+  "accounts": [
+    {
+      "login_id": "ceo@nurivoice.com",
+      "role": "ceo",
+      "label": "CEO",
+      "staff_channels": [],
+      "salt": "aa19c70cbc2949d9b4390e6678bbe4b3",
+      "pw_hash": "bded96b39041fb063abca4849c2c8a325cea0c05ac35aee3a83ff6fd1867aded"
+    },
+    {
+      "login_id": "sw9@nurivoice.com",
+      "role": "staff",
+      "label": "개발팀 직원",
+      "staff_channels": [
+        "개발팀",
+        "개발-보고라인"
+      ],
+      "salt": "0aea4c25337d0c8c7d5bf3e0a32ae7ba",
+      "pw_hash": "6404208af8948bec3543deaca3ede99a60af55f209d1394e410e6a39a62c2719"
+    },
+    {
+      "login_id": "admin",
+      "role": "admin",
+      "label": "시스템 관리자",
+      "staff_channels": [],
+      "salt": "062340cb9f2dc6b79baa4af76f86cc34",
+      "pw_hash": "baa4b60d643220c80386717b7a9f37a225d0556f5939855285086fff5213282b"
+    }
+  ]
+}
