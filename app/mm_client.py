@@ -6,6 +6,7 @@ hermes_runtime.py(역할 에이전트)와 ceo_admin_runtime.py(CEO 업데이트 
 """
 import json
 import os
+import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,3 +75,31 @@ class MM:
 
     def history(self, channel_id, n=12):
         return self._req("GET", f"/channels/{channel_id}/posts?per_page={n}", timeout=10)
+
+    def channel(self, channel_id):
+        """채널 메타(team_id·type·name 등) 조회(읽기)."""
+        return self._req("GET", f"/channels/{channel_id}", timeout=10)
+
+    def channel_by_name(self, team_id, name):
+        """team 안의 슬러그(name)로 채널 조회. 없으면 None(멱등 ensure 의 존재 확인용)."""
+        try:
+            return self._req("GET", f"/teams/{team_id}/channels/name/{name}", timeout=10)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    def create_channel(self, team_id, name, display_name, ctype="O"):
+        """채널 생성. ctype: 'O'(공개)/'P'(비공개). 생성된 채널 dict 반환."""
+        return self._req("POST", "/channels", {
+            "team_id": team_id, "name": name,
+            "display_name": display_name, "type": ctype})
+
+    def ensure_channel(self, team_id, name, display_name, ctype="O"):
+        """멱등 채널 확보: 같은 슬러그가 이미 있으면 그 채널을, 없으면 새로 만들어 반환한다."""
+        existing = self.channel_by_name(team_id, name)
+        return existing if existing else self.create_channel(team_id, name, display_name, ctype)
+
+    def add_member(self, channel_id, user_id):
+        """봇/에이전트 user 를 채널 멤버로 추가(멱등 — 이미 멤버면 Mattermost 가 그대로 반환)."""
+        return self._req("POST", f"/channels/{channel_id}/members", {"user_id": user_id})
