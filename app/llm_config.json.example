@@ -1,1 +1,1 @@
-{"api_key": "sk-or-v1-OPENROUTER_KEY_HERE", "model": "anthropic/claude-sonnet-4.5", "fallback": "google/gemini-2.5-flash", "base_url": "https://openrouter.ai/api/v1"}
+{"api_key": "sk-or-v1-OPENROUTER_KEY_HERE", "model": "deepseek/deepseek-v4-flash", "fallback": "deepseek/deepseek-v4-flash:free", "base_url": "https://openrouter.ai/api/v1"}
