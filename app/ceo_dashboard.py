@@ -28,11 +28,21 @@ import json
 import os
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import agent_schema as A
 import ceo_auth as AUTH
 import mm_client as C
+import vault_schema as VS
+
+# Vault RAG 는 선택적 의존(sqlite 인덱스 + 선택적 로컬 임베딩). import/DB 가 없어도
+# 대시보드가 죽지 않도록 graceful 하게 잡는다 — 검색 화면은 '인덱스 없음'으로 강등한다.
+try:
+    import vault_rag as VR
+    _VAULT_RAG_ERR = None
+except Exception as _e:  # noqa: BLE001 — 어떤 import 실패든 대시보드는 계속 떠야 한다
+    VR = None
+    _VAULT_RAG_ERR = f"{type(_e).__name__}: {_e}"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -283,6 +293,151 @@ def roster():
     return out
 
 
+# ── Vault 조회 헬퍼 (전부 vault_schema 경유; 경로 traversal 원천 차단) ──────────
+def vault_rag_status():
+    """Vault RAG 사용 가능 여부 + 강등 사유. 화면 안내·degrade 분기의 단일 기준.
+
+    반환 {ok, mode, reason}:
+      - ok=False: 모듈 import 실패 또는 인덱스 DB 부재 → 검색은 '인덱스 없음' 안내.
+      - mode: '의미+어휘'(임베딩 모델 로드됨) | '어휘(FTS5)단독' | '비활성'.
+    """
+    if VR is None:
+        return {"ok": False, "mode": "비활성",
+                "reason": _VAULT_RAG_ERR or "vault_rag 모듈 로드 실패"}
+    if not os.path.isfile(VR.DB_PATH):
+        return {"ok": False, "mode": "비활성",
+                "reason": "RAG 인덱스 DB 없음(vault_rag.py index 로 색인 필요)"}
+    try:
+        mode = "의미+어휘" if VR.embed_available() else "어휘(FTS5)단독"
+    except Exception:  # noqa: BLE001 — 임베딩 점검 실패도 검색 자체는 가능
+        mode = "어휘(FTS5)단독"
+    return {"ok": True, "mode": mode, "reason": ""}
+
+
+def _obsidian_uri(rel_path):
+    """노트 상대경로 → Obsidian URI(obsidian://open?vault=...&file=...).
+
+    CEO 가 대시보드에서 클릭 한 번에 Obsidian 으로 같은 노트를 열 수 있게 한다.
+    vault 이름은 VAULT_ROOT 폴더명, file 은 확장자(.md) 제외 경로(Obsidian 규약).
+    """
+    vault_name = os.path.basename(os.path.realpath(VS.VAULT_ROOT))
+    file_no_ext = rel_path[:-3] if rel_path.endswith(".md") else rel_path
+    return ("obsidian://open?vault=" + quote(vault_name, safe="")
+            + "&file=" + quote(file_no_ext, safe=""))
+
+
+def _note_abs_path(rel_path):
+    """노트 상대경로를 Vault 루트 하위 절대경로로 안전 정규화(traversal 차단).
+
+    vault_schema.vault_path 가 realpath 기준 commonpath 검사로 루트 이탈을 막는다.
+    '../' 이나 절대경로 주입 시 ValueError 를 던지므로 호출측이 403/400 으로 거른다.
+    """
+    rel = (rel_path or "").strip().lstrip("/")
+    if not rel or not rel.endswith(".md"):
+        raise ValueError("유효하지 않은 노트 경로(.md 만 허용)")
+    # vault_path 는 루트 밖으로 나가는 결합을 ValueError 로 차단한다(원천 봉쇄).
+    return VS.vault_path(*rel.split("/"))
+
+
+def _read_note_frontmatter(abs_path):
+    """노트 파일을 frontmatter dict + 본문으로 파싱. 파일 없으면 None."""
+    try:
+        with open(abs_path, encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return None
+    fm, body = VS.parse_note(raw)
+    return {"frontmatter": fm, "body": body}
+
+
+def list_vault_notes(role=None, team=None, ntype=None, limit=200):
+    """Vault 노트를 frontmatter 메타와 함께 최신순으로 나열(메타필터 지원).
+
+    경로/팀/역할/type 은 전부 frontmatter 에서 읽는다(코드 하드코딩 0). date desc 정렬로
+    최신 보고가 위로 온다. 템플릿 폴더는 제외(빈 양식이 목록을 오염시키지 않게).
+    반환 [{path, id, type, role, team, date, title, snippet}].
+    """
+    root = os.path.realpath(VS.VAULT_ROOT)
+    out = []
+    for dirpath, _dirs, files in os.walk(root):
+        base = os.path.basename(dirpath)
+        if base == VS.DIR_TEMPLATES:  # 빈 양식 제외
+            continue
+        for fn in files:
+            if not fn.endswith(".md"):
+                continue
+            abs_p = os.path.join(dirpath, fn)
+            parsed = _read_note_frontmatter(abs_p)
+            if parsed is None:
+                continue
+            fm = parsed["frontmatter"]
+            body = parsed["body"] or ""
+            r = fm.get("role", "") or ""
+            t = fm.get("team", "") or ""
+            ty = fm.get("type", "") or ""
+            if role and r != role:
+                continue
+            if team and t != team:
+                continue
+            if ntype and ty != ntype:
+                continue
+            rel = os.path.relpath(abs_p, root)
+            title = body.strip().splitlines()[0][:120] if body.strip() else fn
+            out.append({
+                "path": rel,
+                "id": fm.get("id", ""),
+                "type": ty,
+                "role": r,
+                "team": t,
+                "date": fm.get("date", ""),
+                "title": title,
+                "snippet": body.strip().replace("\n", " ")[:160],
+            })
+    out.sort(key=lambda x: x.get("date", ""), reverse=True)
+    return out[:limit]
+
+
+def vault_facets():
+    """노트 목록에서 role/team/type 선택지(파셋)를 동적 수집 → 브라우징 필터 UI 구성용."""
+    notes = list_vault_notes(limit=10000)
+    roles, teams, types = set(), set(), set()
+    for n in notes:
+        if n["role"]:
+            roles.add(n["role"])
+        if n["team"]:
+            teams.add(n["team"])
+        if n["type"]:
+            types.add(n["type"])
+    return {
+        "roles": sorted(roles),
+        "teams": sorted(teams),
+        "types": sorted(types),
+        "total": len(notes),
+    }
+
+
+def vault_search(query, role=None, team=None, ntype=None, top_k=8):
+    """RAG 하이브리드 검색 위임(graceful). 인덱스/모듈 없으면 빈 결과 + 사유.
+
+    반환 {ok, mode, reason, results[]}. results 는 vault_rag.search 의 형식을 그대로 전달
+    (path/title/snippet/score/type/role/team/date) — 화면이 노트 링크로 연결한다.
+    """
+    st = vault_rag_status()
+    if not st["ok"]:
+        return {"ok": False, "mode": st["mode"], "reason": st["reason"], "results": []}
+    q = (query or "").strip()
+    if not q:
+        return {"ok": True, "mode": st["mode"], "reason": "", "results": []}
+    types = [ntype] if ntype else None
+    try:
+        hits = VR.search(q, role=role or None, team=team or None,
+                         types=types, top_k=top_k)
+    except Exception as e:  # noqa: BLE001 — 검색 실패도 대시보드는 500 금지
+        return {"ok": False, "mode": st["mode"],
+                "reason": f"검색 실패: {type(e).__name__}", "results": []}
+    return {"ok": True, "mode": st["mode"], "reason": "", "results": hits}
+
+
 # ── HTTP 핸들러 ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
     # 액세스 로그 소음 억제(필요시 주석 해제).
@@ -382,7 +537,78 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"roles": roster()})
         if path == "/api/history":
             return self._get_history(u, ident)
+        # ── Vault(누적 기억) 라우트: ceo/admin 전용. 직원은 채널만. ──
+        if path in ("/vault", "/vault/", "/vault.html"):
+            if not self._vault_allowed(ident):
+                return self._html("", 302, [("Location", "/")])
+            return self._html(VAULT_HTML)
+        if path == "/api/vault/list":
+            return self._get_vault_list(u, ident)
+        if path == "/api/vault/search":
+            return self._get_vault_search(u, ident)
+        if path == "/api/vault/note":
+            return self._get_vault_note(u, ident)
         return self._json({"error": "not found"}, 404)
+
+    def _vault_allowed(self, ident):
+        """Vault 누적 기억 열람 권한: ceo/admin 만(staff 는 채널 모니터링까지)."""
+        return ident.get("role") in ("ceo", "admin")
+
+    def _get_vault_list(self, u, ident):
+        """Vault 노트 브라우징: role/team/type 메타필터 + 파셋(선택지) 동시 반환."""
+        if not self._vault_allowed(ident):
+            return self._json({"error": "권한 없음"}, 403)
+        q = parse_qs(u.query)
+        role = (q.get("role") or [""])[0] or None
+        team = (q.get("team") or [""])[0] or None
+        ntype = (q.get("type") or [""])[0] or None
+        try:
+            notes = list_vault_notes(role=role, team=team, ntype=ntype)
+            return self._json({"notes": notes, "facets": vault_facets(),
+                               "rag": vault_rag_status()})
+        except Exception as e:  # noqa: BLE001 — 조회 실패도 500 노출 최소화
+            return self._json({"error": str(e)[:200]}, 500)
+
+    def _get_vault_search(self, u, ident):
+        """RAG 검색: q + 선택적 role/team/type 필터. 인덱스 없으면 graceful 안내."""
+        if not self._vault_allowed(ident):
+            return self._json({"error": "권한 없음"}, 403)
+        q = parse_qs(u.query)
+        query = (q.get("q") or [""])[0]
+        role = (q.get("role") or [""])[0] or None
+        team = (q.get("team") or [""])[0] or None
+        ntype = (q.get("type") or [""])[0] or None
+        try:
+            k = max(1, min(20, int((q.get("k") or ["8"])[0])))
+        except ValueError:
+            k = 8
+        try:
+            res = vault_search(query, role=role, team=team, ntype=ntype, top_k=k)
+            return self._json(res)
+        except Exception as e:  # noqa: BLE001
+            return self._json({"error": str(e)[:200]}, 500)
+
+    def _get_vault_note(self, u, ident):
+        """단일 노트 열람: frontmatter + 본문. 경로는 Vault 루트 하위로 강제(이탈 차단)."""
+        if not self._vault_allowed(ident):
+            return self._json({"error": "권한 없음"}, 403)
+        q = parse_qs(u.query)
+        rel = (q.get("path") or [""])[0]
+        try:
+            abs_p = _note_abs_path(rel)  # traversal 시 ValueError
+        except ValueError as e:
+            return self._json({"error": f"허용되지 않은 경로: {e}"}, 400)
+        parsed = _read_note_frontmatter(abs_p)
+        if parsed is None:
+            return self._json({"error": "노트를 찾을 수 없습니다."}, 404)
+        norm_rel = os.path.relpath(abs_p, os.path.realpath(VS.VAULT_ROOT))
+        return self._json({
+            "path": norm_rel,
+            "frontmatter": parsed["frontmatter"],
+            "body": parsed["body"],
+            "vault_file": abs_p,
+            "obsidian_uri": _obsidian_uri(norm_rel),
+        })
 
     def _get_history(self, u, ident):
         """채널 메시지 조회. role 별 접근 채널을 서버측에서 강제."""
@@ -523,6 +749,57 @@ _CSS = """
   .chip.logout { background:transparent; color:var(--blue); cursor:pointer;
     border:1px solid var(--hairline-soft); transition:transform .14s ease; }
   .chip.logout:active { transform:scale(0.95); }
+  a.chip.nav-link { background:var(--blue); color:var(--on-dark); cursor:pointer;
+    text-decoration:none; transition:transform .14s ease; }
+  a.chip.nav-link:hover { text-decoration:none; }
+  a.chip.nav-link:active { transform:scale(0.95); }
+  /* ── Vault(기억 보관소) ── */
+  .vault-toolbar { display:flex; gap:var(--space-3); flex-wrap:wrap; align-items:center;
+    margin-bottom:var(--space-6); }
+  .vault-search { display:flex; gap:var(--space-3); flex:1 1 320px; min-width:280px; }
+  .vault-search input { flex:1; min-height:44px; background:var(--canvas); color:var(--ink);
+    border:1px solid var(--hairline-soft); border-radius:var(--r-pill);
+    padding:0 var(--space-5); font-size:15px; letter-spacing:-0.2px; }
+  .vault-search input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  .rag-badge { font-size:12px; color:var(--ink-muted); letter-spacing:-0.2px;
+    padding:5px 12px; border:1px solid var(--hairline-soft); border-radius:var(--r-pill); }
+  .rag-badge.off { color:#b3261e; border-color:rgba(179,38,30,.4); }
+  .note-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(380px,1fr));
+    gap:var(--space-5); }
+  .note-item { background:var(--canvas); border:1px solid var(--hairline);
+    border-radius:var(--r-lg); padding:var(--space-5); cursor:pointer;
+    transition:transform .12s ease, box-shadow .12s ease; }
+  .note-item:hover { box-shadow:var(--shadow); transform:translateY(-1px); }
+  .note-item .nt-title { font-weight:600; font-size:16px; color:var(--ink);
+    letter-spacing:-0.3px; line-height:1.35; margin-bottom:var(--space-2); }
+  .note-item .nt-meta { font-size:12px; color:var(--ink-muted); letter-spacing:-0.2px;
+    display:flex; gap:8px; flex-wrap:wrap; margin-bottom:var(--space-2); }
+  .note-item .nt-tag { background:var(--parchment); border:1px solid var(--hairline);
+    border-radius:var(--r-pill); padding:2px 10px; }
+  .note-item .nt-snip { font-size:14px; color:var(--ink-soft); line-height:1.5;
+    letter-spacing:-0.2px; }
+  .note-item .nt-score { color:var(--blue); font-weight:600; }
+  .vault-filters { display:flex; gap:var(--space-3); flex-wrap:wrap; align-items:center; }
+  .vault-filters select { min-height:40px; padding:7px 16px; font-size:14px; }
+  .modal-back { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none;
+    z-index:50; align-items:flex-start; justify-content:center; padding:var(--space-10) var(--space-4);
+    overflow-y:auto; }
+  .modal-back.show { display:flex; }
+  .modal { background:var(--canvas); border-radius:var(--r-lg); max-width:820px; width:100%;
+    box-shadow:var(--shadow); padding:var(--space-8); }
+  .modal h2 { font-size:24px; font-weight:600; letter-spacing:-0.34px; margin:0 0 var(--space-4);
+    color:var(--ink); line-height:1.25; }
+  .modal .fm { font-size:13px; color:var(--ink-muted); margin-bottom:var(--space-5);
+    line-height:1.7; letter-spacing:-0.2px; word-break:break-all; }
+  .modal .fm b { color:var(--ink-soft); }
+  .modal .links { display:flex; gap:var(--space-3); flex-wrap:wrap; margin-bottom:var(--space-5); }
+  .modal .links a { font-size:13px; padding:7px 14px; border:1px solid var(--hairline-soft);
+    border-radius:var(--r-pill); color:var(--blue); }
+  .modal .nbody { white-space:pre-wrap; word-break:break-word; line-height:1.6;
+    font-size:15px; color:var(--ink-soft); border-top:1px solid var(--hairline);
+    padding-top:var(--space-5); }
+  .modal .mclose { float:right; cursor:pointer; color:var(--ink-muted); font-size:22px;
+    line-height:1; border:none; background:none; padding:0; min-height:auto; }
   .role-tag { font-size:12px; font-weight:600; letter-spacing:-0.1px;
     padding:5px 12px; border-radius:var(--r-pill);
     background:var(--blue); color:var(--on-dark); white-space:nowrap; }
@@ -750,6 +1027,7 @@ def build_index_html():
   <div class="nav-meta">
     <span class="role-tag" id="roleTag"></span>
     <span class="pill" id="who"></span>
+    <a class="chip nav-link" id="vaultLink" href="/vault" style="display:none">기억 보관소</a>
     <span class="chip"><span class="live-dot"></span><span id="poll">12</span>초</span>
     <span class="chip logout" id="logout">로그아웃</span>
   </div>
@@ -898,6 +1176,10 @@ const TITLE_KO={ceo:'CEO 대시보드',staff:'직원 대시보드',admin:'관리
   catch(e){ location.href='/login'; return; }
   document.getElementById('roleTag').textContent=ROLE_KO[me.role]||me.role;
   document.getElementById('who').textContent=me.label||me.login_id;
+  // 누적 기억(Vault/RAG) 진입은 ceo/admin 에게만 노출(직원은 채널 모니터링까지).
+  if(me.role==='ceo'||me.role==='admin'){
+    const vl=document.getElementById('vaultLink'); if(vl) vl.style.display='';
+  }
   document.getElementById('appTitle').textContent='Hermes '+(TITLE_KO[me.role]||'대시보드');
   document.title='Hermes '+(TITLE_KO[me.role]||'대시보드');
   renderShell();
@@ -911,8 +1193,206 @@ const TITLE_KO={ceo:'CEO 대시보드',staff:'직원 대시보드',admin:'관리
 </html>"""
 
 
+def build_vault_html():
+    """Vault(누적 기억) 브라우징·검색·노트 열람 페이지(ceo/admin 전용).
+
+    한 화면에서:
+      (a) RAG 검색박스 → top-k 결과(노트 링크 + 스니펫 + score)
+      (b) role/team/type 메타필터 + 최신순 노트 목록(파셋은 서버가 동적 수집)
+      (c) 노트 클릭 → 모달로 frontmatter + 본문 열람(경로는 서버가 traversal 차단)
+    Obsidian 파일 경로/URI 도 함께 표기해 CEO 가 옵시디언으로 직접 열 수 있게 한다.
+    공통 _CSS(Apple 디자인 시스템) 계승. 모든 출력은 esc()로 XSS 이스케이프.
+    """
+    return """<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes 기억 보관소</title>
+<style>""" + _CSS + """</style>
+</head>
+<body>
+<div class="promo-banner">루프백 전용(127.0.0.1) · <b>누적 기억(Vault/RAG)</b> · 외부에 노출되지 않습니다</div>
+<header>
+  <div class="brand">
+    <span class="logo-mark">H</span>
+    <h1>기억 보관소</h1>
+  </div>
+  <div class="nav-meta">
+    <span class="rag-badge" id="ragBadge">RAG 상태…</span>
+    <a class="chip nav-link" href="/">대시보드</a>
+    <span class="chip logout" id="logout">로그아웃</span>
+  </div>
+</header>
+<div class="wrap">
+  <section class="tile tile-parchment"><div class="tile-inner">
+    <div class="section-head"><h2 class="section-title">기억 검색</h2></div>
+    <div class="vault-toolbar">
+      <div class="vault-search">
+        <input id="q" type="text" placeholder="누적된 보고·피드백·결정에서 검색 (예: LLM 비용)">
+        <button id="searchBtn">검색</button>
+      </div>
+    </div>
+    <div class="vault-filters">
+      <select id="fRole"><option value="">역할 전체</option></select>
+      <select id="fTeam"><option value="">팀 전체</option></select>
+      <select id="fType"><option value="">유형 전체</option></select>
+      <span class="pill" id="resultMeta"></span>
+    </div>
+  </div></section>
+  <section class="tile tile-light"><div class="tile-inner">
+    <div class="section-head"><h2 class="section-title" id="listTitle">최신 노트</h2></div>
+    <div class="note-list" id="noteList"><div class="empty">불러오는 중…</div></div>
+  </div></section>
+</div>
+<div class="modal-back" id="modalBack">
+  <div class="modal" id="modal">
+    <button class="mclose" id="mclose">&times;</button>
+    <h2 id="mTitle"></h2>
+    <div class="fm" id="mFm"></div>
+    <div class="links" id="mLinks"></div>
+    <div class="nbody" id="mBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+function esc(s){ return (s||"").replace(/[&<>"]/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function toast(t){ const el=document.getElementById('toast'); el.textContent=t;
+  el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2600); }
+async function api(path,opts){
+  const r=await fetch(path,opts);
+  if(r.status===401){ location.href='/login'; throw new Error('세션 만료'); }
+  const d=await r.json().catch(()=>({error:'응답 파싱 실패'}));
+  if(!r.ok) throw new Error(d.error||('HTTP '+r.status)); return d;
+}
+let searchMode=false;  // true=검색 결과 표시 중, false=브라우징 목록
+
+function fillFacet(sel, values, label){
+  sel.innerHTML='<option value="">'+label+'</option>';
+  values.forEach(v=>{ const o=document.createElement('option');
+    o.value=v; o.textContent=v; sel.appendChild(o); });
+}
+function renderRag(rag){
+  const b=document.getElementById('ragBadge');
+  if(rag && rag.ok){ b.textContent='RAG: '+rag.mode; b.classList.remove('off'); }
+  else { b.textContent='RAG 인덱스 없음'; b.classList.add('off'); }
+}
+function noteCard(n, withScore){
+  const score = (withScore && n.score!=null)
+    ? '<span class="nt-score">score '+esc(String(n.score))+'</span> · ' : '';
+  return '<div class="note-item" data-path="'+esc(n.path)+'">'
+    +'<div class="nt-title">'+esc(n.title||n.path)+'</div>'
+    +'<div class="nt-meta">'
+    +(n.type?'<span class="nt-tag">'+esc(n.type)+'</span>':'')
+    +(n.role?'<span class="nt-tag">역할 '+esc(n.role)+'</span>':'')
+    +(n.team?'<span class="nt-tag">팀 '+esc(n.team)+'</span>':'')
+    +(n.date?'<span class="nt-tag">'+esc(n.date)+'</span>':'')
+    +'</div><div class="nt-snip">'+score+esc(n.snippet||'')+'</div></div>';
+}
+function bindCards(){
+  document.querySelectorAll('.note-item').forEach(el=>{
+    el.addEventListener('click', ()=>openNote(el.getAttribute('data-path')));
+  });
+}
+function filters(){
+  return {
+    role:document.getElementById('fRole').value,
+    team:document.getElementById('fTeam').value,
+    type:document.getElementById('fType').value,
+  };
+}
+async function loadList(){
+  searchMode=false;
+  document.getElementById('listTitle').textContent='최신 노트';
+  const f=filters();
+  const qs=new URLSearchParams();
+  if(f.role) qs.set('role',f.role); if(f.team) qs.set('team',f.team);
+  if(f.type) qs.set('type',f.type);
+  const box=document.getElementById('noteList'); box.innerHTML='<div class="empty">불러오는 중…</div>';
+  try{
+    const d=await api('/api/vault/list?'+qs.toString());
+    renderRag(d.rag);
+    if(d.facets){
+      const fr=document.getElementById('fRole'), ft=document.getElementById('fTeam'),
+            fy=document.getElementById('fType');
+      const rv=fr.value, tv=ft.value, yv=fy.value;
+      fillFacet(fr,d.facets.roles,'역할 전체'); fr.value=rv;
+      fillFacet(ft,d.facets.teams,'팀 전체'); ft.value=tv;
+      fillFacet(fy,d.facets.types,'유형 전체'); fy.value=yv;
+    }
+    document.getElementById('resultMeta').textContent='노트 '+d.notes.length+'개';
+    if(!d.notes.length){ box.innerHTML='<div class="empty">조건에 맞는 노트가 없습니다.</div>'; return; }
+    box.innerHTML=d.notes.map(n=>noteCard(n,false)).join('');
+    bindCards();
+  }catch(e){ box.innerHTML='<div class="empty">로드 실패: '+esc(e.message)+'</div>'; }
+}
+async function doSearch(){
+  const query=document.getElementById('q').value.trim();
+  if(!query){ loadList(); return; }
+  searchMode=true;
+  document.getElementById('listTitle').textContent='검색 결과: '+query;
+  const f=filters();
+  const qs=new URLSearchParams({q:query});
+  if(f.role) qs.set('role',f.role); if(f.team) qs.set('team',f.team);
+  if(f.type) qs.set('type',f.type);
+  const box=document.getElementById('noteList'); box.innerHTML='<div class="empty">검색 중…</div>';
+  try{
+    const d=await api('/api/vault/search?'+qs.toString());
+    renderRag({ok:d.ok,mode:d.mode});
+    if(!d.ok){
+      box.innerHTML='<div class="empty">검색 불가: '+esc(d.reason||'인덱스 없음')+'</div>';
+      document.getElementById('resultMeta').textContent=''; return;
+    }
+    document.getElementById('resultMeta').textContent='검색결과 '+d.results.length+'개 · '+esc(d.mode);
+    if(!d.results.length){ box.innerHTML='<div class="empty">검색 결과가 없습니다.</div>'; return; }
+    box.innerHTML=d.results.map(n=>noteCard(n,true)).join('');
+    bindCards();
+  }catch(e){ box.innerHTML='<div class="empty">검색 실패: '+esc(e.message)+'</div>'; }
+}
+async function openNote(path){
+  try{
+    const d=await api('/api/vault/note?path='+encodeURIComponent(path));
+    const fm=d.frontmatter||{};
+    document.getElementById('mTitle').textContent=(d.body||'').trim().split('\\n')[0].slice(0,120)||path;
+    const rows=[];
+    if(fm.type) rows.push('<b>유형</b> '+esc(fm.type));
+    if(fm.role) rows.push('<b>역할</b> '+esc(fm.role));
+    if(fm.team) rows.push('<b>팀</b> '+esc(fm.team));
+    if(fm.date) rows.push('<b>일시</b> '+esc(fm.date));
+    if(fm.id) rows.push('<b>id</b> '+esc(fm.id));
+    rows.push('<b>경로</b> '+esc(d.path));
+    if(d.vault_file) rows.push('<b>파일</b> '+esc(d.vault_file));
+    document.getElementById('mFm').innerHTML=rows.join(' · ');
+    const links=[];
+    if(d.obsidian_uri) links.push('<a href="'+esc(d.obsidian_uri)+'">Obsidian 에서 열기</a>');
+    document.getElementById('mLinks').innerHTML=links.join('');
+    document.getElementById('mBody').textContent=d.body||'(본문 없음)';
+    document.getElementById('modalBack').classList.add('show');
+  }catch(e){ toast('노트 열람 실패: '+e.message); }
+}
+function closeModal(){ document.getElementById('modalBack').classList.remove('show'); }
+document.getElementById('searchBtn').addEventListener('click', doSearch);
+document.getElementById('q').addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
+['fRole','fTeam','fType'].forEach(id=>document.getElementById(id)
+  .addEventListener('change', ()=>{ searchMode?doSearch():loadList(); }));
+document.getElementById('mclose').addEventListener('click', closeModal);
+document.getElementById('modalBack').addEventListener('click', e=>{
+  if(e.target.id==='modalBack') closeModal(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
+document.getElementById('logout').addEventListener('click', async ()=>{
+  try{ await fetch('/api/logout',{method:'POST'}); }catch(e){}
+  location.href='/login';
+});
+(async function(){ await loadList(); })();
+</script>
+</body>
+</html>"""
+
+
 LOGIN_HTML = build_login_html()
 INDEX_HTML = build_index_html()
+VAULT_HTML = build_vault_html()
 
 
 def main():

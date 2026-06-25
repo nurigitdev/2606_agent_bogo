@@ -144,5 +144,170 @@ class RosterTest(unittest.TestCase):
             self.assertIn("name", x)
 
 
+# ── Vault(누적 기억) 통합 테스트 ────────────────────────────────────────────────
+class _FakeHandler:
+    """Handler 의 Vault 라우트 메서드만 떼어 단위 테스트하기 위한 경량 믹스인 호스트.
+
+    BaseHTTPRequestHandler 를 실제 소켓으로 띄우지 않고, _json 응답을 (obj, code) 로
+    가로채 라우트 로직(권한 게이트·필터·traversal·degrade)을 직접 검증한다.
+    """
+
+    def __init__(self):
+        self.last = None  # (obj, code)
+
+    def _json(self, obj, code=200):
+        self.last = (obj, code)
+        return self.last
+
+    def _html(self, html, code=200, extra_headers=None):
+        self.last = (html, code)
+        return self.last
+
+    # 실제 Handler 의 미바인드 메서드를 그대로 빌려 self 에 묶어 호출한다.
+    _vault_allowed = D.Handler._vault_allowed
+    _get_vault_list = D.Handler._get_vault_list
+    _get_vault_search = D.Handler._get_vault_search
+    _get_vault_note = D.Handler._get_vault_note
+
+
+def _u(query):
+    """urlparse 결과 흉내(.query 만 쓰므로 충분)."""
+    from urllib.parse import urlparse
+    return urlparse("/x?" + query)
+
+
+CEO = {"role": "ceo", "login_id": "ceo@x", "label": "CEO"}
+STAFF = {"role": "staff", "login_id": "sw9@x", "staff_channels": []}
+ADMIN = {"role": "admin", "login_id": "admin", "label": "관리자"}
+
+
+class VaultAuthGateTest(unittest.TestCase):
+    """신규 Vault 엔드포인트가 ceo/admin 인증 뒤에서만 동작하는지(직원 차단)."""
+
+    def setUp(self):
+        self.h = _FakeHandler()
+
+    def test_staff_blocked_on_list(self):
+        self.h._get_vault_list(_u(""), STAFF)
+        obj, code = self.h.last
+        self.assertEqual(code, 403)
+
+    def test_staff_blocked_on_search(self):
+        self.h._get_vault_search(_u("q=test"), STAFF)
+        self.assertEqual(self.h.last[1], 403)
+
+    def test_staff_blocked_on_note(self):
+        self.h._get_vault_note(_u("path=foo.md"), STAFF)
+        self.assertEqual(self.h.last[1], 403)
+
+    def test_ceo_allowed(self):
+        self.assertTrue(self.h._vault_allowed(CEO))
+        self.assertTrue(self.h._vault_allowed(ADMIN))
+        self.assertFalse(self.h._vault_allowed(STAFF))
+
+
+class VaultListTest(unittest.TestCase):
+    """브라우징: 노트 목록 + 파셋 + RAG 상태가 인증된 CEO 에게 렌더되는가."""
+
+    def setUp(self):
+        self.h = _FakeHandler()
+
+    def test_list_returns_notes_and_facets(self):
+        self.h._get_vault_list(_u(""), CEO)
+        obj, code = self.h.last
+        self.assertEqual(code, 200)
+        self.assertIn("notes", obj)
+        self.assertIn("facets", obj)
+        self.assertIn("rag", obj)
+        # 실제 vault 에 노트가 존재하므로 1개 이상 회수되어야 한다(MVP 아님 실증).
+        self.assertGreater(len(obj["notes"]), 0)
+        for n in obj["notes"]:
+            self.assertIn("path", n)
+            self.assertIn("title", n)
+            self.assertTrue(n["path"].endswith(".md"))
+
+    def test_list_role_filter(self):
+        self.h._get_vault_list(_u("role=dev"), CEO)
+        obj, _ = self.h.last
+        for n in obj["notes"]:
+            self.assertEqual(n["role"], "dev")
+
+
+class VaultSearchTest(unittest.TestCase):
+    """RAG 검색: 인증된 CEO 가 검색 → 결과/모드/사유가 반환되는가."""
+
+    def setUp(self):
+        self.h = _FakeHandler()
+
+    def test_search_renders_results_or_degrade(self):
+        self.h._get_vault_search(_u("q=" + "LLM"), CEO)
+        obj, code = self.h.last
+        self.assertEqual(code, 200)
+        self.assertIn("ok", obj)
+        self.assertIn("mode", obj)
+        self.assertIn("results", obj)
+        # RAG 인덱스가 있으면 ok=True. 결과는 노트 링크 형식(path)을 가진다.
+        if obj["ok"]:
+            for r in obj["results"]:
+                self.assertIn("path", r)
+
+    def test_empty_query_returns_empty_not_error(self):
+        self.h._get_vault_search(_u("q="), CEO)
+        obj, code = self.h.last
+        self.assertEqual(code, 200)
+        self.assertEqual(obj["results"], [])
+
+
+class VaultNoteTraversalTest(unittest.TestCase):
+    """노트 열람: 정상 경로는 본문, traversal/이탈 경로는 400 으로 차단."""
+
+    def setUp(self):
+        self.h = _FakeHandler()
+
+    def test_valid_note_readable(self):
+        # 먼저 목록에서 실제 경로 하나를 얻어 그 노트를 연다.
+        notes = D.list_vault_notes(limit=1)
+        self.assertTrue(notes, "vault 에 노트가 있어야 테스트 가능")
+        rel = notes[0]["path"]
+        self.h._get_vault_note(_u("path=" + rel), CEO)
+        obj, code = self.h.last
+        self.assertEqual(code, 200)
+        self.assertIn("body", obj)
+        self.assertIn("frontmatter", obj)
+        self.assertIn("obsidian_uri", obj)
+
+    def test_traversal_rejected(self):
+        for bad in ["../ceo_auth.py", "../../etc/passwd", "/etc/passwd",
+                    "..%2F..%2Fsecret.md", "foo.txt"]:
+            self.h._get_vault_note(_u("path=" + bad), CEO)
+            obj, code = self.h.last
+            self.assertIn(code, (400, 404),
+                          f"traversal/이탈 경로가 차단되지 않음: {bad} -> {code}")
+
+    def test_nonexistent_note_404(self):
+        self.h._get_vault_note(_u("path=20_Reports/does_not_exist.md"), CEO)
+        self.assertEqual(self.h.last[1], 404)
+
+
+class VaultDegradeTest(unittest.TestCase):
+    """RAG 모듈/인덱스 부재 시 대시보드가 500 대신 '인덱스 없음'으로 강등되는가."""
+
+    def test_search_degrade_when_rag_module_missing(self):
+        orig = D.VR
+        try:
+            D.VR = None  # 모듈 로드 실패 상황 시뮬레이션
+            res = D.vault_search("아무거나")
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["results"], [])
+            self.assertTrue(res["reason"])  # 사유 안내 존재
+        finally:
+            D.VR = orig
+
+    def test_rag_status_reports_mode(self):
+        st = D.vault_rag_status()
+        self.assertIn("ok", st)
+        self.assertIn("mode", st)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
