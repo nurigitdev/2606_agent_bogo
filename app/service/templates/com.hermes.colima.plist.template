@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hermes.colima</string>
+
+    <!-- macOS 로그인/부팅 시 Colima(도커 런타임 VM)를 자동 기동한다. 봇이 의존하는 통신
+         백본(Mattermost/Postgres 컨테이너)은 Colima 위에서만 산다 → Colima 가 부팅 때
+         자동으로 떠야 컨테이너가 unless-stopped 정책으로 부활하고, 봇이 즉사하지 않는다.
+         경로는 install_service.sh 가 설치 시 치환한다(__COLIMA__ = colima 바이너리 절대경로,
+         __BREW_BIN__ = colima 가 docker/limactl 등을 찾는 PATH). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__COLIMA__</string>
+        <string>start</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__BREW_BIN__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <!-- 부팅/로그인 시 1회 기동. colima start 는 이미 running 이면 멱등하게 즉시 반환하므로
+         KeepAlive(상시 재실행)는 두지 않는다 — VM 데몬은 colima 자신이 유지한다. RunAtLoad
+         만으로 "부팅 시 자동 시작" 요건을 충족한다. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- start 가 실패(예: 일시적 리소스 부족)하면 재시도하되 폭주하지 않게 간격을 둔다. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__LOGS__/colima.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGS__/colima.err.log</string>
+</dict>
+</plist>

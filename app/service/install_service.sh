@@ -44,6 +44,7 @@ mac_sync() {
     --exclude '__pycache__/' \
     --exclude '.ruff_cache/' \
     --exclude '.git/' \
+    --exclude '.venv/' \
     --exclude '*.bak' \
     --exclude 'logs/' \
     "$REPO"/ "$mac_app"/
@@ -56,18 +57,43 @@ mac_sync() {
   say "미러 동기화: $REPO -> $mac_app"
 }
 
+# Colima 부팅 자동시작 LaunchAgent 등록(멱등). macOS 로그인/부팅 시 도커 런타임 VM 을
+# 자동 기동해, 봇이 의존하는 통신 백본 컨테이너가 unless-stopped 정책으로 부활하게 한다.
+mac_install_colima_agent() {
+  local colima_bin; colima_bin="$(command -v colima 2>/dev/null || true)"
+  if [ -z "$colima_bin" ]; then
+    say "colima 미설치 → Colima 부팅 자동시작 등록 생략(봇 인프라는 infra_up.sh 가 보장)."
+    return 0
+  fi
+  local brew_bin; brew_bin="$(dirname "$colima_bin")"
+  local plist="$mac_la/com.hermes.colima.plist"
+  sed -e "s#__COLIMA__#$colima_bin#g" \
+      -e "s#__BREW_BIN__#$brew_bin#g" \
+      -e "s#__HOME__#$HOME#g" \
+      -e "s#__LOGS__#$mac_logs#g" \
+      "$TPL/com.hermes.colima.plist.template" > "$plist"
+  local uid; uid="$(id -u)"
+  launchctl bootout "gui/$uid/com.hermes.colima" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$uid" "$plist"
+  say "등록: com.hermes.colima (부팅 시 Colima 자동 기동)"
+}
+
 mac_install() {
   # Place an ASCII-path launcher that launchd calls (run_role.sh from the mirror).
   mkdir -p "${HOME}/.hermes-bin" "$mac_la"
   cp "$REPO/run_role.sh" "$mac_launcher"
   chmod +x "$mac_launcher"
   mac_sync
+  # Colima 부팅 자동시작 등록 + 지금 당장 통신 백본 보장(봇 등록 전에 MM 이 떠 있어야 즉사 없음).
+  mac_install_colima_agent
+  "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
   for r in "${ROLES[@]}"; do
     local plist="$mac_la/com.hermes.$r.plist"
     sed -e "s#__ROLE__#$r#g" \
         -e "s#__LAUNCHER__#$mac_launcher#g" \
         -e "s#__APP__#$mac_app#g" \
+        -e "s#__REPO__#$REPO#g" \
         -e "s#__LOGS__#$mac_logs#g" \
         "$TPL/com.hermes.ROLE.plist.template" > "$plist"
     launchctl bootout "gui/$uid/com.hermes.$r" >/dev/null 2>&1 || true
@@ -84,12 +110,18 @@ mac_uninstall() {
     rm -f "$mac_la/com.hermes.$r.plist"
     say "해제: com.hermes.$r"
   done
+  # Colima 부팅 자동시작 LaunchAgent 도 함께 해제(콜리마 VM 자체는 건드리지 않음).
+  launchctl bootout "gui/$uid/com.hermes.colima" >/dev/null 2>&1 || true
+  rm -f "$mac_la/com.hermes.colima.plist"
+  say "해제: com.hermes.colima"
   say "launchd 등록 해제 완료. (미러 $mac_app 는 보존 — 수동 삭제 가능)"
 }
 
 mac_restart() {
   cp "$REPO/run_role.sh" "$mac_launcher"; chmod +x "$mac_launcher"
   mac_sync
+  # 재시작 전에도 통신 백본을 보장한다(Colima/컨테이너가 내려가 있으면 봇이 또 즉사하므로).
+  "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
   for r in "${ROLES[@]}"; do
     launchctl kickstart -k "gui/$uid/com.hermes.$r" && say "재시작: com.hermes.$r"

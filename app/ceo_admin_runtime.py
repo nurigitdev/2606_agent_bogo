@@ -55,9 +55,19 @@ def _resolve_repo():
             f"치명: 원본 repo 경로가 존재하지 않습니다: {repo}\n"
             "HERMES_REPO 환경변수에 Desktop 원본 app/ 절대경로를 설정하세요.\n")
         raise SystemExit(3)
-    if not os.path.isdir(os.path.join(repo, ".git")):
+    # git 워크트리 멤버십을 git 자체로 판별한다. app/ 이 git repo 의 하위 디렉터리이고
+    # .git 은 상위(프로젝트 루트)에 있을 수 있으므로, .git 의 직접 존재가 아니라
+    # 'is-inside-work-tree' 로 확인해야 한다(rsync 미러는 .git 추적 자체가 없어 걸러진다).
+    try:
+        inside = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.stderr.write("치명: git 실행 파일을 찾지 못했습니다(PATH 확인).\n")
+        raise SystemExit(3)
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
         sys.stderr.write(
-            f"치명: 원본 repo 가 git 워크트리가 아닙니다(.git 없음): {repo}\n"
+            f"치명: 원본 repo 가 git 워크트리가 아닙니다: {repo}\n"
             "이 경로는 rsync 미러일 가능성이 큽니다. launchd 데몬은 HERMES_REPO 로 "
             "Desktop 원본 repo 절대경로를 받아야 합니다(미러에 쓰면 다음 sync 에 소실됨).\n")
         raise SystemExit(3)
@@ -319,6 +329,7 @@ def _sync_and_reload(role):
 
 def handle(text):
     """CEO 메시지 1건 처리 → 방에 게시할 응답 문자열(없으면 None)."""
+    global PENDING
     intent = parse_intent(text)
     act = intent.get("action")
 
@@ -335,7 +346,6 @@ def handle(text):
         return "✅ **적용 결과**\n- " + apply_change()
 
     if act == "reject":
-        global PENDING
         if not PENDING:
             return "대기 중인 변경이 없습니다."
         target = ROLES[PENDING["role"]]["name"]
@@ -382,7 +392,10 @@ def speaker_name(uid):
 
 
 async def run():
-    async with websockets.connect("ws://localhost:8065/api/v4/websocket") as ws:
+    # open_timeout: MM 부재 시 connect 무한 대기 방지. ping_*: 좀비 연결 감지로 백오프
+    # 재접속 루프(run_forever)가 동작하게 한다.
+    async with websockets.connect("ws://localhost:8065/api/v4/websocket",
+                                  open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": CFG["bot_token"]}}))
         print(f"에이전트 관리 봇 가동 — 방:{ADMIN_CHANNEL} 모델:{LLM['model']}")
@@ -414,5 +427,23 @@ async def run():
                     print("post-err", e)
 
 
+async def run_forever():
+    # MM 재접속 내성: MM 일시 정지/WS 끊김에도 프로세스가 죽지 않고 지수 백오프로 재연결.
+    # launchd KeepAlive 와 충돌하지 않는다(정상 운영 중 이 루프가 프로세스를 살려 둠).
+    backoff = 2
+    backoff_max = 60
+    while True:
+        try:
+            await run()
+            print("[CEO관리봇] WS 종료됨 — 재접속 시도.")
+            backoff = 2
+        except (OSError, asyncio.TimeoutError, websockets.exceptions.WebSocketException) as e:
+            print(f"[CEO관리봇] MM 연결 실패/끊김: {type(e).__name__}: {e} — {backoff}s 후 재접속.")
+        except Exception as e:
+            print(f"[CEO관리봇] 예기치 못한 오류: {type(e).__name__}: {e} — {backoff}s 후 재접속.")
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, backoff_max)
+
+
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(run_forever())
