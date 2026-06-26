@@ -81,6 +81,27 @@ mac_install_colima_agent() {
   say "등록: com.bogo.colima (부팅 시 Colima 자동 기동)"
 }
 
+# 안전한 (재)등록: 같은 Label 이 아직 완전히 bootout 되지 않은 상태에서 bootstrap 하면
+# launchd 가 "Input/output error (5)" 를 던지며 set -e 로 설치가 통째로 중단된다.
+# (KeepAlive 봇이 즉시 재시작되며 라벨이 잠시 살아있는 레이스.) → bootout 후 라벨이
+# 사라질 때까지 짧게 폴링하고, 그래도 실패하면 1회 재시도한다. $1=label, $2=plist 경로.
+mac_bootstrap_safe() {
+  local uid; uid="$(id -u)"
+  local label="$1" plist="$2"
+  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+  # 라벨이 service DB 에서 빠질 때까지 최대 ~5초 대기(완전 unload 보장).
+  local i=0
+  while [ "$i" -lt 25 ] && launchctl print "gui/$uid/$label" >/dev/null 2>&1; do
+    sleep 0.2; i=$((i + 1))
+  done
+  if ! launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
+    sleep 1
+    launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+    sleep 1
+    launchctl bootstrap "gui/$uid" "$plist"   # 2차 실패는 진짜 오류 → set -e 로 중단
+  fi
+}
+
 mac_install() {
   # Place an ASCII-path launcher that launchd calls (run_role.sh from the mirror).
   mkdir -p "${HOME}/.bogo-bin" "$mac_la"
@@ -99,8 +120,7 @@ mac_install() {
         -e "s#__REPO__#$REPO#g" \
         -e "s#__LOGS__#$mac_logs#g" \
         "$TPL/com.bogo.ROLE.plist.template" > "$plist"
-    launchctl bootout "gui/$uid/com.bogo.$r" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$uid" "$plist"
+    mac_bootstrap_safe "com.bogo.$r" "$plist"
     say "등록+기동: com.bogo.$r"
   done
   # CEO 대시보드(127.0.0.1:DASH_PORT)도 봇과 동일하게 launchd 상시 소유로 승격.
@@ -113,8 +133,7 @@ mac_install() {
       -e "s#__DASH_PORT__#$DASH_PORT#g" \
       -e "s#__LOGS__#$mac_logs#g" \
       "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
-  launchctl bootout "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$uid" "$dplist"
+  mac_bootstrap_safe "com.bogo.dashboard" "$dplist"
   say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
   say "macOS launchd 설치 완료. 상태:  ./service/install_service.sh status"
 }
@@ -172,7 +191,7 @@ mac_restart() {
         -e "s#__DASH_PORT__#$DASH_PORT#g" \
         -e "s#__LOGS__#$mac_logs#g" \
         "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
-    launchctl bootstrap "gui/$uid" "$dplist"
+    mac_bootstrap_safe "com.bogo.dashboard" "$dplist"
     say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
   fi
 }
