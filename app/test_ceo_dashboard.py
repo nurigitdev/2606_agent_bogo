@@ -10,6 +10,7 @@ ceo_dashboard 핵심 경로 테스트 (표준 unittest — 신규 의존성 0, �
 
 네트워크 호출은 mm 클라이언트 메서드를 스텁으로 교체해 차단한다.
 """
+import re
 import unittest
 
 import ceo_dashboard as D
@@ -307,6 +308,60 @@ class VaultDegradeTest(unittest.TestCase):
         st = D.vault_rag_status()
         self.assertIn("ok", st)
         self.assertIn("mode", st)
+
+
+class RenderedHtmlIntegrityTest(unittest.TestCase):
+    """렌더된 대시보드 HTML 의 DOM 무결성 회귀 테스트.
+
+    Bug was: 로그아웃 버튼 무동작 / ceo 로그인 후 화면 깨짐.
+    Root cause: topbar/dock-hint 제거 커밋(4dbffbf)이 stageTitle·statAgents·
+      svAgents·svPending·svReports·targetName DOM 을 삭제했으나, 이를 가리키는
+      getElementById 죽은 참조가 INDEX_HTML JS 에 남았다. 가드 누락 상태에서
+      init() IIFE 안 죽은 참조가 TypeError 를 던지면 부트스트랩이 중단되어
+      이후 logout 핸들러 바인딩(getElementById('logout'))까지 도달하지 못해
+      로그아웃 버튼이 무동작이 된다.
+    Fixed in: ceo_dashboard.py build_index_html() — 죽은 참조 6개 전부 제거.
+    """
+
+    DOCS = None  # setUpClass 에서 채움
+
+    @classmethod
+    def setUpClass(cls):
+        cls.DOCS = {"LOGIN": D.LOGIN_HTML, "INDEX": D.INDEX_HTML, "VAULT": D.VAULT_HTML}
+
+    @staticmethod
+    def _ids(html):
+        return re.findall(r'\bid="([^"]+)"', html)
+
+    @staticmethod
+    def _refs(html):
+        return set(re.findall(r"getElementById\(['\"]([^'\"]+)['\"]\)", html))
+
+    def test_no_duplicate_ids_in_any_document(self):
+        for name, html in self.DOCS.items():
+            ids = self._ids(html)
+            dups = sorted({x for x in ids if ids.count(x) > 1})
+            self.assertEqual(dups, [], f"{name} 문서에 중복 id 존재: {dups}")
+
+    def test_no_dead_getElementById_references(self):
+        for name, html in self.DOCS.items():
+            missing = sorted(self._refs(html) - set(self._ids(html)))
+            self.assertEqual(
+                missing, [],
+                f"{name} 가 정의되지 않은 id 를 getElementById 로 참조(죽은 참조): {missing}")
+
+    def test_login_form_and_handler_present(self):
+        self.assertIn('id="loginForm"', D.LOGIN_HTML)
+        self.assertIn("fetch('/api/login'", D.LOGIN_HTML)
+        self.assertIn("location.href='/'", D.LOGIN_HTML)
+
+    def test_logout_trigger_and_handler_present(self):
+        for name in ("INDEX", "VAULT"):
+            html = self.DOCS[name]
+            self.assertIn('id="logout"', html, f"{name}: 로그아웃 트리거 누락")
+            self.assertIn("getElementById('logout').addEventListener", html,
+                          f"{name}: 로그아웃 클릭 핸들러 누락")
+            self.assertIn("fetch('/api/logout'", html, f"{name}: /api/logout 호출 누락")
 
 
 if __name__ == "__main__":

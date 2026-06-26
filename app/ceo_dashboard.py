@@ -766,6 +766,23 @@ _CSS = """
     text-decoration:none; transition:transform .14s ease; }
   a.chip.nav-link:hover { text-decoration:none; }
   a.chip.nav-link:active { transform:scale(0.95); }
+  /* ── 지시 대상 팀 빠른 선택칩(.dock 입력창 위 1줄) ── */
+  .dock-chips { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 8px; }
+  .dock-chips:empty { display:none; }
+  .team-chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:500;
+    color:var(--ink-muted); background:transparent; border:1px solid var(--hairline);
+    border-radius:999px; padding:5px 12px; white-space:nowrap; cursor:pointer;
+    transition:background .14s ease, color .14s ease, border-color .14s ease; }
+  .team-chip:hover { background:rgba(0,0,0,.04); color:var(--ink); }
+  .team-chip.active { background:var(--accent-soft); color:var(--ink); border-color:var(--accent-line);
+    font-weight:600; }
+  .team-chip .tc-dot { width:6px; height:6px; border-radius:50%; background:var(--accent);
+    display:none; }
+  .team-chip.has-new .tc-dot { display:inline-block; }
+  /* ── 보고 뷰: CEO브리핑 우선 고정 카드 ── */
+  .row-card.pinned { border:1px solid var(--accent-line); background:var(--accent-soft); }
+  .rc-badge { flex:0 0 auto; font-size:11px; font-weight:700; color:var(--on-dark);
+    background:var(--accent); border-radius:999px; padding:1px 8px; margin-left:6px; }
   /* ── Vault(기억 보관소) ── */
   .vault-toolbar { display:flex; gap:var(--space-3); flex-wrap:wrap; align-items:center;
     margin-bottom:var(--space-6); }
@@ -1320,6 +1337,7 @@ def build_index_html():
     <!-- 통합 입력창(채팅 뷰에서만 노출) -->
     <div class="dock" id="dock">
       <div class="dock-shell">
+        <div class="dock-chips" id="dockChips"></div>
         <div class="chat-box">
           <textarea id="msg" rows="1" placeholder="기억·지시·질문을 입력하세요."></textarea>
           <button class="send-btn" id="send" title="전송" aria-label="전송" disabled><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg></button>
@@ -1400,6 +1418,45 @@ function buildTeamGroups(){
   });
   teamGroups=order.map(l=>map[l]);
 }
+// CEO브리핑(orchestrator briefing) 채널 식별: kind==='briefing' 우선, 없으면 이름에 '브리핑' 포함
+function briefingChannel(){
+  return channels.find(c=>c.kind==='briefing') || channels.find(c=>/브리핑/.test(c.name)) || null;
+}
+// 게시 가능한 첫 채널(staff 기본 전송 채널 보정용)
+function firstPostChannel(){ return (channels[0] && channels[0].name) || defaultPost || null; }
+
+// ── 신규 보고 판정(localStorage lastSeen vs /api/history 최신 ts) ─────────────
+function lastSeenKey(){ return 'bogoSeen:'+((me&&me.login_id)||'anon'); }
+function loadLastSeen(){ try{ return JSON.parse(localStorage.getItem(lastSeenKey())||'{}')||{}; }catch(e){ return {}; } }
+function saveLastSeen(o){ try{ localStorage.setItem(lastSeenKey(), JSON.stringify(o)); }catch(e){} }
+function markChannelSeen(name, ts){
+  const s=loadLastSeen(); s[name]=Math.max(s[name]||0, ts||Date.now()); saveLastSeen(s);
+}
+// 채널 최신 ts 조회(없으면 0). /api/history?channel=&n=1
+async function latestTs(name){
+  try{ const d=await api('/api/history?channel='+encodeURIComponent(name)+'&n=1');
+    const it=d.items&&d.items[0]; return it&&it.ts?it.ts:0; }catch(e){ return 0; }
+}
+// 채널에 신규 보고가 있는지(최신 ts > lastSeen)
+async function channelHasNew(name){
+  const seen=loadLastSeen(); const ts=await latestTs(name);
+  return { hasNew: ts>(seen[name]||0), ts };
+}
+// 보고 신규 배지 갱신: 팀채널 + CEO브리핑 중 신규 있는 채널 수
+async function refreshReportBadge(){
+  const names=new Set();
+  channels.forEach(c=>names.add(c.name));
+  const b=briefingChannel(); if(b) names.add(b.name);
+  let cnt=0;
+  const seen=loadLastSeen();
+  for(const n of names){
+    const ts=await latestTs(n);
+    if(ts>(seen[n]||0)) cnt++;
+  }
+  setBadge('cntReports', cnt, true);
+  // 보고 뷰가 떠 있으면 칩/카드 신규 상태도 동기화
+  if(view==='reports') renderReportsView();
+}
 
 // ── 상단 숫자 스트립 ─────────────────────────────────────────────────────────
 // 뱃지 헬퍼: 값>0일 때만 .show(+선택적 .alert), 0이면 숨김
@@ -1411,32 +1468,17 @@ function setBadge(id, val, alert){
 function refreshStats(){
   const act = roster.filter(r=>r.bot_active).length;
   const inactive = roster.length - act;
-  // topbar 제거됨: stat-strip 요소(svAgents/svPending/svReports)가 없으면 건너뜀(가드)
-  const elA=document.getElementById('svAgents'); if(elA) elA.textContent = roster.length ? (act+'/'+roster.length) : '–';
-  const elP=document.getElementById('svPending'); if(elP) elP.textContent = pendingCount();
-  const elR=document.getElementById('svReports'); if(elR) elR.textContent = teamGroups.length || '–';
+  // stat-strip(svAgents/svPending/svReports)은 topbar 제거 커밋(4dbffbf)에서 DOM이 사라졌다.
+  // 죽은 참조를 남기지 않는다 — 뱃지(nav 카운트)만 갱신한다.
   // 과거질문 = 대기 세션수(주의), 보고 = 신규 없으면 미표시, 현황 = 비활성 에이전트수(0이면 숨김)
   setBadge('cntHistory', pendingCount(), true);
-  setBadge('cntReports', 0, false);
+  // cntReports 는 refreshReportBadge()가 실데이터로 갱신(여기선 건드리지 않음)
   setBadge('cntRoster', inactive, true);
 }
 
 // ── 뷰 라우팅(한 번에 하나; 메인 동시 노출 금지) ─────────────────────────────
-const VIEW_TITLE={chat:'새 작업',history:'과거 질문',reports:'보고',roster:'에이전트 현황'};
-// 40자 말줄임
-function ellip(s,n){ s=s||''; return s.length>n ? s.slice(0,n-1)+'…' : s; }
-// 모드별 topbar 제목: chat이면 msgs 있을 때만 세션 제목, 아니면 빈값. 그 외 뷰는 VIEW_TITLE.
-function setStageTitle(){
-  // topbar 제거됨: stageTitle 요소가 없으면 무시(가드)
-  const el=document.getElementById('stageTitle');
-  if(!el) return;
-  let t='';
-  if(view==='chat'){
-    const has=activeSession&&activeSession.msgs&&activeSession.msgs.length;
-    t = has ? ellip(activeSession.title||'대화',40) : '';
-  } else { t=VIEW_TITLE[view]||''; }
-  el.textContent=t;
-}
+// topbar(stageTitle) 제거 커밋(4dbffbf)으로 setStageTitle/VIEW_TITLE/ellip 은 모두
+// 죽은 코드가 되어 제거했다. 제거된 DOM(stageTitle)을 가리키는 잔존 참조를 남기지 않는다.
 function setView(v){
   view=v;
   document.querySelectorAll('[data-view]').forEach(e=>{
@@ -1448,11 +1490,11 @@ function setView(v){
   const emptyChat = (v==='chat') && !(activeSession&&activeSession.msgs&&activeSession.msgs.length);
   stage.classList.toggle('is-empty', emptyChat);
   document.getElementById('stageScroll').scrollTop=0;
+  renderDockChips();
   if(v==='chat') renderChat();
   else if(v==='history') renderHistoryView();
   else if(v==='reports') renderReportsView();
   else if(v==='roster') renderRosterView();
-  setStageTitle();
 }
 
 // ── Lucide 스타일 인라인 아이콘(외부 CDN/패키지 없이 path 직접) ───────────────
@@ -1476,7 +1518,9 @@ function renderChat(){
   stage.classList.remove('is-empty');
   body.innerHTML='<div class="col" id="convCol">'+msgs.map(m=>{
     const cls=m.role==='me'?'me':'sys';
-    const meta=m.ts?'<div class="b-meta">'+esc(m.who||'')+(m.who?' · ':'')+fmtTime(m.ts)+'</div>':'';
+    const to=m.to?'→ '+esc(m.to):'';
+    const lead=esc(m.who||'')+((m.who&&(to||m.ts))?' · ':'')+(to?to+(m.ts?' · ':''):'');
+    const meta=(m.ts||to||m.who)?'<div class="b-meta">'+lead+(m.ts?fmtTime(m.ts):'')+'</div>':'';
     return '<div class="bubble-row '+cls+'"><div class="bubble">'+esc(m.text)+meta+'</div></div>';
   }).join('')+'</div>';
   const sc=document.getElementById('stageScroll'); sc.scrollTop=sc.scrollHeight;
@@ -1501,17 +1545,68 @@ function renderHistoryView(){
 // ── 보고 뷰: 팀 한 줄 카드 → 클릭 시 우측 패널에 원문 ────────────────────────
 function renderReportsView(){
   const body=document.getElementById('stageBody');
+  // staff: 팀카드 목록 대신 자기 부서 보고 원문을 메인 무대에 바로 렌더(우측 패널 아님)
+  if(me&&me.role==='staff'){ renderStaffReport(body); return; }
+  const seen=loadLastSeen();
+  const b=briefingChannel();
   let h='<div class="col"><div class="view-head"><h2>보고</h2>'
     +'<p>부서를 선택하면 우측 패널에서 최근 보고 원문을 봅니다.</p></div>';
   if(!teamGroups.length){ h+='<div class="list-empty">표시할 부서가 없습니다.</div></div>'; body.innerHTML=h; return; }
+  // CEO브리핑 전용 카드(pinned) — 팀카드와 분리해 최상단 고정
+  if(b){
+    h+='<button class="row-card pinned" data-pin="1">'
+      +'<span class="rc-dot on"></span>'
+      +'<span class="rc-title">CEO브리핑 (박민철)</span>'
+      +'<span class="rc-sub">'+esc(b.name)+'</span>'
+      +'<span class="rc-badge" data-newbadge="'+esc(b.name)+'" style="display:none">NEW</span>'
+      +'<span class="rc-chev">'+ICN.chevronRight+'</span></button>';
+  }
+  // 팀 카드(브리핑 채널이 속한 그룹은 위 핀 카드로 대체하되 그룹 자체는 유지)
   h+=teamGroups.map((g,i)=>'<button class="row-card" data-tg="'+i+'">'
     +'<span class="rc-dot on"></span>'
     +'<span class="rc-title">'+esc(g.label)+'</span>'
     +'<span class="rc-sub">'+g.channels.map(c=>esc(c.name)).join(' · ')+'</span>'
+    +'<span class="rc-badge" data-newbadge-group="'+i+'" style="display:none">NEW</span>'
     +'<span class="rc-chev">'+ICN.chevronRight+'</span></button>').join('')+'</div>';
   body.innerHTML=h;
-  body.querySelectorAll('.row-card').forEach(el=>
+  const pin=body.querySelector('.row-card.pinned');
+  if(pin && b) pin.addEventListener('click',()=>openReportPanel({label:'CEO브리핑 (박민철)',channels:[b]}));
+  body.querySelectorAll('.row-card[data-tg]').forEach(el=>
     el.addEventListener('click',()=>openReportPanel(teamGroups[+el.dataset.tg])));
+  // 신규 NEW 배지(비동기): 핀 카드 + 각 팀그룹
+  if(b){ latestTs(b.name).then(ts=>{ if(ts>(seen[b.name]||0)){ const e=body.querySelector('[data-newbadge="'+CSS.escape(b.name)+'"]'); if(e) e.style.display=''; } }); }
+  teamGroups.forEach((g,i)=>{
+    (async()=>{
+      let neu=false;
+      for(const c of g.channels){ const ts=await latestTs(c.name); if(ts>(seen[c.name]||0)){ neu=true; break; } }
+      if(neu){ const e=body.querySelector('[data-newbadge-group="'+i+'"]'); if(e) e.style.display=''; }
+    })();
+  });
+}
+// staff: 자기 부서 보고 원문을 메인 무대에 직접 렌더(우측 패널 아님)
+function renderStaffReport(body){
+  const mine=channels[0]||null;
+  let h='<div class="col"><div class="view-head"><h2>보고</h2>'
+    +'<p>'+(mine?esc(mine.name)+' 채널의 최근 보고입니다.':'표시할 채널이 없습니다.')+'</p></div>';
+  if(!mine){ h+='<div class="list-empty">표시할 채널이 없습니다.</div></div>'; body.innerHTML=h; return; }
+  h+='<div id="staffReport"><div class="list-empty">불러오는 중…</div></div></div>';
+  body.innerHTML=h;
+  const load=async()=>{
+    let html='';
+    try{
+      const d=await api('/api/history?channel='+encodeURIComponent(mine.name)+'&n=20');
+      if(!d.items.length){ html='<div class="list-empty">아직 보고가 없습니다.</div>'; }
+      else html=d.items.map(m=>'<div class="panel-msg"><span class="who">'+esc(m.author)
+        +'</span><span class="when">'+fmtTime(m.ts)+'</span><div class="body">'+esc(m.text)
+        +'</div></div>').join('');
+      // 본 것으로 처리(lastSeen 갱신)
+      const top=d.items&&d.items[0]; if(top&&top.ts) markChannelSeen(mine.name, top.ts);
+    }catch(e){ html='<div class="list-empty">로드 실패: '+esc(e.message)+'</div>'; }
+    const box=document.getElementById('staffReport'); if(box) box.innerHTML=html;
+  };
+  load();
+  if(panelTimer){ clearInterval(panelTimer); }
+  panelTimer=setInterval(()=>{ if(view==='reports') load(); }, POLL_MS);
 }
 
 // ── 에이전트 현황 뷰: 한 줄 카드 → 클릭 시 패널 상세 ─────────────────────────
@@ -1570,9 +1665,13 @@ function openReportPanel(group){
         html+=d.items.map(m=>'<div class="panel-msg"><span class="who">'+esc(m.author)
           +'</span><span class="when">'+fmtTime(m.ts)+'</span><div class="body">'+esc(m.text)
           +'</div></div>').join('');
+        // 패널을 열어 본 채널은 lastSeen 갱신 → 배지 해제
+        const top=d.items[0]; if(top&&top.ts) markChannelSeen(c.name, top.ts);
       }catch(e){ html+='<div class="list-empty">로드 실패: '+esc(e.message)+'</div>'; }
     }
     const box=document.getElementById('panelReport'); if(box) box.innerHTML=html;
+    // 배지 동기화(보고 뱃지·뷰 갱신)
+    refreshReportBadge();
   };
   load(); panelTimer=setInterval(load, POLL_MS);
 }
@@ -1596,6 +1695,40 @@ function openSession(id){
   activeSession=s; setView('chat');
 }
 
+// ── 지시 대상 팀 빠른 선택칩(.dock textarea 위) ──────────────────────────────
+// 칩 = post 가능 채널(team_label 기준). 클릭 시 activeSession.channel 변경.
+// staff는 채널 1개이므로 칩 숨김(자동 선택만). 신규 보고가 있으면 칩에 점 표시.
+function renderDockChips(){
+  const box=document.getElementById('dockChips'); if(!box) return;
+  // staff: 칩 숨김(채널 1개·자동선택)
+  if(me&&me.role==='staff' || channels.length<=1){ box.innerHTML=''; return; }
+  if(!activeSession) newSession();
+  const cur=activeSession.channel||defaultPost;
+  const seen=loadLastSeen();
+  box.innerHTML=channels.map(c=>{
+    const active = c.name===cur ? ' active' : '';
+    const label = c.team_label || c.name;
+    return '<button type="button" class="team-chip'+active+'" data-ch="'+esc(c.name)
+      +'" data-new="'+esc(c.name)+'" title="'+esc(c.name)+'">'
+      +'<span class="tc-dot"></span><span class="tc-label">'+esc(label)+'</span></button>';
+  }).join('');
+  box.querySelectorAll('.team-chip').forEach(el=>{
+    el.addEventListener('click',()=>{
+      if(!activeSession) newSession();
+      activeSession.channel=el.dataset.ch; saveSessions();
+      renderDockChips();
+    });
+  });
+  // 신규 보고 점 표시(비동기, 칩 렌더 후 채움)
+  channels.forEach(async c=>{
+    const ts=await latestTs(c.name);
+    if(ts>(seen[c.name]||0)){
+      const el=box.querySelector('.team-chip[data-new="'+CSS.escape(c.name)+'"]');
+      if(el) el.classList.add('has-new');
+    }
+  });
+}
+
 // ── 전송: 통합 입력창 → 기본 대상 채널로 /api/post ───────────────────────────
 async function doSend(){
   const ta=document.getElementById('msg'); const txt=ta.value.trim(); if(!txt) return;
@@ -1608,7 +1741,7 @@ async function doSend(){
   const stage=document.querySelector('.stage');
   // 첫 전송: FLIP 전환을 위해 이동 전 dock 위치 측정
   const first = wasEmpty ? dock.getBoundingClientRect() : null;
-  activeSession.msgs.push({role:'me',text:txt,ts:Date.now()});
+  activeSession.msgs.push({role:'me',text:txt,ts:Date.now(),to:ch});
   if(activeSession.title==='새 작업') activeSession.title=txt.slice(0,40);
   activeSession.pending=true; activeSession.ts=Date.now();
   sessions=sessions.filter(s=>s.id!==activeSession.id); sessions.unshift(activeSession);
@@ -1618,7 +1751,6 @@ async function doSend(){
     if(wasEmpty){ flipFirstSend(first, dock, stage); }
     else { renderChat(); markFreshBubble(); }
   }
-  setStageTitle();
   try{
     await api('/api/post',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({channel:ch,text:txt})});
@@ -1743,16 +1875,23 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
     +(me.login_id&&me.login_id!==label?' · '+me.login_id:'');
   document.getElementById('pfAvatar').textContent=(label||'H').trim().charAt(0).toUpperCase();
   document.title='에이전트 BOGO '+(ROLE_KO[me.role]||'')+' 워크스페이스';
-  if(/Mac|iPhone|iPad/.test(navigator.platform||'')) ; else document.getElementById('cmdkKbd').textContent='Ctrl K';
+  if(!/Mac|iPhone|iPad/.test(navigator.platform||'')){ const kb=document.getElementById('cmdkKbd'); if(kb) kb.textContent='Ctrl K'; }
 
   // role 분기: ceo/admin 만 에이전트현황·기억보관소
+  // (statAgents 는 topbar 제거 커밋(4dbffbf)에서 사라졌으므로 참조하지 않는다)
   if(me.role==='ceo'||me.role==='admin'){
     document.getElementById('navRoster').style.display='';
-    const sa=document.getElementById('statAgents'); if(sa) sa.style.display='';  // topbar 제거 가드
     document.getElementById('navSettings').style.display='';
     const vn=document.getElementById('navVault'); if(vn) vn.style.display='';
-  } else {
-    const sa=document.getElementById('statAgents'); if(sa) sa.style.display='none';  // topbar 제거 가드
+  }
+
+  // staff IA 축소: '새 작업'→'보고 작성' 라벨 치환, '보고'를 기본 진입 강조, '과거 질문'은 하위로 이동
+  if(me.role==='staff'){
+    const nc=document.querySelector('#navChat .ni-txt'); if(nc) nc.textContent='보고 작성';
+    const grp=document.querySelector('#navHistory')&&document.querySelector('#navHistory').parentNode;
+    const nh=document.getElementById('navHistory'), nr=document.getElementById('navReports');
+    // 보고를 과거 질문보다 위로(부차화)
+    if(grp&&nh&&nr&&nr.nextSibling!==nh){ grp.insertBefore(nr, nh); }
   }
 
   // 데이터 로드
@@ -1760,12 +1899,20 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
     const d=await api('/api/channels');
     channels=d.channels; defaultPost=d.default_post_channel;
     buildTeamGroups();
-    const tn=document.getElementById('targetName'); if(tn) tn.textContent=defaultPost||'없음';  // dock-hint 제거 가드
+    // targetName(dock-hint)은 제거 커밋(4dbffbf)에서 사라졌으므로 참조하지 않는다.
   }catch(e){ toast('초기화 실패: '+e.message); }
 
   loadSessions();
   if(sessions.length) activeSession=sessions[0]; else newSession();
+  // staff 권한기반 기본 전송채널: CEO브리핑이면 403이므로 자기 부서(게시 가능 첫) 채널로 보정
+  if(me.role==='staff'){
+    const fp=firstPostChannel();
+    if(fp){ defaultPost=fp; if(activeSession&&(!activeSession.channel||/브리핑/.test(activeSession.channel))) activeSession.channel=fp; }
+  }
+  renderDockChips();
   refreshStats();
+  refreshReportBadge();
+  setInterval(refreshReportBadge, POLL_MS);
   if(me.role!=='staff'){ loadRoster().catch(()=>{}); }
 
   // 이벤트 바인딩
@@ -1801,7 +1948,8 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
     else if(e.key==='Escape'){ closePanel(); }
   });
 
-  setView('chat');
+  // 역할별 진입화면: staff는 보고, ceo/admin은 채팅
+  setView(me.role==='staff' ? 'reports' : 'chat');
 })();
 </script>
 </body>
