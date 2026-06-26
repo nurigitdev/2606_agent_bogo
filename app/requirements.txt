@@ -8,7 +8,8 @@ websockets>=15.0       # Mattermost WebSocket 게이트웨이 수신
 
 # ── Vault RAG(로컬 전용, 네트워크·API 키 0) ───────────────────────────────────
 # 핵심 검색(FTS5)·writer·마이그레이션·MOC 동기화는 표준 라이브러리(sqlite3)만으로 동작한다.
-# 아래 임베딩 패키지는 '의미검색 보강용 선택 의존성'이다 — 미설치 시 FTS5 단독으로 graceful
-# degrade 한다(에러 아님). 설치하면 하이브리드(어휘+의미) 검색이 켜진다. 모델은 최초 1회만
-# 로컬 캐시되며 이후 HF_HUB_OFFLINE 로 오프라인 동작(네트워크·키 사용 0).
-sentence-transformers>=2.7  # (선택) 로컬 임베딩 all-MiniLM-L6-v2 — 의미검색 보강. 없으면 FTS5-only.
+# 아래 임베딩 패키지는 하이브리드(어휘 FTS5 + 의미) 검색을 켜는 정식 의존성이다. 모델은
+# 최초 1회만 로컬 캐시(all-MiniLM-L6-v2, 384dim)되며 이후 HF_HUB_OFFLINE 로 100% 오프라인
+# 추론(네트워크·API 키 사용 0). 패키지 미설치 시에도 코드는 에러 없이 FTS5 단독으로 graceful
+# degrade 하므로, 임베딩 추론을 끄려면 단순히 이 줄을 제거하면 된다.
+sentence-transformers>=2.7  # 로컬 임베딩 all-MiniLM-L6-v2 — 하이브리드 의미검색(torch/transformers 포함).
