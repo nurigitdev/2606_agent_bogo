@@ -35,9 +35,43 @@ TOP_DIRS = (DIR_CEO, DIR_TEAMS, DIR_REPORTS, DIR_FEEDBACK, DIR_SYSTEM,
             DIR_TEMPLATES, DIR_INDEX)
 
 # ── frontmatter 스키마 ────────────────────────────────────────────────────────
-REQUIRED_KEYS = ("id", "type", "role", "team", "date", "tags", "links")
-VALID_TYPES = ("report", "feedback", "decision", "profile", "policy")
+# visibility 를 필수 키에 더한다(공유 지식 계층의 1차 키). 레거시(누락) 노트는 검증/색인에서
+# 'team' 으로 간주해 격리·공유의 합리적 중간값을 갖게 한다(아래 default_visibility 참조).
+REQUIRED_KEYS = ("id", "type", "role", "team", "visibility", "date", "tags", "links")
+VALID_TYPES = ("report", "feedback", "decision", "profile", "policy", "digest")
 LIST_KEYS = ("tags", "links")
+
+# ── 공유 지식 계층(visibility) ────────────────────────────────────────────────
+# private = 자기 role 만 회수 / team = 같은 team 만 / org = 전사 공개.
+# 격리(자기 기억)와 공유(전사 공개 기억)를 양립시키는 핵심 축. RAG 회수 필터의 1차 키.
+VALID_VISIBILITY = ("private", "team", "org")
+# type 별 기본 visibility(합리적 확정): 보고/피드백은 같은 팀이 보는 게 자연스럽고(team),
+# CEO 의 결정·정책은 전사 규범이므로 org, 정체성 노트(profile)는 개인 격리(private).
+# digest(롤업 다이제스트)는 전사 조망용이므로 org.
+_DEFAULT_VISIBILITY = {
+    "report": "team",
+    "feedback": "team",
+    "decision": "org",
+    "policy": "org",
+    "profile": "private",
+    "digest": "org",
+}
+# 레거시(visibility 누락) 노트의 안전 기본값. 너무 넓지도(org) 좁지도(private) 않은 team.
+LEGACY_VISIBILITY = "team"
+
+
+def default_visibility(ntype):
+    """type -> 기본 visibility. 미정의 type 은 보수적으로 team(레거시 기본값과 동일)."""
+    return _DEFAULT_VISIBILITY.get(ntype, LEGACY_VISIBILITY)
+
+
+def normalize_visibility(value, ntype=None):
+    """frontmatter 의 visibility 값을 정규화. 빈 값/누락/허용집합 외 값은 type 기본값(또는 LEGACY).
+    색인·검색·마이그레이션이 모두 이 한 함수를 통과해 '회수 가능 집합'을 일관되게 정의한다."""
+    v = (value or "").strip().lower()
+    if v in VALID_VISIBILITY:
+        return v
+    return default_visibility(ntype) if ntype is not None else LEGACY_VISIBILITY
 
 # 한글은 보존하되 경로 위험 문자만 제거(Obsidian 한글 파일명 지원 → 팀명 '개발' 살림).
 _UNSAFE_PATH_RE = re.compile(r"[\\/:*?\"<>|\x00-\x1f]")
@@ -92,13 +126,15 @@ def report_dir(date_iso=None):
 
 
 def default_frontmatter(ntype, role, team, links=None, tags=None, note_id=None,
-                        date_iso=None):
-    """스키마를 만족하는 frontmatter dict 를 기본값으로 채워 생성한다."""
+                        date_iso=None, visibility=None):
+    """스키마를 만족하는 frontmatter dict 를 기본값으로 채워 생성한다.
+    visibility 가 None 이면 type 별 기본값(default_visibility)을 적용한다."""
     return {
         "id": note_id or "",
         "type": ntype,
         "role": role if role is not None else "",
         "team": team if team is not None else "",
+        "visibility": normalize_visibility(visibility, ntype),
         "date": date_iso or utc_now_iso(),
         "tags": list(tags) if tags else [],
         "links": list(links) if links else [],
@@ -115,7 +151,9 @@ def validate_frontmatter(fm):
             errors.append(f"필수 키 누락: {k}")
     if fm.get("type") not in VALID_TYPES:
         errors.append(f"type 위반(허용={VALID_TYPES}): {fm.get('type')!r}")
-    for k in ("role", "team", "id", "date"):
+    if "visibility" in fm and fm.get("visibility") not in VALID_VISIBILITY:
+        errors.append(f"visibility 위반(허용={VALID_VISIBILITY}): {fm.get('visibility')!r}")
+    for k in ("role", "team", "id", "date", "visibility"):
         if k in fm and not isinstance(fm.get(k), str):
             errors.append(f"{k} 는 문자열이어야 함: {type(fm.get(k)).__name__}")
     for k in LIST_KEYS:

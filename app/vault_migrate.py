@@ -75,8 +75,22 @@ def _write_migrated(role, team, line, key, writer):
 
 def migrate(dry_run=False):
     """모든 memory_*.json 을 Vault 노트로 1회 변환(멱등). 통계 dict 반환.
-    dry_run=True 면 쓰지 않고 변환 대상 수만 센다(검증용)."""
+    dry_run=True 면 쓰지 않고 변환 대상 수만 센다(검증용).
+
+    마이그레이션은 과거 데이터 '일괄 적재'이므로 노트마다 RAG 검색(자동 백링크)을 돌리는 것은
+    비효율·무의미하다. 그래서 이 구간에서만 writer 의 자동 백링크를 끈다(원자 쓰기·멱등은 유지).
+    """
     W.ensure_vault()
+    prev_autolink = W._AUTOLINK_ENABLED
+    W._AUTOLINK_ENABLED = False  # 일괄 적재 중 백링크 비활성(성능·무의미)
+    try:
+        return _migrate_inner(dry_run)
+    finally:
+        W._AUTOLINK_ENABLED = prev_autolink
+
+
+def _migrate_inner(dry_run=False):
+    """migrate() 의 실제 변환 루프(자동 백링크 토글 컨텍스트 안에서 호출)."""
     existing = _existing_keys()
     stats = {"role_memo": 0, "learn": 0, "room": 0, "skipped": 0}
 
@@ -125,7 +139,52 @@ def migrate(dry_run=False):
     return stats
 
 
+def backfill_visibility(dry_run=False):
+    """기존(레거시) 노트의 frontmatter 에 visibility 를 채운다(스키마 진화 멱등 마이그레이션).
+
+    규칙(vault_schema.default_visibility 와 동일): decision/policy=org, report/feedback=team,
+    profile=private. 이미 유효한 visibility 가 있으면 건드리지 않는다(멱등). CEO 의 결정·정책
+    노트가 org 로 승격돼 전 에이전트가 전사 규범으로 회수할 수 있게 된다.
+    반환 통계 dict. dry_run=True 면 쓰지 않고 대상 수만 센다."""
+    if not os.path.isdir(S.VAULT_ROOT):
+        return {"updated": 0, "already": 0, "skipped": 0}
+    stats = {"updated": 0, "already": 0, "skipped": 0}
+    for dirpath, _d, files in os.walk(S.VAULT_ROOT):
+        if os.path.basename(dirpath) == S.DIR_TEMPLATES:
+            continue
+        for fn in files:
+            if not fn.endswith(".md") or fn.startswith(".tmp_"):
+                continue
+            abs_p = os.path.join(dirpath, fn)
+            try:
+                with open(abs_p, encoding="utf-8") as f:
+                    raw = f.read()
+            except OSError:
+                stats["skipped"] += 1
+                continue
+            fm, body = S.parse_note(raw)
+            if not fm:
+                stats["skipped"] += 1
+                continue
+            ntype = fm.get("type", "")
+            cur = fm.get("visibility")
+            want = S.normalize_visibility(cur, ntype)
+            if cur in S.VALID_VISIBILITY:
+                stats["already"] += 1
+                continue
+            fm["visibility"] = want
+            stats["updated"] += 1
+            if not dry_run:
+                content = S.dump_frontmatter(fm) + "\n" + (body or "").rstrip() + "\n"
+                W._atomic_write(abs_p, content)
+    return stats
+
+
 if __name__ == "__main__":
     import sys
     dry = "--dry-run" in sys.argv
-    print(("[dry-run] " if dry else "") + str(migrate(dry_run=dry)))
+    if "--backfill-visibility" in sys.argv:
+        print(("[dry-run] " if dry else "") + "backfill_visibility="
+              + str(backfill_visibility(dry_run=dry)))
+    else:
+        print(("[dry-run] " if dry else "") + str(migrate(dry_run=dry)))

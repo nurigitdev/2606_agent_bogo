@@ -3,7 +3,8 @@ id: HOME
 type: policy
 role: system
 team: ""
-date: "2026-06-25T08:26:22Z"
+visibility: org
+date: "2026-06-26T01:22:05Z"
 tags:
   - moc
   - org-map
@@ -38,5 +39,12 @@ links: []
 
 ## 진실원천 폴더
 
-- `00_CEO/` CEO 판단 · `20_Reports/` 보고(연/월) · `30_Feedback/` 피드백 · `90_System/` 정책
+- `00_CEO/` CEO 판단 · `20_Reports/` 보고(연/월) · `30_Feedback/` 피드백 · `90_System/` 정책 · `90_System/_digests/` 라이프사이클 다이제스트(롤업)
 
+
+## 최근 다이제스트(롤업)
+
+- [[digest_daily_2026-06-25_dev_78c380c8]] — **daily 다이제스트 — 미표기팀/dev (2026-06-25) · 원본 1건**
+- [[digest_daily_2026-06-25_dev_d7a857c2]] — **daily 다이제스트 — 개발/dev (2026-06-25) · 원본 1건**
+- [[digest_daily_2026-06-25_room_ac7a7e07]] — **daily 다이제스트 — 미표기팀/room (2026-06-25) · 원본 2건**
+- [[digest_daily_2026-06-25_orchestrator_44c7ff2b]] — **daily 다이제스트 — 미표기팀/orchestrator (2026-06-25) · 원본 3건**

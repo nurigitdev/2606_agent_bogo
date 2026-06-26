@@ -23,6 +23,11 @@ import uuid
 
 import vault_schema as S
 
+# 자동 백링크 최대 개수(과다 연결로 그래프가 잡음이 되지 않게). 보수적.
+_AUTOLINK_MAX = int(os.environ.get("VAULT_AUTOLINK_MAX", "3") or "3")
+# 자동 백링크 토글(1=on). 인덱스가 없거나 끄고 싶을 때 0.
+_AUTOLINK_ENABLED = os.environ.get("VAULT_AUTOLINK", "1") == "1"
+
 
 def ensure_vault():
     """Vault 최상위 폴더 구조를 보장(idempotent). 부재 폴더만 생성한다."""
@@ -112,19 +117,64 @@ def _compose_body(summary, body):
     return head + body
 
 
+def _auto_backlinks(role, team, query_text, exclude_id="", existing=None, limit=None):
+    """쓰기 시 관련 기존 노트를 RAG 로 찾아 [[wikilink]] 후보 리스트를 만든다(자기참조 방지).
+
+    근거: Obsidian 그래프는 links([[...]])로 엣지를 그린다. 새 보고가 과거 관련 보고를 자동
+    연결하면 사람이 수작업으로 잇지 않아도 맥락이 이어진다. 검색 대상은 viewer 가시성(자기/
+    같은 팀/전사 공개)을 따른다. 인덱스 없음/모듈 없음/오류 -> 빈 리스트(쓰기는 항상 성공).
+
+    무한루프·자기참조 방지:
+      - exclude_id(=이번 노트 id)와 동일한 노트는 제외(자기 자신을 가리키지 않게).
+      - 이미 existing(명시 links)에 있는 대상은 중복 추가하지 않는다.
+      - 검색은 '읽기 전용'이며 새 노트를 만들지 않으므로 연쇄 생성 루프가 생기지 않는다.
+    """
+    if not _AUTOLINK_ENABLED or not (query_text or "").strip():
+        return []
+    try:
+        import vault_rag as R
+        hits = R.search(query_text, role=role or None, team=team or None,
+                        top_k=(limit or _AUTOLINK_MAX) + 2)
+    except Exception:  # noqa: BLE001 — 인덱스 부재/오류 시 백링크 없이 진행
+        return []
+    have = set()
+    for ln in (existing or []):
+        m = S._WIKILINK_RE.search(ln) if isinstance(ln, str) else None
+        have.add(m.group(1).strip() if m else (ln or "").strip())
+    out = []
+    for h in hits:
+        nid = (h.get("note_id") or "").strip()
+        if not nid or nid == exclude_id or nid in have:
+            continue
+        wl = f"[[{nid}]]"
+        if wl in (existing or []):
+            continue
+        out.append(wl)
+        have.add(nid)
+        if len(out) >= (limit or _AUTOLINK_MAX):
+            break
+    return out
+
+
 def append_report(role, team, summary, body="", links=None, tags=None):
     """보고 노트 1건을 20_Reports/<YYYY>/<MM> 에 원자적으로 기록.
-    summary 는 한 줄 결론, body 는 상세. links 로 관련 노트를 [[wikilink]] 연결한다."""
-    fm = S.default_frontmatter("report", role, team, links=links, tags=tags)
+    summary 는 한 줄 결론, body 는 상세. links 로 관련 노트를 [[wikilink]] 연결한다.
+    쓰기 전에 관련 과거 노트를 RAG 로 찾아 links 에 자동 백링크를 보강한다(자기참조 방지)."""
+    base_links = list(links) if links else []
+    auto = _auto_backlinks(role, team, f"{summary}\n{body}", existing=base_links)
+    fm = S.default_frontmatter("report", role, team, links=base_links + auto, tags=tags)
     return write_note(fm, _compose_body(summary, body))[0]
 
 
 def append_feedback(role, team, summary, body="", links=None, tags=None, kind="feedback"):
-    """피드백/교정/노하우 노트 1건을 30_Feedback 에 기록. kind 는 tags 로 분류 보존."""
+    """피드백/교정/노하우 노트 1건을 30_Feedback 에 기록. kind 는 tags 로 분류 보존.
+    쓰기 전에 관련 과거 노트를 RAG 로 찾아 links 에 자동 백링크를 보강한다(자기참조 방지)."""
     tag_list = list(tags) if tags else []
     if kind and kind not in tag_list:
         tag_list.append(kind)
-    fm = S.default_frontmatter("feedback", role, team, links=links, tags=tag_list)
+    base_links = list(links) if links else []
+    auto = _auto_backlinks(role, team, f"{summary}\n{body}", existing=base_links)
+    fm = S.default_frontmatter("feedback", role, team, links=base_links + auto, tags=tag_list)
     return write_note(fm, _compose_body(summary, body))[0]
 
 

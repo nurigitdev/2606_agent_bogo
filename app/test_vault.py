@@ -24,6 +24,8 @@ import vault_writer as W
 import vault_rag as R
 import vault_org as O
 import vault_migrate as M
+import vault_rollup as RU
+import vault_eval as EV
 
 
 @pytest.fixture()
@@ -250,3 +252,176 @@ def test_rag_team_filter_includes_blank_team(vault):
     assert "" in teams and "개발" in teams, teams
     # 단, role 격리는 유지 — 전부 dev 여야 한다.
     assert all(h["role"] == "dev" for h in hits)
+
+
+# ── (1) 공유 지식 계층(visibility) ────────────────────────────────────────────
+def test_visibility_defaults_and_schema():
+    """type 별 기본 visibility 와 검증 규칙."""
+    assert S.default_visibility("report") == "team"
+    assert S.default_visibility("decision") == "org"
+    assert S.default_visibility("policy") == "org"
+    assert S.default_visibility("profile") == "private"
+    assert S.default_visibility("digest") == "org"
+    assert S.normalize_visibility("", "report") == "team"
+    assert S.normalize_visibility("ORG", "report") == "org"   # 대소문자 무관
+    assert S.normalize_visibility("bogus", "policy") == "org"  # 잘못된 값 -> type 기본
+    fm = S.default_frontmatter("report", "dev", "개발")
+    fm["id"] = "n1"
+    assert fm["visibility"] == "team"
+    assert S.validate_frontmatter(fm) == []
+    fm["visibility"] = "BAD"
+    assert any("visibility 위반" in e for e in S.validate_frontmatter(fm))
+
+
+def test_visibility_private_isolated_across_teams(vault):
+    """타팀 private 노트는 회수되지 않고, org 는 전사 회수된다(가시성 필터 경계)."""
+    # hr 팀 사람의 private profile(자기 격리).
+    W.write_profile("hr", "인사총무", "인사 담당자 개인 메모 비밀")
+    # dev 팀 사람의 팀 보고(team).
+    W.append_report("dev", "개발", "개발 배포 자동화 보고")
+    # CEO 의 전사 정책(org).
+    W.append_policy("ceo", "", "전사 보안 정책 공개")
+    R.index()
+    # dev viewer 관점: 타팀(hr) private profile 은 안 보이고, 전사 org 정책은 보인다.
+    dev_hits = R.search("메모 보고 정책", role="dev", team="개발", top_k=10)
+    paths_types = {(h["type"], h["role"]) for h in dev_hits}
+    assert ("profile", "hr") not in paths_types  # 타팀 private 격리
+    assert any(h["type"] == "policy" and h["visibility"] == "org" for h in dev_hits)  # org 공개
+    assert any(h["role"] == "dev" for h in dev_hits)  # 자기 기억
+
+
+def test_visibility_team_shared_within_team(vault):
+    """같은 팀의 team 가시성 노트는 다른 role 이어도 회수된다(팀 공유)."""
+    W.append_report("dev", "개발", "팀원A 의 팀 보고")
+    # 같은 '개발' 팀, 다른 role.
+    W.append_report("dev2", "개발", "팀원B 의 팀 보고")
+    R.index()
+    # dev2 viewer, 같은 개발 팀 -> 팀원A(role=dev) 의 team 보고도 회수.
+    hits = R.search("팀 보고", role="dev2", team="개발", top_k=10)
+    roles = {h["role"] for h in hits}
+    assert "dev" in roles and "dev2" in roles, roles
+
+
+def test_visibility_dashboard_bypass(vault):
+    """apply_visibility=False(대시보드 관리자) 는 가시성 무시하고 메타필터만 적용."""
+    W.write_profile("hr", "인사총무", "hr 개인 비밀 메모")
+    R.index()
+    # viewer 가시성 모드면 dev 가 hr private 을 못 본다.
+    assert R.search("비밀 메모", role="dev", top_k=5) == []
+    # 관리자 모드(가시성 우회) + role 필터 없이는 전체 회수.
+    admin = R.search("비밀 메모", apply_visibility=False, top_k=5)
+    assert any(h["role"] == "hr" for h in admin)
+
+
+# ── (2) 의미검색 numpy=순수파이썬 일치 ────────────────────────────────────────
+def test_semantic_numpy_matches_purepython(vault, monkeypatch):
+    """numpy 벡터화 결과와 순수파이썬 폴백 결과가 동일 순위를 내는지(정확도 불변)."""
+    if not R.embed_available():
+        pytest.skip("임베딩 모델 없음 — 의미검색 경로 검증 불가")
+    for i in range(8):
+        W.append_report("dev", "개발", f"보고 주제 {i} 캐시 전략 색인 최적화 {i}",
+                        body=f"본문 {i} " * 5)
+    R.reindex()
+    con = R.connect()
+    try:
+        q = "캐시 전략 색인 최적화"
+        np_rank = R._semantic_rank(con, q, "dev", "개발", None, 8)
+        # numpy 를 강제로 끈 순수파이썬 경로.
+        monkeypatch.setattr(R, "_np", None)
+        R._EMBED_CACHE.clear()  # 캐시 형식(ndarray vs list) 재구축
+        py_rank = R._semantic_rank(con, q, "dev", "개발", None, 8)
+        assert [r for r, _ in np_rank] == [r for r, _ in py_rank]
+    finally:
+        con.close()
+        R._EMBED_CACHE.clear()
+
+
+def test_embedding_cache_invalidated_on_reindex(vault):
+    """인덱스 변경 시 임베딩 캐시 버전이 올라 무효화되는지."""
+    if not R.embed_available():
+        pytest.skip("임베딩 모델 없음")
+    W.append_report("dev", "개발", "첫 보고 캐시 테스트")
+    R.index()
+    con = R.connect()
+    try:
+        v1 = R._index_version(con)
+        R._load_embed_matrix(con)
+        W.append_report("dev", "개발", "둘째 보고 캐시 무효화")
+        R.index(con)
+        v2 = R._index_version(con)
+        assert v2 > v1  # 색인 변경 -> 버전 상승
+        rowids, _ = R._load_embed_matrix(con)
+        assert len(rowids) == 2  # 새 노트 반영
+    finally:
+        con.close()
+
+
+# ── (3) 라이프사이클 롤업 ─────────────────────────────────────────────────────
+def test_extractive_summary_is_local_and_deterministic():
+    text = ("배포 자동화 파이프라인을 구축했다. 보안 점검을 통과했다. "
+            "테스트 커버리지가 올랐다. 캐시 전략을 도입했다. 응답속도가 개선됐다. "
+            "모니터링 대시보드를 추가했다.")
+    s1 = RU.extractive_summary(text, max_sentences=3)
+    s2 = RU.extractive_summary(text, max_sentences=3)
+    assert s1 == s2 and len(s1) == 3  # 결정적 + 상한 준수
+    assert all(isinstance(x, str) and x for x in s1)
+
+
+def test_rollup_idempotent(vault):
+    """같은 기간 롤업 재실행 시 digest 가 갱신될 뿐 중복 생성되지 않는다(멱등)."""
+    today = S.utc_now_iso()[:10]
+    W.append_report("dev", "개발", "롤업 대상 보고1 캐시")
+    W.append_report("dev", "개발", "롤업 대상 보고2 색인")
+    s1 = RU.rollup("daily", date_iso=today)
+    assert s1["created"] >= 1 and s1["groups"] >= 1
+    digests1 = [p for p in _walk_md(S.VAULT_ROOT)[0] if "_digests" in p]
+    s2 = RU.rollup("daily", date_iso=today)
+    assert s2["updated"] >= 1 and s2["created"] == 0  # 재실행=갱신, 신규 0
+    digests2 = [p for p in _walk_md(S.VAULT_ROOT)[0] if "_digests" in p]
+    assert len(digests1) == len(digests2)  # digest 수 불변
+    # digest frontmatter 가 org 가시성 + 백링크 보유.
+    fm, _ = S.parse_note(open(digests2[0], encoding="utf-8").read())
+    assert fm["type"] == "digest" and fm["visibility"] == "org"
+    assert any("[[" in ln for ln in fm.get("links", []))
+
+
+# ── (4) 자동 백링크 ───────────────────────────────────────────────────────────
+def test_auto_backlink_links_related_no_self(vault):
+    """쓰기 시 관련 과거 노트를 links 에 자동 채우되 자기참조는 없다."""
+    p1 = W.append_report("dev", "개발", "캐시 전략 Redis L2 도입 보고")
+    R.index()  # 첫 노트를 인덱싱해야 둘째가 백링크로 찾는다
+    p2 = W.append_report("dev", "개발", "캐시 전략 Redis 후속 최적화 보고")
+    fm2, _ = S.parse_note(open(p2, encoding="utf-8").read())
+    id1 = os.path.splitext(os.path.basename(p1))[0]
+    id2 = fm2["id"]
+    links = fm2.get("links", [])
+    assert f"[[{id1}]]" in links  # 관련 과거 노트 자동 연결
+    assert f"[[{id2}]]" not in links  # 자기참조 없음
+
+
+# ── (5) eval recall@k ────────────────────────────────────────────────────────
+def test_eval_recall_baseline(vault):
+    """self-retrieval recall@k 측정이 동작하고 합리적 기준선을 낸다."""
+    for i in range(5):
+        W.append_report("dev", "개발", f"고유한 보고 제목 알파{i} 베타{i} 감마{i}")
+    R.reindex()
+    res = EV.evaluate(ks=(1, 3, 5))
+    assert res["n"] >= 5
+    # 노트 자신의 제목으로 검색하므로 recall@5 는 높아야 한다(검색 정상성 기준선).
+    assert res["recall"]["@5"] >= 0.8, res
+
+
+# ── 마이그레이션 visibility 백필 ──────────────────────────────────────────────
+def test_backfill_visibility_idempotent(vault):
+    """레거시(visibility 누락) 노트에 type 기본 visibility 를 채우고 멱등."""
+    # visibility 없는 레거시 노트를 수동으로 깐다(default_frontmatter 우회).
+    fm = {"id": "legacy1", "type": "decision", "role": "ceo", "team": "",
+          "date": S.utc_now_iso(), "tags": [], "links": []}
+    path = S.vault_path(S.DIR_CEO, "legacy1.md")
+    W._atomic_write(path, S.dump_frontmatter(fm) + "\n레거시 결정 노트\n")
+    s1 = M.backfill_visibility()
+    assert s1["updated"] == 1
+    fm2, _ = S.parse_note(open(path, encoding="utf-8").read())
+    assert fm2["visibility"] == "org"  # decision -> org
+    s2 = M.backfill_visibility()
+    assert s2["updated"] == 0 and s2["already"] >= 1  # 멱등

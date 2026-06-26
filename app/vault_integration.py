@@ -36,6 +36,16 @@ def _safe_import():
         return None, None, None
 
 
+def _log_retrieval(query, hits, role, team, source):
+    """회수 텔레메트리를 append(실패 무해). 모듈 없으면 조용히 패스."""
+    try:
+        import vault_telemetry as T
+        T.log_retrieval(query, hits, viewer_role=role or "", viewer_team=team or "",
+                        source=source)
+    except Exception:  # noqa: BLE001 — 텔레메트리 실패는 흐름을 막지 않는다
+        pass
+
+
 def team_of_role(teams, role):
     """ROLE(파일 stem: dev/hr/orchestrator/ceo)을 팀 label 로 매핑. 팀 없으면 빈 문자열.
     teams.json 의 teams[].id == role 이면 그 label, 아니면(오케스트레이터/ceo) ''."""
@@ -69,6 +79,8 @@ def ensure_indexed(force=False):
 
 def retrieve_context(query, role, team="", existing_text="", top_k=None):
     """RAG 로 관련 과거 보고·피드백 top-k 를 회수해 프롬프트 주입 문자열로 반환.
+    - viewer 컨텍스트(호출 role/team)를 그대로 검색에 넘긴다 -> 가시성 모델에 의해 에이전트는
+      '자기 기억 + 같은 팀 공유 + 전사 공개(org)' 기억을 함께 회수한다(격리·공유 양립).
     - 기존 누적(세션/학습노트, existing_text)과 중복되는 라인은 제외(이중 주입 회피).
     - 결과 없음/모듈 없음/오류 -> 빈 문자열(주입 없이 기존 흐름 유지)."""
     if not VAULT_ENABLED or not (query or "").strip():
@@ -78,10 +90,12 @@ def retrieve_context(query, role, team="", existing_text="", top_k=None):
         return ""
     try:
         ensure_indexed()
+        # role/team = viewer 컨텍스트. 가시성 필터가 회수 가능 집합을 정의한다.
         hits = R.search(query, role=role or None, team=team or None,
                         top_k=top_k or RAG_TOP_K)
     except Exception:  # noqa: BLE001
         return ""
+    _log_retrieval(query, hits, role, team, source="retrieve_context")
     if not hits:
         return ""
     existing = existing_text or ""

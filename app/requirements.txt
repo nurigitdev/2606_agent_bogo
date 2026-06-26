@@ -13,3 +13,7 @@ websockets>=15.0       # Mattermost WebSocket 게이트웨이 수신
 # 추론(네트워크·API 키 사용 0). 패키지 미설치 시에도 코드는 에러 없이 FTS5 단독으로 graceful
 # degrade 하므로, 임베딩 추론을 끄려면 단순히 이 줄을 제거하면 된다.
 sentence-transformers>=2.7  # 로컬 임베딩 all-MiniLM-L6-v2 — 하이브리드 의미검색(torch/transformers 포함).
+# numpy: 의미검색 코사인을 행렬 연산으로 벡터화(대량 노트에서 순수파이썬 대비 수십~수백배 빠름).
+# 부재 시 순수파이썬 코사인으로 graceful degrade(정확도 동일). sentence-transformers 가 이미
+# 끌어오지만 vault_rag 가 직접 import 하므로 명시한다.
+numpy>=1.24

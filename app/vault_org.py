@@ -71,8 +71,37 @@ def _moc_lines(data):
             lines.append(f"- [[{lr.get('label', lr.get('id', ''))}]] — owner `{lr.get('owner', '')}`")
     lines += ["", "## 진실원천 폴더", "",
               f"- `{S.DIR_CEO}/` CEO 판단 · `{S.DIR_REPORTS}/` 보고(연/월) · "
-              f"`{S.DIR_FEEDBACK}/` 피드백 · `{S.DIR_SYSTEM}/` 정책", ""]
+              f"`{S.DIR_FEEDBACK}/` 피드백 · `{S.DIR_SYSTEM}/` 정책 · "
+              f"`{S.DIR_SYSTEM}/_digests/` 라이프사이클 다이제스트(롤업)", ""]
+    # 최근 다이제스트(롤업) 백링크 — 사람이 MOC 에서 '기간 요약'으로 바로 진입하게.
+    digests = _recent_digests()
+    if digests:
+        lines += ["", "## 최근 다이제스트(롤업)", ""]
+        for d in digests:
+            lines.append(f"- [[{d['id']}]] — {d['title']}")
     return lines
+
+
+def _recent_digests(limit=10):
+    """90_System/_digests 의 최신 digest 노트 메타를 수집(MOC 백링크용). 없으면 빈 리스트."""
+    out = []
+    ddir = S.vault_path(S.DIR_SYSTEM, "_digests")
+    if not os.path.isdir(ddir):
+        return out
+    for fn in os.listdir(ddir):
+        if not fn.endswith(".md") or fn.startswith(".tmp_"):
+            continue
+        try:
+            with open(os.path.join(ddir, fn), encoding="utf-8") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        fm, body = S.parse_note(raw)
+        title = body.strip().splitlines()[0][:100] if body.strip() else fn
+        out.append({"id": fm.get("id", os.path.splitext(fn)[0]), "title": title,
+                    "date": fm.get("date", "")})
+    out.sort(key=lambda x: x.get("date", ""), reverse=True)
+    return out[:limit]
 
 
 def write_moc(data):

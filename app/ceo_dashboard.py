@@ -430,12 +430,24 @@ def vault_search(query, role=None, team=None, ntype=None, top_k=8):
         return {"ok": True, "mode": st["mode"], "reason": "", "results": []}
     types = [ntype] if ntype else None
     try:
+        # 대시보드는 CEO/admin 전체 조망 -> 가시성 필터 우회(role/team 은 순수 메타필터로만).
         hits = VR.search(q, role=role or None, team=team or None,
-                         types=types, top_k=top_k)
+                         types=types, top_k=top_k, apply_visibility=False)
     except Exception as e:  # noqa: BLE001 — 검색 실패도 대시보드는 500 금지
         return {"ok": False, "mode": st["mode"],
                 "reason": f"검색 실패: {type(e).__name__}", "results": []}
+    _log_vault_search(q, hits, role, team)
     return {"ok": True, "mode": st["mode"], "reason": "", "results": hits}
+
+
+def _log_vault_search(query, hits, role, team):
+    """대시보드 RAG 검색 텔레메트리(실패 무해)."""
+    try:
+        import vault_telemetry as VT
+        VT.log_retrieval(query, hits, viewer_role=role or "admin",
+                         viewer_team=team or "", source="dashboard")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ── HTTP 핸들러 ──────────────────────────────────────────────────────────────
