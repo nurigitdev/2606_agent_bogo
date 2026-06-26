@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import websockets
@@ -702,6 +703,39 @@ def can_send(cname):
     return cname in SUBS
 
 
+def token_health():
+    """기동 시 봇 토큰의 유효성을 1회 확인한다(좀비 연결 가시화).
+
+    근본 배경: MM 서버 재시작 후 Personal Access Token 의 인메모리 세션 캐시가
+    DB 와 어긋나면, 토큰이 DB 상 유효(useraccesstokens.isactive=t)해도 API/WS 가
+    'Invalid or expired session'(401)을 돌려준다. 이때 WS 는 TCP 만 붙고 인증이
+    거부돼 posted 이벤트를 못 받는다 → 봇은 죽지 않고 무한 재접속만 도는 '좀비'가
+    되며, 가동 로그만 남고 처리 로그가 0 이라 운영자가 원인을 못 찾는다.
+
+    여기서 /users/me 를 1회 호출해 (username, 401 여부)를 명확히 로그로 남긴다.
+    실패해도 기존 흐름은 막지 않는다(graceful) — 진단 가시화가 목적이다.
+    반환: True(토큰 유효) / False(401 등 인증 실패 — 좀비 위험).
+    """
+    try:
+        req = urllib.request.Request(MM + "/users/me",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        u = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        return u.get("id") == BOT_ID
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read()[:160].decode("utf-8", "replace")
+        except Exception:
+            pass
+        # 401 은 토큰/세션 무효 — 운영자가 즉시 알아챌 수 있게 강한 경고로 남긴다.
+        print(f"[{NAME}] ❌ 토큰 인증 실패(HTTP {e.code}) — WS 는 붙어도 메시지를 못 받는 "
+              f"좀비 상태가 됩니다. MM 재시작/토큰 재발급 필요. 상세: {body}")
+        return False
+    except Exception as e:
+        print(f"[{NAME}] 토큰 헬스체크 호출 실패: {type(e).__name__}: {e} — 계속 진행")
+        return True  # 네트워크 일시 오류는 좀비로 단정하지 않는다(보수적)
+
+
 def ensure_bot_membership():
     """기동 시 BOT_ID를 자신의 구독 채널 전체 멤버로 보장(멱등, 1회).
 
@@ -733,6 +767,9 @@ async def run():
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
+        # 토큰 헬스체크(좀비 가시화): WS 인증과 같은 토큰이 REST 에서 통하는지 1회 확인.
+        # 401 이면 WS 도 posted 이벤트를 못 받는 좀비 상태이므로 강한 경고를 남긴다.
+        token_health()
         ensure_bot_membership()
         brain = "공식bogo" if B.is_official_available() else "커스텀(공식 미가용)"
         if B.is_official_available() and B.RECURSIVE_LEARNING:

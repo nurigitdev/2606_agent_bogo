@@ -145,6 +145,156 @@ class RosterTest(unittest.TestCase):
             self.assertIn("name", x)
 
 
+class BotStatusCacheTest(unittest.TestCase):
+    """봇 활성 판정 캐시 정책 회귀 테스트.
+
+    버그: _bot_status_cache 가 TTL 없는 영구 캐시라, 서버가 Mattermost 보다 먼저
+          기동하거나 기동 시점 502/404 였을 때 첫 bot_status 가 예외→{ok:False}로
+          캐시되면 백엔드가 회복돼도 영구 비활성으로 고착됐다.
+    근본수정: 실패(ok=False)는 캐시하지 않고, 성공(ok=True)만 짧은 TTL 로 캐시.
+    """
+
+    def setUp(self):
+        self._orig_mm = D.mm
+        self._orig_ttl = D._BOT_STATUS_TTL
+        D._bot_status_cache.clear()
+        # _bot_id_for 가 실제 *_config.json 을 읽어 유효 bot_id 를 돌려주는
+        # config 하나를 자동 선택(데이터 파일 의존을 최소화).
+        self._cfg = next(
+            (c for c in D.CONFIG_TO_ROLES if c and D._bot_id_for(c)), None
+        )
+
+    def tearDown(self):
+        D.mm = self._orig_mm
+        D._BOT_STATUS_TTL = self._orig_ttl
+        D._bot_status_cache.clear()
+
+    def _require_cfg(self):
+        if not self._cfg:
+            self.skipTest("유효 bot_id 를 가진 *_config.json 이 없어 캐시 경로 검증 불가")
+        return self._cfg
+
+    def test_failure_is_not_cached_and_recovers(self):
+        """일시 장애로 첫 조회가 실패해도 영구 캐시되지 않고, 백엔드 회복 후 활성 복구."""
+        cfg = self._require_cfg()
+
+        class FlakyMM:
+            """첫 user() 호출은 장애(예외), 이후 호출은 정상 계정 반환."""
+
+            def __init__(self):
+                self.calls = 0
+
+            def user(self, uid):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("backend 502 (Mattermost 기동 전)")
+                return {"username": "bot", "delete_at": 0}
+
+        flaky = FlakyMM()
+        D.mm = flaky
+
+        # 1) 장애 시점: 비활성으로 보이지만 캐시에 저장되면 안 된다.
+        first = D.bot_status(cfg)
+        self.assertFalse(first["ok"])
+        self.assertNotIn(cfg, D._bot_status_cache)  # 실패는 비캐시
+
+        # 2) 다음 폴링: 백엔드 회복 → 재시도되어 활성으로 자동 복구.
+        second = D.bot_status(cfg)
+        self.assertTrue(second["ok"])
+        self.assertIn(cfg, D._bot_status_cache)  # 성공만 캐시
+        self.assertEqual(flaky.calls, 2)  # 실패가 캐시됐다면 재시도가 없었을 것
+
+    def test_success_is_cached_then_refetched_after_ttl(self):
+        """성공은 TTL 동안 캐시(중복 호출 절감)되고, TTL 만료 후 재조회된다."""
+        cfg = self._require_cfg()
+
+        class CountingMM:
+            def __init__(self):
+                self.calls = 0
+
+            def user(self, uid):
+                self.calls += 1
+                return {"username": "bot", "delete_at": 0}
+
+        counting = CountingMM()
+        D.mm = counting
+        D._BOT_STATUS_TTL = 60.0
+
+        # 1) 첫 조회 성공 → 캐시.
+        self.assertTrue(D.bot_status(cfg)["ok"])
+        self.assertEqual(counting.calls, 1)
+
+        # 2) TTL 내 재조회: 캐시 히트로 user API 추가 호출 없음.
+        self.assertTrue(D.bot_status(cfg)["ok"])
+        self.assertEqual(counting.calls, 1)
+
+        # 3) TTL 만료 강제: 다음 조회는 다시 user API 를 호출(계정 상태 변화 반영).
+        D._bot_status_cache[cfg]["exp"] = 0.0
+        self.assertTrue(D.bot_status(cfg)["ok"])
+        self.assertEqual(counting.calls, 2)
+
+    def test_deactivated_account_after_ttl_reflects_inactive(self):
+        """TTL 만료 후 계정이 비활성(delete_at!=0)으로 바뀌면 그 변화가 반영된다."""
+        cfg = self._require_cfg()
+
+        state = {"delete_at": 0}
+
+        class StatefulMM:
+            def user(self, uid):
+                return {"username": "bot", "delete_at": state["delete_at"]}
+
+        D.mm = StatefulMM()
+
+        self.assertTrue(D.bot_status(cfg)["ok"])  # 활성 → 캐시
+        # 계정 비활성화 + TTL 만료 강제.
+        state["delete_at"] = 123456789
+        D._bot_status_cache[cfg]["exp"] = 0.0
+        # 비활성으로 재판정되고, 실패이므로 캐시에서 제거된다.
+        self.assertFalse(D.bot_status(cfg)["ok"])
+        self.assertNotIn(cfg, D._bot_status_cache)
+
+
+class AuthorNameCacheTest(unittest.TestCase):
+    """_author_name 의 동일 버그 클래스(실패 fallback 영구 캐시) 회귀 테스트.
+
+    버그: user API 일시 장애 시 'fallback(사람)' 을 _author_cache 에 영구 저장해,
+          해당 사용자가 백엔드 회복 뒤에도 계속 '사람' 으로 고착됐다.
+    근본수정: 예외 경로는 캐시하지 않고 'fallback' 만 반환 → 다음 조회에서 재시도.
+    """
+
+    def setUp(self):
+        self._orig_mm = D.mm
+        D._author_cache.clear()
+
+    def tearDown(self):
+        D.mm = self._orig_mm
+        D._author_cache.clear()
+
+    def test_failed_lookup_not_cached_and_recovers(self):
+        class FlakyMM:
+            def __init__(self):
+                self.calls = 0
+
+            def user(self, uid):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("backend 502")
+                return {"nickname": "진짜닉네임", "delete_at": 0}
+
+        flaky = FlakyMM()
+        D.mm = flaky
+        uid = "non-bot-user-xyz"
+
+        # 1) 장애: fallback 반환하되 캐시되면 안 된다.
+        self.assertEqual(D._author_name(uid), "사람")
+        self.assertNotIn(uid, D._author_cache)
+
+        # 2) 회복: 재시도되어 실제 닉네임 해석 + 그때 캐시.
+        self.assertEqual(D._author_name(uid), "진짜닉네임")
+        self.assertIn(uid, D._author_cache)
+        self.assertEqual(flaky.calls, 2)
+
+
 # ── Vault(누적 기억) 통합 테스트 ────────────────────────────────────────────────
 class _FakeHandler:
     """Handler 의 Vault 라우트 메서드만 떼어 단위 테스트하기 위한 경량 믹스인 호스트.

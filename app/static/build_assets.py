@@ -19,17 +19,18 @@ CYAN = (24, 180, 230)   # #18B4E6
 HEX_NAVY = "#1C5FAE"
 HEX_CYAN = "#18B4E6"
 
-# ── 정밀 좌표 설계 (100x100 viewBox 기준) ────────────────────────────────────
-# 좌측 삼각형의 3개 논리 꼭짓점:
-#   TC = 상단 중앙(살짝 솟음), BC = 하단 중앙(V골), TL = 좌상단(크게 둥근 라운드)
-# 우측은 (100-x, 100-y) 점대칭으로 자동 생성.
-# 좌측 삼각형: 윗변은 좌상단→상단중앙 수평, 외곽변은 좌상단→하단중앙 사선(\),
-# 내부 공유변은 상단중앙→하단중앙(수직). 우측은 좌우 거울 → 가운데서 만나 M/나비.
-TC = (50.0, 10.0)    # top-center (상단 중앙, 살짝 솟는 정점)
-BC = (50.0, 90.0)    # bottom-center (하단 중앙 — 좌우가 만나 V골)
-TL = (9.0, 10.0)     # top-left logical corner (크게 둥근 라운드 대상)
-R_BIG = 30.0         # 좌상단 큰 라운드 반경
-R_TIP = 5.0          # 뾰족 꼭짓점(TC, BC) 소량 라운드
+# ── 점대칭(180° 회전) 풍차/나비형 (100x100 viewBox) ──────────────────────────
+# 좌측 navy 삼각형: 좌상단 코너가 크게 둥글다. 윗변 수평. 뾰족점은 아래(중앙 하단).
+#   꼭짓점 순회(시계방향):  TL(좌상단·큰 라운드) → TR(윗변 우측 끝) → BP(아래 뾰족점)
+# 우측 cyan 삼각형: 위 도형을 중심(50,50) 기준 180° 회전(x,y)->(100-x,100-y).
+#   → 우하단 코너가 크게 둥글고 위로 뾰족. navy 아래뾰족 / cyan 위뾰족이 어긋나 맞물림.
+# 결과: 좌상-우하 대각선 색경계의 M/나비/풍차. 좌우대칭 V 아님(점대칭).
+# 각 꼭짓점 = (좌표, 라운드반경). 라운드는 해당 코너에만 적용.
+L_TRI = [
+    ((13.0, 14.0), 23.0),   # TL 좌상단 — 크게 둥근 라운드
+    ((61.0, 14.0), 4.5),    # TR 윗변 우측 끝 — 소량 라운드
+    ((52.0, 87.0), 4.0),    # BP 아래 뾰족점 — 소량 라운드
+]
 
 
 def _norm(vx, vy):
@@ -37,62 +38,75 @@ def _norm(vx, vy):
     return (vx / d, vy / d) if d else (0.0, 0.0)
 
 
-def _round_corner(p_prev, corner, p_next, radius):
-    """corner 꼭짓점을 radius 로 둥글린 (진입점, 제어점, 진출점)을 반환."""
+def _point_sym(pt):
+    """중심(50,50) 기준 180° 회전 점대칭."""
+    return (100.0 - pt[0], 100.0 - pt[1])
+
+
+def _rounded_quad_pts(corner, p_prev, p_next, radius):
+    """corner 를 radius 로 둥글린 (진입점, 제어점=corner, 진출점)."""
     cx, cy = corner
     d1 = _norm(p_prev[0] - cx, p_prev[1] - cy)
     d2 = _norm(p_next[0] - cx, p_next[1] - cy)
-    # 두 변 길이로 라운드 반경 클램프(과도한 라운드 방지)
     len1 = math.hypot(p_prev[0] - cx, p_prev[1] - cy)
     len2 = math.hypot(p_next[0] - cx, p_next[1] - cy)
     r = min(radius, len1 * 0.5, len2 * 0.5)
     p_in = (cx + d1[0] * r, cy + d1[1] * r)
     p_out = (cx + d2[0] * r, cy + d2[1] * r)
-    return p_in, corner, p_out
+    return p_in, (cx, cy), p_out
+
+
+def _tri_path(verts):
+    """[(점,반경)...] 삼각형(폐곡선)을 라운드 코너 SVG path d 로 직렬화."""
+    n = len(verts)
+    rounded = []
+    for i in range(n):
+        corner, radius = verts[i]
+        prev_pt = verts[(i - 1) % n][0]
+        next_pt = verts[(i + 1) % n][0]
+        rounded.append(_rounded_quad_pts(corner, prev_pt, next_pt, radius))
+    # 시작점 = 첫 코너의 진출점
+    d = f"M {rounded[0][2][0]:.3f} {rounded[0][2][1]:.3f} "
+    for i in range(1, n + 1):
+        p_in, ctrl, p_out = rounded[i % n]
+        d += f"L {p_in[0]:.3f} {p_in[1]:.3f} "
+        d += f"Q {ctrl[0]:.3f} {ctrl[1]:.3f} {p_out[0]:.3f} {p_out[1]:.3f} "
+    return d + "Z"
+
+
+def _tri_polygon(verts, seg=24):
+    """[(점,반경)...] 삼각형을 베지어 샘플링한 폴리라인 점열(PIL 채움용)."""
+    n = len(verts)
+    rounded = []
+    for i in range(n):
+        corner, radius = verts[i]
+        prev_pt = verts[(i - 1) % n][0]
+        next_pt = verts[(i + 1) % n][0]
+        rounded.append(_rounded_quad_pts(corner, prev_pt, next_pt, radius))
+    poly = [rounded[0][2]]
+    for i in range(1, n + 1):
+        p_in, ctrl, p_out = rounded[i % n]
+        poly.append(p_in)
+        # quad 베지어 샘플
+        for k in range(1, seg + 1):
+            t = k / seg
+            mt = 1 - t
+            x = mt * mt * p_in[0] + 2 * mt * t * ctrl[0] + t * t * p_out[0]
+            y = mt * mt * p_in[1] + 2 * mt * t * ctrl[1] + t * t * p_out[1]
+            poly.append((x, y))
+    return poly
+
+
+def _right_verts():
+    return [(_point_sym(p), r) for (p, r) in L_TRI]
 
 
 def left_triangle_path():
-    """좌측(파랑) 삼각형의 SVG path d 문자열 + 폴리라인 점열 반환."""
-    # 꼭짓점 순회: TC -> BC -> TL -> (TC)  (TL 만 크게 라운드)
-    tc_in, _, tc_out = _round_corner(TL, TC, BC, R_TIP)       # TC 라운드
-    bc_in, _, bc_out = _round_corner(TC, BC, TL, R_TIP)       # BC 라운드
-    tl_in, tlc, tl_out = _round_corner(BC, TL, TC, R_BIG)     # TL 큰 라운드
-
-    d = (
-        f"M {tc_out[0]:.3f} {tc_out[1]:.3f} "
-        f"L {bc_in[0]:.3f} {bc_in[1]:.3f} "
-        f"Q {BC[0]:.3f} {BC[1]:.3f} {bc_out[0]:.3f} {bc_out[1]:.3f} "
-        f"L {tl_in[0]:.3f} {tl_in[1]:.3f} "
-        f"Q {tlc[0]:.3f} {tlc[1]:.3f} {tl_out[0]:.3f} {tl_out[1]:.3f} "
-        f"L {tc_in[0]:.3f} {tc_in[1]:.3f} "
-        f"Q {TC[0]:.3f} {TC[1]:.3f} {tc_out[0]:.3f} {tc_out[1]:.3f} "
-        "Z"
-    )
-    return d
-
-
-def _mirror(pt):
-    """수직 중심축(x=50) 기준 좌우 반사 — M/나비 실루엣을 만든다."""
-    return (100.0 - pt[0], pt[1])
+    return _tri_path(L_TRI)
 
 
 def right_triangle_path():
-    """우측(하늘색) 삼각형 = 좌측의 좌우 거울 대칭(M/나비 실루엣)."""
-    g_tc, g_bc, g_tl = _mirror(TC), _mirror(BC), _mirror(TL)
-    tc_in, _, tc_out = _round_corner(g_tl, g_tc, g_bc, R_TIP)
-    bc_in, _, bc_out = _round_corner(g_tc, g_bc, g_tl, R_TIP)
-    tl_in, tlc, tl_out = _round_corner(g_bc, g_tl, g_tc, R_BIG)
-    d = (
-        f"M {tc_out[0]:.3f} {tc_out[1]:.3f} "
-        f"L {bc_in[0]:.3f} {bc_in[1]:.3f} "
-        f"Q {g_bc[0]:.3f} {g_bc[1]:.3f} {bc_out[0]:.3f} {bc_out[1]:.3f} "
-        f"L {tl_in[0]:.3f} {tl_in[1]:.3f} "
-        f"Q {g_tl[0]:.3f} {g_tl[1]:.3f} {tl_out[0]:.3f} {tl_out[1]:.3f} "
-        f"L {tc_in[0]:.3f} {tc_in[1]:.3f} "
-        f"Q {g_tc[0]:.3f} {g_tc[1]:.3f} {tc_out[0]:.3f} {tc_out[1]:.3f} "
-        "Z"
-    )
-    return d
+    return _tri_path(_right_verts())
 
 
 def build_svg():
@@ -108,44 +122,13 @@ def build_svg():
     )
 
 
-# ── PIL 래스터: SVG 의 베지어를 직접 샘플링해 폴리곤으로 채운다 ───────────────
-def _quad(p0, p1, p2, n=24):
-    pts = []
-    for i in range(n + 1):
-        t = i / n
-        mt = 1 - t
-        x = mt * mt * p0[0] + 2 * mt * t * p1[0] + t * t * p2[0]
-        y = mt * mt * p0[1] + 2 * mt * t * p1[1] + t * t * p2[1]
-        pts.append((x, y))
-    return pts
-
-
+# ── PIL 래스터: SVG 와 동일 좌표/베지어를 폴리곤으로 채운다 ───────────────────
 def _left_polygon():
-    tc_in, _, tc_out = _round_corner(TL, TC, BC, R_TIP)
-    bc_in, _, bc_out = _round_corner(TC, BC, TL, R_TIP)
-    tl_in, tlc, tl_out = _round_corner(BC, TL, TC, R_BIG)
-    poly = [tc_out]
-    poly.append(bc_in)
-    poly += _quad(bc_in, BC, bc_out)
-    poly.append(tl_in)
-    poly += _quad(tl_in, tlc, tl_out)
-    poly.append(tc_in)
-    poly += _quad(tc_in, TC, tc_out)
-    return poly
+    return _tri_polygon(L_TRI)
 
 
 def _right_polygon():
-    g_tc, g_bc, g_tl = _mirror(TC), _mirror(BC), _mirror(TL)
-    tc_in, _, tc_out = _round_corner(g_tl, g_tc, g_bc, R_TIP)
-    bc_in, _, bc_out = _round_corner(g_tc, g_bc, g_tl, R_TIP)
-    tl_in, tlc, tl_out = _round_corner(g_bc, g_tl, g_tc, R_BIG)
-    poly = [tc_out, bc_in]
-    poly += _quad(bc_in, g_bc, bc_out)
-    poly.append(tl_in)
-    poly += _quad(tl_in, g_tl, tl_out)
-    poly.append(tc_in)
-    poly += _quad(tc_in, g_tc, tc_out)
-    return poly
+    return _tri_polygon(_right_verts())
 
 
 def render_png(size, pad_ratio=0.0):

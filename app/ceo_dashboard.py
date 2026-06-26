@@ -26,6 +26,7 @@ CEO 가 Mattermost 의 여러 채널(인사총무팀/개발팀/보고라인/CEO�
 import http.cookies
 import json
 import os
+import time
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
@@ -153,8 +154,13 @@ def _bot_id_for(cfg):
     except (OSError, json.JSONDecodeError):
         return None
 
-# 봇 활성 판정 결과 캐시 (config -> {ok, name}). 매 요청 user API 호출을 줄인다.
+# 봇 활성 판정 캐시 (config -> {res, exp}). exp 는 time.monotonic() 기준 만료 시각.
+# 성공(ok=True) 결과만 TTL 동안 캐시한다. 실패(ok=False)는 절대 캐시하지 않아
+# 일시적 백엔드 장애(서버가 Mattermost 보다 먼저 기동·502/404 등) 직후 첫 폴링이
+# 실패해도 다음 폴링에서 재시도되어 백엔드 회복 시 자동으로 활성 복구된다.
 _bot_status_cache = {}
+# 성공 결과 캐시 수명(초). 짧게 두어 user API 호출은 절감하되 계정 상태 변화도 반영.
+_BOT_STATUS_TTL = 60.0
 
 
 # ── 도메인 헬퍼 (전부 mm_client·agent_schema 경유) ───────────────────────────
@@ -227,7 +233,10 @@ def _author_name(uid):
         u = mm.user(uid)
         name = u.get("nickname") or u.get("username") or "사람"
     except Exception:
-        name = "사람"
+        # 같은 버그 클래스: user API 일시 장애 시 fallback 을 영구 캐시하면
+        # 그 사용자가 이후에도 계속 "사람" 으로 고착된다. 실패는 캐시하지 않고
+        # 다음 조회에서 재시도되게 한다(백엔드 회복 시 실제 닉네임 복구).
+        return "사람"
     _author_cache[uid] = name
     return name
 
@@ -261,9 +270,18 @@ def post_message_any(channel_name, text):
 
 
 def bot_status(cfg):
-    """봇(config) 활성 여부를 Mattermost user API 로 확인. 캐시 사용."""
-    if cfg in _bot_status_cache:
-        return _bot_status_cache[cfg]
+    """봇(config) 활성 여부를 Mattermost user API 로 확인.
+
+    캐시 정책(영구 비활성 고착 방지):
+      - 성공(ok=True) 결과만 _BOT_STATUS_TTL 초 동안 캐시한다.
+      - 실패(ok=False)·예외는 캐시하지 않아 다음 폴링에서 재시도되며,
+        백엔드가 회복되면 그때 성공 결과로 자동 활성 복구된다.
+    """
+    now = time.monotonic()
+    cached = _bot_status_cache.get(cfg)
+    # 만료되지 않은 성공 캐시만 재사용(실패는 애초에 저장되지 않음).
+    if cached is not None and cached["exp"] > now:
+        return cached["res"]
     res = {"ok": False, "name": ""}
     try:
         bid = _bot_id_for(cfg)
@@ -273,7 +291,11 @@ def bot_status(cfg):
             res = {"ok": (u.get("delete_at", 0) == 0), "name": u.get("username", "")}
     except Exception:
         res = {"ok": False, "name": ""}
-    _bot_status_cache[cfg] = res
+    # 성공만 캐시. 실패는 만료된 엔트리도 함께 제거해 stale 재사용을 원천 차단.
+    if res["ok"]:
+        _bot_status_cache[cfg] = {"res": res, "exp": now + _BOT_STATUS_TTL}
+    else:
+        _bot_status_cache.pop(cfg, None)
     return res
 
 

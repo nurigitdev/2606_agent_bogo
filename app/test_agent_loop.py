@@ -295,7 +295,73 @@ def test_tool_result_truncation():
     print("[PASS] 도구 결과 토큰 절단 통과")
 
 
+def test_token_health_401_detects_zombie():
+    """회귀 테스트 — 봇 무응답(좀비) 근본 원인 재현.
+
+    버그: MM 서버 재시작 후 Personal Access Token 의 세션 캐시가 DB 와 어긋나면
+      토큰이 DB 상 유효해도 REST/WS 가 401(Invalid or expired session)을 돌려준다.
+      WS 는 TCP 만 붙고 인증이 거부돼 posted 이벤트를 못 받아 봇이 무응답 좀비가 됐다.
+    근본 원인: 봇이 401 인증 실패를 무한 재접속 백오프로 조용히 삼켜 가시화하지 못함.
+    수정 위치: bogo_runtime.token_health() — /users/me 401 이면 False + 강한 경고 로그.
+
+    여기서는 /users/me 가 401 을 주는 상황을 모킹해 token_health 가 좀비를 False 로
+    판정하고 경고를 출력하는지 검증한다(이 함수가 좀비를 감지 못하면 회귀)."""
+    import io
+    import urllib.error
+    from contextlib import redirect_stdout
+
+    orig = H.urllib.request.urlopen
+
+    def _fake_401(req, timeout=None):
+        raise urllib.error.HTTPError(
+            H.MM + "/users/me", 401, "Unauthorized", {},
+            io.BytesIO(b'{"id":"api.context.session_expired.app_error"}'))
+
+    H.urllib.request.urlopen = _fake_401
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            ok = H.token_health()
+    finally:
+        H.urllib.request.urlopen = orig
+    assert ok is False, "401 인증 실패를 좀비(False)로 판정하지 못함 — 회귀"
+    out = buf.getvalue()
+    assert "토큰 인증 실패" in out and "좀비" in out, \
+        f"좀비 경고 로그 누락(운영자 가시화 실패): {out!r}"
+    print("[PASS] token_health 401 좀비 감지 + 경고 통과")
+
+
+def test_token_health_ok_when_valid():
+    """정상 토큰(자기 BOT_ID 반환) 시 token_health 가 True 를 반환하는지(오탐 방지)."""
+    import io
+    import json as _json
+    from contextlib import redirect_stdout
+
+    orig = H.urllib.request.urlopen
+
+    class _Resp:
+        def __init__(self, b):
+            self._b = b
+        def read(self):
+            return self._b
+
+    def _fake_ok(req, timeout=None):
+        return _Resp(_json.dumps({"id": H.BOT_ID, "username": "bot"}).encode())
+
+    H.urllib.request.urlopen = _fake_ok
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            ok = H.token_health()
+    finally:
+        H.urllib.request.urlopen = orig
+    assert ok is True, "유효 토큰을 좀비로 오판(False) — 오탐 회귀"
+    print("[PASS] token_health 유효 토큰 True 통과")
+
+
 if __name__ == "__main__":
+    test_token_health_401_detects_zombie()
+    test_token_health_ok_when_valid()
     test_react_max_steps_cap()
     test_finalize_early_exit()
     test_tool_whitelist_fail_closed()

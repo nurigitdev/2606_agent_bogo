@@ -104,10 +104,42 @@ ensure_container() {
   fi
 }
 
+# MM 컨테이너의 DB DataSource 가 가리키는 호스트명(레거시 hermes 리브랜딩 잔재). MM 환경변수
+# MM_SQLSETTINGS_DATASOURCE 는 'hermes-pg' 를 참조하는데 실제 PG 컨테이너 이름은 'bogo-pg'
+# 라, MM 재시작/재생성 때 Docker DNS 가 hermes-pg 를 못 찾아 부팅이 무한 실패한다(no such host).
+# 컨테이너 env 를 바꾸려면 MM 재생성이 필요해 침습적이므로, PG 에 네트워크 별칭을 멱등 부여해
+# 'hermes-pg' 가 'bogo-pg' 로 해석되게 한다. 별칭은 컨테이너 재생성 시 사라지므로 매 부팅 보장.
+PG_LEGACY_ALIAS="hermes-pg"
+
+ensure_pg_legacy_alias() {
+  # PG 가 붙어 있는 네트워크를 찾아 거기에 hermes-pg 별칭이 없으면 부여한다(멱등).
+  local nets
+  nets="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$PG_NAME" 2>/dev/null || echo '')"
+  for net in $nets; do
+    # 이미 hermes-pg 별칭이 있으면 건너뛴다.
+    local aliases
+    aliases="$(docker inspect -f "{{range \$k,\$v := .NetworkSettings.Networks}}{{if eq \$k \"$net\"}}{{range \$v.Aliases}}{{.}} {{end}}{{end}}{{end}}" "$PG_NAME" 2>/dev/null || echo '')"
+    case " $aliases " in
+      *" $PG_LEGACY_ALIAS "*) ok "$PG_NAME ($net) 에 $PG_LEGACY_ALIAS 별칭 이미 존재 — 건너뜀." ;;
+      *)
+        # disconnect→connect 로 별칭 부여(기존 별칭 보존: 컨테이너 이름 별칭은 자동 유지).
+        if docker network disconnect "$net" "$PG_NAME" >/dev/null 2>&1 \
+           && docker network connect --alias "$PG_LEGACY_ALIAS" --alias "$PG_NAME" "$net" "$PG_NAME" >/dev/null 2>&1; then
+          ok "$PG_NAME ($net) 에 $PG_LEGACY_ALIAS 별칭 부여 — MM DataSource 해석 보장."
+        else
+          warn "$PG_NAME 에 $PG_LEGACY_ALIAS 별칭 부여 실패. MM 이 DB 연결 못 하면 수동 확인 필요."
+        fi
+        ;;
+    esac
+  done
+}
+
 ensure_containers() {
   need docker
   # DB 먼저(데이터 계층), 그 다음 MM(앱 계층).
   ensure_container "$PG_NAME"
+  # MM 을 띄우기 전에 레거시 호스트명 별칭을 보장한다(MM 이 hermes-pg 로 DB 를 찾으므로).
+  ensure_pg_legacy_alias
   ensure_container "$MM_NAME"
 }
 
