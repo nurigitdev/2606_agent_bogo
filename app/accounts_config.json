@@ -1,32 +1,56 @@
 {
-  "_comment": "데모 기본 비밀번호는 모두 1111. pw_hash=PBKDF2-SHA256(200k, salt). 평문 미저장.",
+  "_comment": "데모 기본 비밀번호는 모두 1111. login_id는 Mattermost 계정과 동일(admin/ceo/e1/e2/e3). pw_hash=PBKDF2-SHA256(200k, salt). 평문 미저장.",
   "accounts": [
     {
-      "login_id": "ceo@nurivoice.com",
+      "login_id": "admin",
+      "role": "admin",
+      "label": "시스템 관리자",
+      "staff_channels": [],
+      "salt": "53f7ad7f1e4607a31265f7883dfc6aac",
+      "pw_hash": "0fe392c8718b46f59243bd6ddaa8be46c0d74057c07f1227b931c3dabf2c3678"
+    },
+    {
+      "login_id": "ceo",
       "role": "ceo",
       "label": "CEO",
       "staff_channels": [],
-      "salt": "aa19c70cbc2949d9b4390e6678bbe4b3",
-      "pw_hash": "bded96b39041fb063abca4849c2c8a325cea0c05ac35aee3a83ff6fd1867aded"
+      "salt": "6870f9ab358135dfd74944dbeb4fd1ff",
+      "pw_hash": "1d9dd6d37f01cdf8bc16517ceb3afedf079847fd980c17dd88879ce55c504e4c"
     },
     {
-      "login_id": "sw9@nurivoice.com",
+      "login_id": "e1",
       "role": "staff",
       "label": "개발팀 직원",
       "staff_channels": [
         "개발팀",
         "개발-보고라인"
       ],
-      "salt": "0aea4c25337d0c8c7d5bf3e0a32ae7ba",
-      "pw_hash": "6404208af8948bec3543deaca3ede99a60af55f209d1394e410e6a39a62c2719"
+      "salt": "729b6ff6ba3c27eec28349bf721d34a1",
+      "pw_hash": "ae75146eb899279746caa1519817b5156b335e6ccee57058b38671bc188301d7"
     },
     {
-      "login_id": "admin",
-      "role": "admin",
-      "label": "시스템 관리자",
-      "staff_channels": [],
-      "salt": "062340cb9f2dc6b79baa4af76f86cc34",
-      "pw_hash": "baa4b60d643220c80386717b7a9f37a225d0556f5939855285086fff5213282b"
+      "login_id": "e2",
+      "role": "staff",
+      "label": "인사총무 직원",
+      "staff_channels": [
+        "인사총무팀",
+        "인사총무-보고라인"
+      ],
+      "salt": "b31b6b2814898171b1c067286869bd4a",
+      "pw_hash": "986252f24d5a1f76b2710560e4558bf9fc431c88c5dea96fa1f7429b1d141d1a"
+    },
+    {
+      "login_id": "e3",
+      "role": "staff",
+      "label": "다부서 직원",
+      "staff_channels": [
+        "개발팀",
+        "개발-보고라인",
+        "인사총무팀",
+        "인사총무-보고라인"
+      ],
+      "salt": "c8638e051912688a002d08e2b39fae5c",
+      "pw_hash": "7c401b1d75735f040ec942c14a1ecb616aa3da79255de604e60294d4921384b0"
     }
   ]
 }

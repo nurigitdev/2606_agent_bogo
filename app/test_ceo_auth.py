@@ -32,7 +32,7 @@ class LocalAuthTest(unittest.TestCase):
         self.acc = AUTH.load_accounts()
 
     def test_accounts_loaded(self):
-        self.assertEqual(set(self.acc), {"ceo@nurivoice.com", "sw9@nurivoice.com", "admin"})
+        self.assertEqual(set(self.acc), {"admin", "ceo", "e1", "e2", "e3"})
 
     def test_no_plaintext_password(self):
         # 평문 비밀번호가 어떤 계정에도 저장되어 있지 않아야 한다.
@@ -45,8 +45,8 @@ class LocalAuthTest(unittest.TestCase):
 
     def test_correct_password_passes(self):
         # allow_mm=False 로 순수 config 폴백 경로만 검증.
-        for lid, role in [("ceo@nurivoice.com", "ceo"),
-                          ("sw9@nurivoice.com", "staff"), ("admin", "admin")]:
+        for lid, role in [("ceo", "ceo"), ("e1", "staff"),
+                          ("e2", "staff"), ("e3", "staff"), ("admin", "admin")]:
             ident = AUTH.authenticate(lid, "1111", self.acc, allow_mm=False)
             self.assertIsNotNone(ident, lid)
             self.assertEqual(ident["role"], role)
