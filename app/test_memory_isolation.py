@@ -14,12 +14,12 @@ import os
 import sys
 import tempfile
 
-# hermes_runtime 은 import 시점에 argv[1](역할)과 config 파일을 읽는다.
+# bogo_runtime 은 import 시점에 argv[1](역할)과 config 파일을 읽는다.
 # 유효 역할을 주어 모듈 로딩을 통과시킨다.
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.argv = ["hermes_runtime.py", "orchestrator"]
+sys.argv = ["bogo_runtime.py", "orchestrator"]
 
-import hermes_runtime as H  # noqa: E402  (argv 설정 후 import 의도)
+import bogo_runtime as H  # noqa: E402  (argv 설정 후 import 의도)
 import agent_schema as A  # noqa: E402
 
 

@@ -1,6 +1,6 @@
-# Hermes always-on service installer (Windows / Task Scheduler).
+# BOGO always-on service installer (Windows / Task Scheduler).
 #
-# Registers 4 scheduled tasks (Hermes_<role>) that start at logon and restart on
+# Registers 4 scheduled tasks (BOGO_<role>) that start at logon and restart on
 # failure. Username-agnostic (uses $env:USERNAME / current principal) and runs the
 # repo IN PLACE — Windows handles Hangul paths, no ASCII mirror needed.
 #
@@ -26,7 +26,7 @@ $Runner = Join-Path $Repo "run_role.ps1"
 
 function Install-All {
   foreach ($r in $Roles) {
-    $name = "Hermes_$r"
+    $name = "BOGO_$r"
     $args = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" $r"
     $action  = New-ScheduledTaskAction -Execute $PwshExe -Argument $args -WorkingDirectory $Repo
     $trigger = New-ScheduledTaskTrigger -AtLogOn
@@ -45,7 +45,7 @@ function Install-All {
 
 function Uninstall-All {
   foreach ($r in $Roles) {
-    $name = "Hermes_$r"
+    $name = "BOGO_$r"
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
       Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
       Unregister-ScheduledTask -TaskName $name -Confirm:$false
@@ -57,7 +57,7 @@ function Uninstall-All {
 
 function Restart-All {
   foreach ($r in $Roles) {
-    $name = "Hermes_$r"
+    $name = "BOGO_$r"
     Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     Start-ScheduledTask -TaskName $name
     Say "재시작: $name"
@@ -66,7 +66,7 @@ function Restart-All {
 
 function Status-All {
   foreach ($r in $Roles) {
-    $name = "Hermes_$r"
+    $name = "BOGO_$r"
     $t = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if ($t) { Write-Host ("{0,-18} {1}" -f $name, $t.State) }
     else    { Write-Host ("{0,-18} (미등록)" -f $name) }

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.hermes.colima</string>
+    <string>com.bogo.colima</string>
 
     <!-- macOS 로그인/부팅 시 Colima(도커 런타임 VM)를 자동 기동한다. 봇이 의존하는 통신
          백본(Mattermost/Postgres 컨테이너)은 Colima 위에서만 산다 → Colima 가 부팅 때

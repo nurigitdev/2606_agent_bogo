@@ -1,5 +1,5 @@
 {
-  "_comment": "선언적 팀·라우팅 데이터. 런타임(hermes_runtime.py)이 이 데이터를 읽어 ROUTING 텍스트를 동적 생성한다. 새 팀 추가 = 여기 teams 블록 1개 + agents/<role>.md 1개 추가만으로 동작(파이썬 수정 0). 채널명은 channels.json에 실재해야 한다(린트가 검증). collab_rooms = 1팀 1에이전트 모델을 벗어나 여러 에이전트가 공동 참여하는 협업 작업방(예: CEO 정책·기획 과제). 참여 에이전트의 agents/<role>.md channels 에 해당 channel 을 추가해야 구독·송신이 열린다(린트가 교차 검증). learning_rooms = 역할(팀/오케스트레이터)별 전용 학습방. 이 방에 올라온 교정·노하우·정책은 휘발되는 일반 방 메모리(롤링 6줄)와 달리 별도 persistent '학습 노트'(memory_learn_<role>.json)에 영구 누적되고, 그 역할 에이전트는 매 응답 시 자기 학습 노트만 [팀 학습 노트]로 주입받는다(타 역할 학습노트 비주입 — 방 격리 유지). owner 는 agents/<role>.md 파일 stem(role)이며 channel 은 channels.json에 실재해야 한다(린트가 교차 검증).",
+  "_comment": "선언적 팀·라우팅 데이터. 런타임(bogo_runtime.py)이 이 데이터를 읽어 ROUTING 텍스트를 동적 생성한다. 새 팀 추가 = 여기 teams 블록 1개 + agents/<role>.md 1개 추가만으로 동작(파이썬 수정 0). 채널명은 channels.json에 실재해야 한다(린트가 검증). collab_rooms = 1팀 1에이전트 모델을 벗어나 여러 에이전트가 공동 참여하는 협업 작업방(예: CEO 정책·기획 과제). 참여 에이전트의 agents/<role>.md channels 에 해당 channel 을 추가해야 구독·송신이 열린다(린트가 교차 검증). learning_rooms = 역할(팀/오케스트레이터)별 전용 학습방. 이 방에 올라온 교정·노하우·정책은 휘발되는 일반 방 메모리(롤링 6줄)와 달리 별도 persistent '학습 노트'(memory_learn_<role>.json)에 영구 누적되고, 그 역할 에이전트는 매 응답 시 자기 학습 노트만 [팀 학습 노트]로 주입받는다(타 역할 학습노트 비주입 — 방 격리 유지). owner 는 agents/<role>.md 파일 stem(role)이며 channel 은 channels.json에 실재해야 한다(린트가 교차 검증).",
 
   "orchestrator": {
     "role": "박민철",

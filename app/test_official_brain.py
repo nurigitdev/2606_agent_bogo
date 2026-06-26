@@ -1,6 +1,6 @@
 """
-공식 Nous Hermes Agent(`hermes chat`) 두뇌 통일 단위 테스트.
-(네트워크/실제 hermes 프로세스 불필요 — subprocess 호출은 전부 모킹)
+공식 외부 CLI(bogo_brain) 두뇌 통일 단위 테스트.
+(네트워크/실제 외부 CLI 프로세스 불필요 — subprocess 호출은 전부 모킹)
 
 검증:
   1) 출력 파싱 — -Q 모드 stdout(session_id 메타 라인 + JSON 본문)에서 행동 결정 dict 추출.
@@ -11,7 +11,7 @@
   6) 비용 통제 — call_official_brain 이 --max-turns / -Q / --source tool / timeout 을 건다(1메시지=1호출).
   7) 토글 OFF — USE_OFFICIAL_BRAIN=False 면 공식 두뇌를 건너뛰고 곧장 fallback.
   8) 역할 격리(세션명·홈) — 역할별 session_name/role_home 이 역할마다 다르고 슬러그가 안전하다.
-  9) 영속 세션 구성 — 세션 명명 후에는 --continue hermes-<role> 로, 미명명이면 새 세션 생성 후
+  9) 영속 세션 구성 — 세션 명명 후에는 --continue nous-<role> 로, 미명명이면 새 세션 생성 후
      stdout 의 session_id 를 rename 한다(--continue 부재 시 에러 분기 포함).
  10) role 전달 배선 — decide() 가 ROLE 을 decide_via_official→call_official_brain 까지 넘긴다.
  11) --ignore-rules 부재 — memory 자동주입을 끄지 않도록 chat 인자에 --ignore-rules 가 없다.
@@ -23,10 +23,10 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.argv = ["hermes_runtime.py", "orchestrator"]
+sys.argv = ["bogo_runtime.py", "orchestrator"]
 
-import hermes_runtime as H  # noqa: E402
-import hermes_brain as B  # noqa: E402
+import bogo_runtime as H  # noqa: E402
+import bogo_brain as B  # noqa: E402
 import agent_schema as A  # noqa: E402
 
 
@@ -40,7 +40,7 @@ def _valid_decision(message="처리 완료", channel="CEO브리핑"):
 
 
 def _qmode_stdout(decision):
-    """공식 hermes -Q 모드 stdout 모사: session_id 메타 라인 + JSON 본문."""
+    """공식 외부 CLI -Q 모드 stdout 모사: session_id 메타 라인 + JSON 본문."""
     return "session_id: 20260625_test_abc\n" + json.dumps(decision, ensure_ascii=False)
 
 
@@ -71,10 +71,10 @@ def test_official_happy_path():
     d = _valid_decision(message="공식두뇌 응답")
     orig_call = B.call_official_brain
     orig_fb = H._decide_fallback
-    orig_resolve = B.resolve_hermes_bin
+    orig_resolve = B.resolve_official_bin
     orig_toggle = B.USE_OFFICIAL_BRAIN
     try:
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         B.USE_OFFICIAL_BRAIN = True
         B.call_official_brain = lambda query, timeout=None, role=None: _qmode_stdout(d)
         H._decide_fallback = _no_fallback
@@ -82,7 +82,7 @@ def test_official_happy_path():
     finally:
         B.call_official_brain = orig_call
         H._decide_fallback = orig_fb
-        B.resolve_hermes_bin = orig_resolve
+        B.resolve_official_bin = orig_resolve
         B.USE_OFFICIAL_BRAIN = orig_toggle
     assert out["message"] == "공식두뇌 응답", f"공식 두뇌 결정 미반영: {out}"
     assert fallback_called["v"] is False, "공식 성공인데 fallback 이 호출됨"
@@ -100,10 +100,10 @@ def test_official_failure_falls_back():
 
     orig_call = B.call_official_brain
     orig_fb = H._decide_fallback
-    orig_resolve = B.resolve_hermes_bin
+    orig_resolve = B.resolve_official_bin
     orig_toggle = B.USE_OFFICIAL_BRAIN
     try:
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         B.USE_OFFICIAL_BRAIN = True
         H._decide_fallback = _fb
         # (a) 공식 호출이 None(실패/타임아웃)
@@ -118,7 +118,7 @@ def test_official_failure_falls_back():
     finally:
         B.call_official_brain = orig_call
         H._decide_fallback = orig_fb
-        B.resolve_hermes_bin = orig_resolve
+        B.resolve_official_bin = orig_resolve
         B.USE_OFFICIAL_BRAIN = orig_toggle
     assert out_a["message"] == out_b["message"] == out_c["message"] == "fallback 결정"
     assert fb["v"] == 3, f"세 실패 케이스 모두 fallback 해야 함: {fb['v']}회"
@@ -193,7 +193,7 @@ def test_room_isolation_in_query():
 
 
 def _sessions_list_stdout(titles):
-    """`hermes sessions list` stdout 모사(컬럼 정렬 + 헤더/구분선 + 무명 '—' 행 1개 포함).
+    """`nous sessions list` stdout 모사(컬럼 정렬 + 헤더/구분선 + 무명 '—' 행 1개 포함).
     titles: 이 홈에 존재하는 명명 세션 타이틀 목록(빈 목록이면 명명 세션 없음)."""
     head = ("Title                            Preview                  "
             "                Last Active   ID\n"
@@ -209,7 +209,7 @@ def _capture_runs(role=None, timeout=42, exists=None, stdout=None,
                   recursive=True, returncode=0, no_session_first=False):
     """call_official_brain 을 호출하며 subprocess.run 에 전달된 모든 cmd 를 캡처한다.
     [P0 진실원천] 세션 식별을 프로세스 캐시가 아니라 `sessions list`(DB) 로 한다. 그래서
-    exists: 이 역할 홈의 세션 DB 에 hermes-<role> 타이틀이 '실재'하는지를 모사한다
+    exists: 이 역할 홈의 세션 DB 에 nous-<role> 타이틀이 '실재'하는지를 모사한다
       (True → sessions list 가 해당 타이틀을 반환 → --continue 경로 / False → 미반환 → 생성 경로).
     no_session_first: exists=True 라 --continue 를 시도했으나 그 사이 세션이 사라져(reset/prune 경합)
       'No session found' 가 나고 생성 경로로 자가복구하는 시나리오 모사."""
@@ -227,7 +227,7 @@ def _capture_runs(role=None, timeout=42, exists=None, stdout=None,
 
     def _fake_run(cmd, **kw):
         runs.append({"cmd": cmd, "timeout": kw.get("timeout"),
-                     "home": (kw.get("env") or {}).get("HERMES_HOME")})
+                     "home": (kw.get("env") or {}).get("BOGO_HOME")})
         sub = cmd[1] if len(cmd) > 1 else ""
         if sub == "profile":      # profile create
             return _FakeProc(0, "created")
@@ -243,13 +243,13 @@ def _capture_runs(role=None, timeout=42, exists=None, stdout=None,
         return _FakeProc(returncode, default_out)
 
     orig = {
-        "run": _sp.run, "resolve": B.resolve_hermes_bin, "toggle": B.USE_OFFICIAL_BRAIN,
+        "run": _sp.run, "resolve": B.resolve_official_bin, "toggle": B.USE_OFFICIAL_BRAIN,
         "rec": B.RECURSIVE_LEARNING, "ready": dict(B._home_ready),
         "isdir": os.path.isdir,
     }
     try:
         _sp.run = _fake_run
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         B.USE_OFFICIAL_BRAIN = True
         B.RECURSIVE_LEARNING = recursive
         # 홈 생성 분기를 결정적으로: 이미 준비됐다고 보아 profile create/config 패치를 건너뛴다.
@@ -258,7 +258,7 @@ def _capture_runs(role=None, timeout=42, exists=None, stdout=None,
         out = B.call_official_brain("질의", timeout=timeout, role=role)
     finally:
         _sp.run = orig["run"]
-        B.resolve_hermes_bin = orig["resolve"]
+        B.resolve_official_bin = orig["resolve"]
         B.USE_OFFICIAL_BRAIN = orig["toggle"]
         B.RECURSIVE_LEARNING = orig["rec"]
         B._home_ready = orig["ready"]
@@ -274,7 +274,7 @@ def test_cost_controls_in_command():
     runs, out = _capture_runs(role=None, timeout=42, recursive=False)
     assert len(runs) == 1, f"단발 경로는 정확히 1 프로세스여야: {len(runs)}회"
     cmd = runs[0]["cmd"]
-    assert cmd[0] == "/fake/hermes" and cmd[1] == "chat", f"hermes chat 호출 아님: {cmd[:2]}"
+    assert cmd[0] == "/fake/nous-cli" and cmd[1] == "chat", f"외부 CLI chat 호출 아님: {cmd[:2]}"
     assert "--max-turns" in cmd, "내부 도구루프 상한(--max-turns) 미적용(비용 통제 누락)"
     assert "-Q" in cmd, "비대화식(-Q) 미적용"
     assert "--source" in cmd and "tool" in cmd, "--source tool 미적용(세션 오염 차단)"
@@ -297,26 +297,26 @@ def test_no_ignore_rules_flag():
 
 def test_role_isolation_session_and_home():
     """역할 격리: session_name/role_home 이 역할마다 다르고, 슬러그가 파일·세션 안전하다."""
-    assert B.session_name("orchestrator") == "hermes-orchestrator"
-    assert B.session_name("hr") == "hermes-hr"
-    assert B.session_name("dev") == "hermes-dev"
+    assert B.session_name("orchestrator") == "nous-orchestrator"
+    assert B.session_name("hr") == "nous-hr"
+    assert B.session_name("dev") == "nous-dev"
     # 역할 간 세션명/홈이 절대 같지 않다(누수 경계).
     names = {B.session_name(r) for r in ("orchestrator", "hr", "dev")}
     homes = {B.role_home(r) for r in ("orchestrator", "hr", "dev")}
     assert len(names) == 3 and len(homes) == 3, "역할별 세션명/홈이 충돌(격리 경계 붕괴)"
     # 홈은 공식 profile 규약(<root>/profiles/<name>)을 따른다.
-    assert os.path.join("profiles", "hermesorchestrator") in B.role_home("orchestrator")
+    assert os.path.join("profiles", "nousorchestrator") in B.role_home("orchestrator")
     # 슬러그는 영숫자만(이상 입력도 안전).
     assert B.role_slug("HR-팀!") == "hr", f"슬러그 비안전: {B.role_slug('HR-팀!')}"
-    assert B.session_name("") == "hermes-role", "빈 역할도 안전 기본값"
+    assert B.session_name("") == "nous-role", "빈 역할도 안전 기본값"
     print("[PASS] 역할 격리(세션명·홈 분리·슬러그 안전) 통과")
 
 
 def test_session_title_parsing():
     """`sessions list` stdout 에서 타이틀 집합을 안전 추출한다(헤더/구분선/무명'—' 제외)."""
     # 타이틀 2개 + 무명 1개가 섞인 출력.
-    titles = B._parse_session_titles(_sessions_list_stdout(["hermes-orchestrator", "hermes-probe"]))
-    assert "hermes-orchestrator" in titles and "hermes-probe" in titles, f"타이틀 추출 실패: {titles}"
+    titles = B._parse_session_titles(_sessions_list_stdout(["nous-orchestrator", "nous-probe"]))
+    assert "nous-orchestrator" in titles and "nous-probe" in titles, f"타이틀 추출 실패: {titles}"
     assert "—" not in titles, "무명 세션(—)이 타이틀로 잘못 추출됨"
     assert "Title" not in titles and "Preview" not in titles, "헤더가 타이틀로 잘못 추출됨"
     # 명명 세션이 없으면 빈 집합(무명만 있어도 비어야 한다).
@@ -339,16 +339,16 @@ def test_session_exists_reads_db_not_cache():
     def _fake(cmd, **kw):
         if len(cmd) > 2 and cmd[1] == "sessions" and cmd[2] == "list":
             calls["list"] += 1
-            return _P(0, _sessions_list_stdout(["hermes-orchestrator"]))
+            return _P(0, _sessions_list_stdout(["nous-orchestrator"]))
         return _P(0, "")
-    orig_run, orig_res = _sp.run, B.resolve_hermes_bin
+    orig_run, orig_res = _sp.run, B.resolve_official_bin
     try:
         _sp.run = _fake
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         assert B.session_exists(role) is True, "DB 에 타이틀 있는데 미존재로 판정"
         assert calls["list"] == 1, "session_exists 가 sessions list(DB) 를 조회하지 않음(캐시 의존 의심)"
     finally:
-        _sp.run, B.resolve_hermes_bin = orig_run, orig_res
+        _sp.run, B.resolve_official_bin = orig_run, orig_res
     # DB 에 타이틀이 없으면 False.
     def _fake_empty(cmd, **kw):
         if len(cmd) > 2 and cmd[1] == "sessions" and cmd[2] == "list":
@@ -356,10 +356,10 @@ def test_session_exists_reads_db_not_cache():
         return _P(0, "")
     try:
         _sp.run = _fake_empty
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         assert B.session_exists(role) is False, "DB 에 타이틀 없는데 존재로 판정"
     finally:
-        _sp.run, B.resolve_hermes_bin = orig_run, orig_res
+        _sp.run, B.resolve_official_bin = orig_run, orig_res
     print("[PASS] session_exists 진실원천=DB(sessions list) 조회 통과")
 
 
@@ -382,13 +382,13 @@ def test_latest_session_id_from_db_not_stdout():
         if len(cmd) > 2 and cmd[1] == "sessions" and cmd[2] == "list":
             return _P(0, listing)
         return _P(0, "")
-    orig_run, orig_res = _sp.run, B.resolve_hermes_bin
+    orig_run, orig_res = _sp.run, B.resolve_official_bin
     try:
         _sp.run = _fake
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         sid = B._latest_session_id("orchestrator")
     finally:
-        _sp.run, B.resolve_hermes_bin = orig_run, orig_res
+        _sp.run, B.resolve_official_bin = orig_run, orig_res
     assert sid == "20260625_163640_ffd7b4", f"최신 세션 ID 추출 실패(헤더/구분선 오인 의심): {sid}"
     # ID 형식이 아닌 잡음만 있으면 None.
     assert B._SESSION_ID_RE.search("그냥 텍스트") is None
@@ -405,7 +405,7 @@ def test_create_path_renames_even_without_stdout_sid():
     list_runs = [r for r in runs if r["cmd"][1] == "sessions" and "list" in r["cmd"]]
     assert list_runs, "session_id 캡처를 위한 sessions list(DB 최상단 조회)가 없음"
     assert rename_runs, "stdout 에 session_id 없어도 DB ID 로 rename 해야 함(영속 보장)"
-    assert "hermes-orchestrator" in rename_runs[0]["cmd"], "rename 대상이 역할 세션명이 아님"
+    assert "nous-orchestrator" in rename_runs[0]["cmd"], "rename 대상이 역할 세션명이 아님"
     assert out is not None
     print("[PASS] stdout session_id 누락(상한 도달)에도 DB ID 로 rename → 영속 보장 통과")
 
@@ -413,7 +413,7 @@ def test_create_path_renames_even_without_stdout_sid():
 def test_persistent_session_first_then_continue():
     """영속 세션 구성(진실원천=세션 DB 타이틀):
       - DB 에 세션 없음(첫 진입): --continue 없이 새 세션 생성 → stdout 의 session_id 를 rename.
-      - DB 에 세션 있음: --continue hermes-<role> 로 재개(누적). 역할 홈(HERMES_HOME)이 주입된다."""
+      - DB 에 세션 있음: --continue nous-<role> 로 재개(누적). 역할 홈(BOGO_HOME)이 주입된다."""
     role = "orchestrator"
     sid_out = "session_id: 20260625_aaa_bbb\n" + json.dumps(_valid_decision(), ensure_ascii=False)
     # (1) 첫 진입: DB 에 타이틀 없음 → 새 세션 생성 후 rename 이 일어나야 한다.
@@ -423,18 +423,18 @@ def test_persistent_session_first_then_continue():
     assert chat_runs, "chat 호출이 없음"
     assert "--continue" not in chat_runs[0]["cmd"], "첫 진입인데 --continue 사용(세션 부재 에러 위험)"
     assert rename_runs, "새 세션 생성 후 rename(세션 명명) 이 없음 → 다음 호출이 영속 안 됨"
-    assert "hermes-orchestrator" in rename_runs[0]["cmd"], "rename 대상이 역할 세션명이 아님"
-    assert runs[0]["home"] and "hermesorchestrator" in runs[0]["home"], \
-        "역할 홈(HERMES_HOME) 미주입(메모리 격리 안 됨)"
+    assert "nous-orchestrator" in rename_runs[0]["cmd"], "rename 대상이 역할 세션명이 아님"
+    assert runs[0]["home"] and "nousorchestrator" in runs[0]["home"], \
+        "역할 홈(BOGO_HOME) 미주입(메모리 격리 안 됨)"
     assert out is not None
     # (2) DB 에 세션 있음: --continue 로 재개. sessions list(조회) → chat --continue 순.
     runs2, out2 = _capture_runs(role=role, exists=True)
     list_runs = [r for r in runs2 if r["cmd"][1] == "sessions" and "list" in r["cmd"]]
     chat2 = [r for r in runs2 if r["cmd"][1] == "chat"]
     assert list_runs, "재개 전 sessions list(진실원천 조회)가 없음"
-    assert chat2 and "--continue" in chat2[0]["cmd"] and "hermes-orchestrator" in chat2[0]["cmd"], \
-        "DB 에 세션 있는데 --continue hermes-<role> 로 재개하지 않음(영속 누적 실패)"
-    assert chat2[0]["home"] and "hermesorchestrator" in chat2[0]["home"], "재개 시 역할 홈 미주입"
+    assert chat2 and "--continue" in chat2[0]["cmd"] and "nous-orchestrator" in chat2[0]["cmd"], \
+        "DB 에 세션 있는데 --continue nous-<role> 로 재개하지 않음(영속 누적 실패)"
+    assert chat2[0]["home"] and "nousorchestrator" in chat2[0]["home"], "재개 시 역할 홈 미주입"
     assert out2 is not None
     print("[PASS] 영속 세션(DB부재→생성+rename, DB존재→list조회 후 --continue 재개·역할 홈) 통과")
 
@@ -451,12 +451,12 @@ def test_bot_restart_resumes_same_session():
     runs2, _ = _capture_runs(role=role, exists=True)
     for label, runs in (("1회차", runs1), ("2회차(재기동 후)", runs2)):
         chat = [r for r in runs if r["cmd"][1] == "chat"]
-        assert chat and "--continue" in chat[0]["cmd"] and "hermes-orchestrator" in chat[0]["cmd"], \
+        assert chat and "--continue" in chat[0]["cmd"] and "nous-orchestrator" in chat[0]["cmd"], \
             f"{label}: 재기동 후에도 같은 세션을 --continue 로 재개해야 함(캐시 비의존). cmd={chat}"
         # 재기동 후 재개 경로에선 새 세션 생성(rename)이 일어나면 안 된다(누적 끊김 신호).
         new_chats = [r for r in chat if "--continue" not in r["cmd"]]
         assert not new_chats, f"{label}: 재개 가능한데 새 세션을 또 만듦(누적 끊김): {new_chats}"
-    print("[PASS] 봇 재기동 시뮬레이션(캐시 비움) → 같은 hermes-<role> 세션 --continue 재개(누적 유지) 통과")
+    print("[PASS] 봇 재기동 시뮬레이션(캐시 비움) → 같은 nous-<role> 세션 --continue 재개(누적 유지) 통과")
 
 
 def test_continue_missing_session_falls_to_create():
@@ -512,36 +512,36 @@ def test_force_session_reset_none():
 
 
 def test_role_memory_isolation_no_leak():
-    """[역할 격리] A 역할 홈에 만든 세션 타이틀이 B 역할 홈 조회에 섞이지 않는다(HERMES_HOME 경계).
+    """[역할 격리] A 역할 홈에 만든 세션 타이틀이 B 역할 홈 조회에 섞이지 않는다(BOGO_HOME 경계).
     각 역할 홈은 서로 다른 state.db 를 보므로 sessions list 결과가 역할별로 분리된다."""
     import subprocess as _sp
-    # 역할 홈별로 다른 세션 목록을 반환하도록 모사(HERMES_HOME 으로 분기).
-    db = {B.role_home("orchestrator"): ["hermes-orchestrator"],
-          B.role_home("hr"): ["hermes-hr"]}
+    # 역할 홈별로 다른 세션 목록을 반환하도록 모사(BOGO_HOME 으로 분기).
+    db = {B.role_home("orchestrator"): ["nous-orchestrator"],
+          B.role_home("hr"): ["nous-hr"]}
 
     class _P:
         def __init__(self, rc, out):
             self.returncode, self.stdout, self.stderr = rc, out, ""
 
     def _fake(cmd, **kw):
-        home = (kw.get("env") or {}).get("HERMES_HOME", "")
+        home = (kw.get("env") or {}).get("BOGO_HOME", "")
         if len(cmd) > 2 and cmd[1] == "sessions" and cmd[2] == "list":
             return _P(0, _sessions_list_stdout(db.get(home, [])))
         return _P(0, "")
-    orig_run, orig_res = _sp.run, B.resolve_hermes_bin
+    orig_run, orig_res = _sp.run, B.resolve_official_bin
     try:
         _sp.run = _fake
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         # orchestrator 홈에는 자기 세션만 보이고 hr 세션은 안 보인다.
         assert B.session_exists("orchestrator") is True, "orchestrator 자기 세션 미존재"
         # hr 역할로 조회하면 orchestrator 세션은 안 보이고 hr 세션만.
         assert B.session_exists("hr") is True, "hr 자기 세션 미존재"
         # 교차: orchestrator 세션명이 hr 홈 목록엔 없어야(누수 없음).
         hr_titles = B._parse_session_titles(_sessions_list_stdout(db[B.role_home("hr")]))
-        assert "hermes-orchestrator" not in hr_titles, "타 역할 세션이 hr 홈 목록에 누출(격리 위반)"
+        assert "nous-orchestrator" not in hr_titles, "타 역할 세션이 hr 홈 목록에 누출(격리 위반)"
     finally:
-        _sp.run, B.resolve_hermes_bin = orig_run, orig_res
-    print("[PASS] 역할 메모리/세션 격리(HERMES_HOME 경계로 타 역할 세션 비누출) 통과")
+        _sp.run, B.resolve_official_bin = orig_run, orig_res
+    print("[PASS] 역할 메모리/세션 격리(BOGO_HOME 경계로 타 역할 세션 비누출) 통과")
 
 
 def test_decide_passes_role_through():
@@ -549,11 +549,11 @@ def test_decide_passes_role_through():
     H.history = lambda channel_id, n=12: ["사람: x"]
     seen = {"role": None}
     orig_call = B.call_official_brain
-    orig_resolve = B.resolve_hermes_bin
+    orig_resolve = B.resolve_official_bin
     orig_toggle = B.USE_OFFICIAL_BRAIN
     orig_fb = H._decide_fallback
     try:
-        B.resolve_hermes_bin = lambda: "/fake/hermes"
+        B.resolve_official_bin = lambda: "/fake/nous-cli"
         B.USE_OFFICIAL_BRAIN = True
 
         def _spy(query, timeout=None, role=None):
@@ -564,7 +564,7 @@ def test_decide_passes_role_through():
         H.decide("CEO브리핑", "ch1", "사람", "x")
     finally:
         B.call_official_brain = orig_call
-        B.resolve_hermes_bin = orig_resolve
+        B.resolve_official_bin = orig_resolve
         B.USE_OFFICIAL_BRAIN = orig_toggle
         H._decide_fallback = orig_fb
     assert seen["role"] == H.ROLE, f"ROLE({H.ROLE!r}) 이 call_official_brain 까지 전달 안 됨: {seen['role']!r}"
@@ -591,7 +591,7 @@ if __name__ == "__main__":
     test_force_session_reset_none()
     test_role_memory_isolation_no_leak()
     test_decide_passes_role_through()
-    print("\n전체 통과 ✓ — 공식 hermes 두뇌(재귀학습판): 출력 파싱·정상 경로·graceful fallback·"
+    print("\n전체 통과 ✓ — 공식 외부 CLI 두뇌(재귀학습판): 출력 파싱·정상 경로·graceful fallback·"
           "토글 OFF·페르소나/맥락 주입·방 격리·비용 통제·--ignore-rules 부재·역할 격리(세션/홈)·"
           "타이틀 파싱·session_exists(DB 진실원천)·영속 세션(생성+rename→--continue)·"
           "봇 재기동 후 동일세션 재개(캐시 비의존)·세션부재 자가복구·session_reset→none 강제·"

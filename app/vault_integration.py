@@ -1,7 +1,7 @@
 """
 두뇌 <-> Vault 통합 어댑터(graceful, 실패해도 기존 동작 보존).
 
-hermes_runtime 의 decide()/run() 이 Vault RAG·writer 를 직접 import 하면 결합도가 높아지고
+bogo_runtime 의 decide()/run() 이 Vault RAG·writer 를 직접 import 하면 결합도가 높아지고
 회귀 위험이 커진다. 그래서 모든 통합을 이 얇은 어댑터 한 곳에 가두고, 어떤 단계가 실패해도
 예외를 삼켜 '기존 동작으로 폴백'한다(RAG 미설치/인덱스 손상/디스크 오류에도 봇은 계속 돈다).
 
@@ -17,11 +17,11 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # 통합 토글(1=on 기본, 0=완전 비활성 -> 기존 동작과 100% 동일). 진단·롤백용.
-VAULT_ENABLED = os.environ.get("HERMES_VAULT_ENABLED", "1") == "1"
+VAULT_ENABLED = os.environ.get("BOGO_VAULT_ENABLED", "1") == "1"
 # RAG 주입 top-k(과다 주입은 토큰·노이즈를 늘리므로 보수적).
-RAG_TOP_K = int(os.environ.get("HERMES_VAULT_TOPK", "4") or "4")
+RAG_TOP_K = int(os.environ.get("BOGO_VAULT_TOPK", "4") or "4")
 # 증분 인덱싱 최소 간격(초). 매 메시지마다 전체 walk 를 돌리지 않게 스로틀.
-INDEX_THROTTLE_SEC = int(os.environ.get("HERMES_VAULT_INDEX_THROTTLE", "60") or "60")
+INDEX_THROTTLE_SEC = int(os.environ.get("BOGO_VAULT_INDEX_THROTTLE", "60") or "60")
 _last_index_at = 0.0
 
 

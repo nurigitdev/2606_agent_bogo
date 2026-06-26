@@ -1,4 +1,4 @@
-# Hermes cross-platform bootstrap (Windows / PowerShell).
+# BOGO cross-platform bootstrap (Windows / PowerShell).
 #
 # From a fresh git clone or copy: locates Python 3.12, (re)creates a PORTABLE .venv,
 # installs requirements.txt, copies *.example -> real config only when missing.
@@ -70,5 +70,5 @@ Copy-IfMissing "channels.json.example"     "channels.json"
 Say "부트스트랩 완료."
 Say "다음 단계:"
 Say "  1) .env / *_config.json / channels.json 에 실제 값 입력"
-Say "  2) 상시 가동 등록:  .\hermes_ctl.ps1 install"
-Say "  3) 또는 수동 실행:  .venv\Scripts\python.exe hermes_runtime.py orchestrator"
+Say "  2) 상시 가동 등록:  .\bogo_ctl.ps1 install"
+Say "  3) 또는 수동 실행:  .venv\Scripts\python.exe bogo_runtime.py orchestrator"

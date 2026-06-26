@@ -936,6 +936,9 @@ _CSS = """
   .login-card button { width:100%; margin-top:var(--space-4); }
   .login-err { color:#b3261e; font-size:14px; margin-top:var(--space-4); min-height:18px;
     text-align:center; letter-spacing:-0.2px; }
+  .login-hint { margin-top:var(--space-5); font-size:12px; line-height:1.6;
+    color:var(--ink-faint); text-align:center; letter-spacing:-0.1px; }
+  .login-hint b { color:var(--ink-soft); font-weight:600; }
   @media (max-width:1024px){
     .grid { grid-template-columns:repeat(2,1fr); }
     .roster { grid-template-columns:repeat(2,1fr); }
@@ -1214,6 +1217,8 @@ def build_login_html():
     </div>
     <button id="loginBtn" type="submit">로그인</button>
     <div class="login-err" id="err"></div>
+    <div class="login-hint">데모 계정 · 비밀번호 모두 <b>1111</b><br>
+      admin (관리자) · ceo (CEO) · e1·e2·e3 (직원)</div>
   </form>
 </div>
 <script>

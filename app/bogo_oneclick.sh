@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════
-#  헤르메스 원클릭 오케스트레이터 — 버튼 하나로 전 구성요소 활성화
+#  BOGO 원클릭 오케스트레이터 — 버튼 하나로 전 구성요소 활성화
 # ════════════════════════════════════════════════════════════════════════
-#  WHY  기존 경로는 (a)통신 백본(infra_up.sh)과 (b)봇 launchd(hermes_ctl.sh)만
+#  WHY  기존 경로는 (a)통신 백본(infra_up.sh)과 (b)봇 launchd(bogo_ctl.sh)만
 #    띄웠다. CEO 대시보드(8642)·Vault RAG reindex 는 어디에서도 자동 기동되지
 #    않아 사람이 매번 손으로 떠야 하는 토일이 남아 있었다. 이 스크립트가 5계층을
 #    "정해진 순서 + 헬스체크 + 멱등 + 포트충돌 방지"로 한 번에 올린다.
@@ -12,7 +12,7 @@
 #    2) Vault RAG reindex (visibility 스키마 반영, 1회)
 #    3) Mattermost 통신 백본(Colima→컨테이너→MM readiness)  ← infra_up.sh 재사용
 #    4) CEO 대시보드(127.0.0.1:8642) 기동 + 헬스체크          ← 본 스크립트가 관리
-#    5) 에이전트 봇 4역할(launchd/systemd)                    ← hermes_ctl.sh 재사용
+#    5) 에이전트 봇 4역할(launchd/systemd)                    ← bogo_ctl.sh 재사용
 #
 #  멱등: 재실행해도 이미 떠 있는 것은 재사용(중복 기동 X). 대시보드가 죽어 있으면
 #    좀비 PID 정리 후 재기동. 포트 점유 시 그 PID 가 우리 대시보드면 재사용,
@@ -21,11 +21,11 @@
 #  보안: 대시보드는 반드시 127.0.0.1(루프백)에서만 listen. 외부 노출 금지.
 #  로그·PID: app/logs/ 에만 기록(.gitignore 처리됨).
 #  사용법:
-#    ./hermes_oneclick.sh start     # 전체 기동(기본)
-#    ./hermes_oneclick.sh stop      # 대시보드 정지(봇 launchd 는 stop 인자로 별도)
-#    ./hermes_oneclick.sh stop --all  # 대시보드 + 봇 launchd 까지 모두 내림
-#    ./hermes_oneclick.sh status    # 전 구성요소 상태
-#    ./hermes_oneclick.sh restart   # 정지 후 재기동
+#    ./bogo_oneclick.sh start     # 전체 기동(기본)
+#    ./bogo_oneclick.sh stop      # 대시보드 정지(봇 launchd 는 stop 인자로 별도)
+#    ./bogo_oneclick.sh stop --all  # 대시보드 + 봇 launchd 까지 모두 내림
+#    ./bogo_oneclick.sh status    # 전 구성요소 상태
+#    ./bogo_oneclick.sh restart   # 정지 후 재기동
 set -uo pipefail
 
 # ── 자기 위치 = app 루트(한글·공백 경로 안전) ──────────────────────────
@@ -37,11 +37,11 @@ mkdir -p "$LOGS"
 
 # 대시보드 루프백 전용 + 포트(환경변수로 덮어쓰기 가능, 기본 8642).
 DASH_HOST="127.0.0.1"
-DASH_PORT="${HERMES_DASHBOARD_PORT:-8642}"
+DASH_PORT="${BOGO_DASHBOARD_PORT:-8642}"
 DASH_PID_FILE="$LOGS/dashboard.pid"
 DASH_OUT="$LOGS/dashboard.out.log"
 DASH_ERR="$LOGS/dashboard.err.log"
-DASH_HEALTH_TIMEOUT="${HERMES_DASH_WAIT_TIMEOUT:-30}"
+DASH_HEALTH_TIMEOUT="${BOGO_DASH_WAIT_TIMEOUT:-30}"
 
 MM_HOST="127.0.0.1"
 MM_PORT="8065"
@@ -173,7 +173,7 @@ step_dashboard() {
       return 0
     fi
     if [ -n "${foreign// /}" ]; then
-      warn "포트 $DASH_PORT 를 헤르메스 외 프로세스($foreign)가 점유 → 안전 종료 시도."
+      warn "포트 $DASH_PORT 를 BOGO 외 프로세스($foreign)가 점유 → 안전 종료 시도."
       for p in $foreign; do kill "$p" 2>/dev/null || true; done
       sleep 1
       for p in $foreign; do kill -9 "$p" 2>/dev/null || true; done
@@ -190,7 +190,7 @@ step_dashboard() {
   fi
   # .env 로드(봇 토큰·키). nk_config.json 의 bot_token 이 비면 대시보드가 SystemExit.
   if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
-  HERMES_DASHBOARD_PORT="$DASH_PORT" nohup "$VENV_PY" -u "$HERE/ceo_dashboard.py" \
+  BOGO_DASHBOARD_PORT="$DASH_PORT" nohup "$VENV_PY" -u "$HERE/ceo_dashboard.py" \
     >"$DASH_OUT" 2>"$DASH_ERR" &
   local newpid=$!
   echo "$newpid" > "$DASH_PID_FILE"
@@ -216,31 +216,31 @@ step_dashboard() {
 }
 
 # ════════════════════════════════════════════════════════════════════════
-# 5) 에이전트 봇 4역할 (launchd/systemd, hermes_ctl.sh 재사용)
+# 5) 에이전트 봇 4역할 (launchd/systemd, bogo_ctl.sh 재사용)
 # ════════════════════════════════════════════════════════════════════════
 bots_loaded_count() {
   case "$(uname -s)" in
-    Darwin) launchctl list 2>/dev/null | grep -c "com\.hermes\.\(orchestrator\|hr\|dev\|admin\)" || true ;;
-    Linux)  systemctl --user list-units 'hermes@*' --no-legend 2>/dev/null | grep -c hermes || true ;;
+    Darwin) launchctl list 2>/dev/null | grep -c "com.bogo.\(orchestrator\|hr\|dev\|admin\)" || true ;;
+    Linux)  systemctl --user list-units 'bogo@*' --no-legend 2>/dev/null | grep -c bogo || true ;;
     *) echo 0 ;;
   esac
 }
 
 step_bots() {
   say "[5/5] 에이전트 봇 4역할 기동/재배포..."
-  if [ ! -x "$HERE/hermes_ctl.sh" ]; then
-    err "hermes_ctl.sh 없음 → 봇 기동 불가."
+  if [ ! -x "$HERE/bogo_ctl.sh" ]; then
+    err "bogo_ctl.sh 없음 → 봇 기동 불가."
     return 1
   fi
   local loaded; loaded="$(bots_loaded_count)"
   if [ "${loaded:-0}" -ge 1 ]; then
     say "봇 ${loaded}개 이미 등록됨 → 최신 코드 재배포 + 재시작(중복 기동 X)."
     # restart 는 내부에서 infra_up.sh 를 또 호출하지만 멱등이므로 안전(이미 떠 있음=즉시통과).
-    if "$HERE/hermes_ctl.sh" restart; then ok "봇 재배포+재시작 완료."; else
-      err "봇 재시작 실패 — 진단: ./hermes_ctl.sh status"; return 1; fi
+    if "$HERE/bogo_ctl.sh" restart; then ok "봇 재배포+재시작 완료."; else
+      err "봇 재시작 실패 — 진단: ./bogo_ctl.sh status"; return 1; fi
   else
     say "봇 미등록 → 최초 설치(bootstrap + 백본 + launchd 등록)."
-    if "$HERE/hermes_ctl.sh" setup; then ok "봇 설치+상시가동 등록 완료."; else
+    if "$HERE/bogo_ctl.sh" setup; then ok "봇 설치+상시가동 등록 완료."; else
       err "봇 설치 실패 — 위 로그 확인."; return 1; fi
   fi
 }
@@ -268,14 +268,14 @@ do_stop() {
 
   if [ "$all" = "--all" ]; then
     say "봇 launchd/systemd 등록 해제(상시가동 중지)..."
-    "$HERE/hermes_ctl.sh" uninstall && ok "봇 상시가동 해제됨." || warn "봇 해제 중 경고."
+    "$HERE/bogo_ctl.sh" uninstall && ok "봇 상시가동 해제됨." || warn "봇 해제 중 경고."
     say "참고: Mattermost/Postgres 컨테이너·Colima 는 데이터 보존 위해 그대로 둡니다."
-    say "      완전 종료가 필요하면 수동: docker stop hermes-mm hermes-pg && colima stop"
+    say "      완전 종료가 필요하면 수동: docker stop bogo-mm bogo-pg && colima stop"
   fi
 }
 
 do_status() {
-  printf '%s── 헤르메스 구성요소 상태 ──%s\n' "$C_INFO" "$C_RST"
+  printf '%s── BOGO 구성요소 상태 ──%s\n' "$C_INFO" "$C_RST"
   # 백본
   local mm="다운"
   http_ok "http://$MM_HOST:$MM_PORT/api/v4/system/ping" && mm="정상(200)"
@@ -289,7 +289,7 @@ do_status() {
   # 봇
   printf '  에이전트 봇  : %s개 등록\n' "$(bots_loaded_count)"
   if [ "$(uname -s)" = "Darwin" ]; then
-    launchctl list 2>/dev/null | grep "com\.hermes\." | sed 's/^/      /' || true
+    launchctl list 2>/dev/null | grep "com.bogo." | sed 's/^/      /' || true
   fi
 }
 
@@ -297,7 +297,7 @@ do_status() {
 # start 파이프라인
 # ════════════════════════════════════════════════════════════════════════
 do_start() {
-  printf '\n%s════ 헤르메스 원클릭 기동 시작 ════%s\n' "$C_INFO" "$C_RST"
+  printf '\n%s════ BOGO 원클릭 기동 시작 ════%s\n' "$C_INFO" "$C_RST"
   say "위치: $HERE"
   printf '\n'
 
@@ -321,8 +321,8 @@ do_start() {
   printf '  • CEO 대시보드 :  %shttp://%s:%s%s\n' "$C_OK" "$DASH_HOST" "$DASH_PORT" "$C_RST"
   printf '  • Mattermost   :  %shttp://%s:%s%s\n' "$C_OK" "$MM_HOST" "$MM_PORT" "$C_RST"
   printf '  • 에이전트 봇  :  %s개 상시가동(launchd/systemd)\n' "$(bots_loaded_count)"
-  printf '  • 정지        :  ./hermes_oneclick.sh stop   (봇까지: stop --all)\n'
-  printf '  • 상태        :  ./hermes_oneclick.sh status\n\n'
+  printf '  • 정지        :  ./bogo_oneclick.sh stop   (봇까지: stop --all)\n'
+  printf '  • 상태        :  ./bogo_oneclick.sh status\n\n'
 }
 
 # ── 디스패치 ──────────────────────────────────────────────────────────────

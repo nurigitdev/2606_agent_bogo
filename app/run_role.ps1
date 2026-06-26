@@ -1,4 +1,4 @@
-# Hermes role launcher (Windows / PowerShell).
+# BOGO role launcher (Windows / PowerShell).
 # Usage:  pwsh ./run_role.ps1 <orchestrator|hr|dev|admin>
 # Loads .env then execs the venv python runtime. Hangul-path safe.
 param([Parameter(Mandatory=$true)][string]$Role)
@@ -26,9 +26,9 @@ if (-not (Test-Path $VenvPy)) {
   exit 1
 }
 
-# admin = CEO 업데이트 파이프라인(ceo_admin_runtime.py), 나머지는 hermes_runtime.py.
+# admin = CEO 업데이트 파이프라인(ceo_admin_runtime.py), 나머지는 bogo_runtime.py.
 if ($Role -eq "admin") {
   & $VenvPy -u (Join-Path $Here "ceo_admin_runtime.py")
 } else {
-  & $VenvPy -u (Join-Path $Here "hermes_runtime.py") $Role
+  & $VenvPy -u (Join-Path $Here "bogo_runtime.py") $Role
 }

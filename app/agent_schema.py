@@ -1,7 +1,7 @@
 """
 에이전트 정의 로딩·검증 공용 모듈.
 
-hermes_runtime.py(런타임 기동)와 lint_agents.py(머지 차단 린트)가 공유한다.
+bogo_runtime.py(런타임 기동)와 lint_agents.py(머지 차단 린트)가 공유한다.
 - agents/*.md frontmatter 파싱 + 필수필드/중복/채널참조 검증
 - teams.json 로딩 + ROUTING 텍스트 동적 생성 (하드코딩 제거)
 - agents/_shared/common_rules.md 상속 주입 헬퍼
@@ -23,12 +23,12 @@ LIST_FIELDS = ("aliases", "channels")
 LEARN_PLACEHOLDER_PREFIX = "TODO_"
 
 # 학습 노트 안에서 '반드시 지킬 교정' 항목을 나타내는 라인 접두(단일 출처).
-# hermes_runtime 의 저장 로직과 여기 system_prompt 의 강조 렌더가 같은 값을 공유한다.
+# bogo_runtime 의 저장 로직과 여기 system_prompt 의 강조 렌더가 같은 값을 공유한다.
 CORRECTION_PREFIX = "[교정]"
 
 # ── 에이전트 개조 의도 판별(공용 단일 출처) ─────────────────────────────────────
-# ceo_admin_runtime(개조 파이프라인)과 hermes_runtime(학습 누적 오염 방지)이 같은 기준을
-# 공유해야 한다. ceo_admin 은 이 판별로 '적용/반려' 단독 명령을 분기하고, hermes_runtime 은
+# ceo_admin_runtime(개조 파이프라인)과 bogo_runtime(학습 누적 오염 방지)이 같은 기준을
+# 공유해야 한다. ceo_admin 은 이 판별로 '적용/반려' 단독 명령을 분기하고, bogo_runtime 은
 # '개조 지시·적용/반려'를 학습 노트 누적에서 경량 제외한다(정밀 판정·실행은 ceo_admin 의 LLM
 # parse_intent 가 담당하고, 여기 휴리스틱은 LLM 없이 빠르게 거르는 1차 필터다).
 ADMIN_APPLY_WORDS = ("적용", "반영", "승인", "확정")
@@ -80,7 +80,7 @@ def looks_like_definition_edit(text, role_tokens):
 
 # ── ReAct / tool use 단일 출처 ────────────────────────────────────────────────
 # decide()가 단발 LLM 호출 → 다단계 에이전트 루프로 전환되면서, 매 반복의 출력 스키마와
-# 안전 도구 화이트리스트를 여기(데이터/스키마 단일 출처)에 둔다. hermes_runtime 은 이 정의를
+# 안전 도구 화이트리스트를 여기(데이터/스키마 단일 출처)에 둔다. bogo_runtime 은 이 정의를
 # 그대로 읽어 (a) 시스템 프롬프트에 ReAct 지침을 주입하고 (b) OpenRouter tools 파라미터를
 # 구성하며 (c) 도구 이름 화이트리스트를 강제한다(저장 정의 ↔ 실행 강제 불일치 방지).
 
@@ -193,9 +193,9 @@ def react_system_addendum(max_steps):
     )
 
 
-# ── 공식 Nous Hermes Agent(`hermes chat`) 두뇌 통일 — 단일 출처 ─────────────────
-# decide()의 처리 두뇌를 커스텀 urllib OpenRouter 직접호출에서 공식 hermes CLI 로 통일한다.
-# 공식 hermes 는 system-prompt 주입용 별도 플래그가 없고(rules/SOUL/AGENTS 자동주입만 있음),
+# ── 공식 외부 CLI(bogo_brain) 두뇌 통일 — 단일 출처 ────────────────────────
+# decide()의 처리 두뇌를 커스텀 urllib OpenRouter 직접호출에서 공식 외부 CLI 로 통일한다.
+# 공식 외부 CLI 는 system-prompt 주입용 별도 플래그가 없고(rules/SOUL/AGENTS 자동주입만 있음),
 # 봇 머신의 무관한 SOUL.md/AGENTS.md 가 섞이면 페르소나가 오염되므로 `--ignore-rules` 로
 # 기본 주입을 끄고, 우리의 페르소나·공통규칙·라우팅·교정·학습·방메모·대화이력·출력계약을
 # 전부 하나의 query(-q) 로 합성해 주입한다(주입 단일 경로 → 계약 일관).
@@ -203,7 +203,7 @@ def react_system_addendum(max_steps):
 # 스키마와 동일 계약 → 송신부·검증부를 그대로 재사용, 두뇌만 교체).
 
 def finalize_schema_instruction():
-    """공식 hermes 두뇌가 반드시 따라야 할 출력 계약. 자유서술·도구·설명 없이
+    """공식 외부 CLI 두뇌가 반드시 따라야 할 출력 계약. 자유서술·도구·설명 없이
     행동 결정 JSON 객체 하나만 출력하게 강제한다(기존 FINALIZE_FIELDS 스키마와 동일).
     이 JSON 이 곧 송신/검증부가 소비하는 행동 결정이다(두뇌 교체 후에도 계약 불변)."""
     return (
@@ -235,7 +235,7 @@ def finalize_schema_instruction():
 
 def official_brain_query(spec, common_rules, routing, cname, convo, speaker_name,
                          text, memo="", room_memo="", learn_note=""):
-    """공식 hermes 두뇌(`hermes chat -q`)에 통째로 줄 단일 query 를 합성한다.
+    """공식 외부 CLI 에 통째로 줄 단일 query 를 합성한다.
     기존 system_prompt(페르소나+공통규칙+라우팅+메모리 3층) 조립을 그대로 재사용하되,
     공식 CLI 에는 system 슬롯이 없으므로 시스템 지침 + 현재 방/대화/메시지 + 출력계약을
     하나의 user query 문자열로 이어 붙인다. react_steps=0 으로 ReAct 지침은 넣지 않는다
@@ -252,7 +252,7 @@ def official_brain_query(spec, common_rules, routing, cname, convo, speaker_name
 
 def _strip_fence(s):
     """LLM 출력에서 코드펜스를 벗기고 첫 { ~ 마지막 } 사이만 추출(JSON 강건 파싱용).
-    hermes_runtime._strip_fence / mm_client.strip_fence 와 동일 로직(여기 자체 보유 →
+    bogo_runtime._strip_fence / mm_client.strip_fence 와 동일 로직(여기 자체 보유 →
     공식 두뇌 출력 파싱이 외부 모듈 의존 없이 닫혀 동작)."""
     s = (s or "").strip()
     if s.startswith("```"):
@@ -268,7 +268,7 @@ def _strip_fence(s):
 
 
 def parse_official_brain_output(raw):
-    """공식 hermes CLI(-Q) stdout 에서 행동 결정 JSON 을 추출해 dict 로 반환.
+    """공식 외부 CLI(-Q) stdout 에서 행동 결정 JSON 을 추출해 dict 로 반환.
     -Q 모드 출력은 'session_id: ...' 메타 라인 + 응답 본문이 섞여 나오므로,
     session_id/usage 류 메타 라인을 걷어내고 strip_fence 로 첫 { ~ 마지막 } 만 파싱한다.
     파싱 실패 시 None(→ 호출부가 fallback 으로 전환)."""

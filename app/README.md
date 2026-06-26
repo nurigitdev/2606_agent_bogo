@@ -1,4 +1,4 @@
-# 사내 보고 멀티에이전트 (Hermes Agent + DeepSeek V4 Flash)
+# 사내 보고 멀티에이전트 (에이전트 BOGO + DeepSeek V4 Flash)
 
 3개 업무 에이전트(박민철=비서실장, 이다은=인사총무, 최지현=개발)가 Mattermost 채널을 통로로
 상향(팀→박민철→CEO)·하향(CEO→박민철→팀) 보고를 자율 라우팅한다.
@@ -7,17 +7,17 @@
 
 | 레이어 | 구성 |
 |--------|------|
-| 두뇌(추론) | **Hermes Agent**(Nous Research) `AIAgent` 런타임 + 모델 **DeepSeek V4 Flash**(OpenRouter 경유) |
+| 두뇌(추론) | **에이전트 BOGO 두뇌**(Nous Research `AIAgent` 런타임, 외부 pip) `AIAgent` 런타임 + 모델 **DeepSeek V4 Flash**(OpenRouter 경유) |
 | 통로(메시징) | **Mattermost** — WebSocket 수신 → REST 게시 (커스텀 게이트웨이 어댑터) |
 | 라우팅 | 매 메시지마다 `decide()`가 LLM JSON으로 '내 차례인가 + 무엇을' 자율 판단. 멘션으로 다음 행위자 핸드오프 |
 
-- 진입점: `hermes_runtime.py`  (실행: `<venv>/python hermes_runtime.py <orchestrator|hr|dev>`)
+- 진입점: `bogo_runtime.py`  (실행: `<venv>/python bogo_runtime.py <orchestrator|hr|dev>`)
 - 두뇌 호출은 `run_agent.AIAgent.chat()`이 담당(provider 레이어·재시도·대화 루프 내부 처리). 도구는 전부 비활성 → 순수 JSON 판단만 생성.
 - 폭주 방지(규칙 아닌 구조): 봇 메시지는 멘션될 때만 판단(메아리 차단), 끝나면 `act=false` 침묵 / `task_status=closed`.
 - 복원력(구조): WebSocket이 끊기면 지수 백오프(최대 30s)로 자동 재접속해 데몬이 죽지 않는다. 단일 메시지의 LLM/JSON/Mattermost 오류는 해당 메시지만 드롭하고 루프는 유지한다. 토큰 불량(WS 인증 실패)은 재시도 무의미하므로 즉시 중단해 운영자에게 알린다.
 
-> 주의: 진입 파일명을 `agent.py`로 두면 hermes-agent 패키지의 `agent` 모듈을 가려(shadow) `run_agent` import가 깨진다.
-> 반드시 `hermes_runtime.py` 등 다른 이름을 쓴다.
+> 주의: 진입 파일명을 `agent.py`로 두면 Nous Research 외부 pip 런타임 패키지(requirements.txt 참조)의 `agent` 모듈을 가려(shadow) `run_agent` import가 깨진다.
+> 반드시 `bogo_runtime.py` 등 다른 이름을 쓴다.
 
 ---
 
@@ -31,7 +31,7 @@
 | 공유 규칙(상속) | `agents/_shared/common_rules.md` | 보고 포맷·작성 원칙·진행 공유·안전·소싱·완료 조건·행동결정 JSON 스키마. **런타임이 모든 에이전트 시스템 프롬프트에 자동 주입**. 한 곳만 고치면 전원 반영 |
 | 선언적 라우팅 | `teams.json` + `channels.json` | 팀(팀방·보고라인방·팀에이전트·상향대상)·채널(이름→ID) 데이터. 런타임이 `build_routing()`으로 ROUTING 텍스트를 동적 생성 |
 
-공용 모듈: `agent_schema.py`(파싱·검증·ROUTING 생성·프롬프트 조립), `mm_client.py`(LLM·Mattermost REST). `hermes_runtime.py`와 `ceo_admin_runtime.py`가 공유한다.
+공용 모듈: `agent_schema.py`(파싱·검증·ROUTING 생성·프롬프트 조립), `mm_client.py`(LLM·Mattermost REST). `bogo_runtime.py`와 `ceo_admin_runtime.py`가 공유한다.
 
 ### 새 팀/에이전트 추가법 (파이썬 수정 0)
 
@@ -94,7 +94,7 @@
 # 5) 린트로 정합성 확인 (channel·participants·lead·deliver_to 검증 + 참여자 channels 교차 확인)
 .venv/bin/python lint_agents.py
 # 6) 변경 배포(코드/데이터 반영 + 역할 재시작)
-./hermes_ctl.sh restart
+./bogo_ctl.sh restart
 ```
 
 > 운영자 주의: 작업방 채널을 자동 생성하지 못하는 환경(토큰 권한 부족·서버 미가동)이면, Mattermost
@@ -119,7 +119,7 @@
 # 수동 기동
 .venv/bin/python ceo_admin_runtime.py
 # 또는 launchd (admin 역할)
-~/.hermes-bin/run_role.sh admin
+~/.bogo-bin/run_role.sh admin
 ```
 
 ---
@@ -138,7 +138,7 @@ CEO가 Mattermost 채널을 일일이 오가지 않고 **브라우저 한 곳**(
 # 수동 기동 (포트 기본 8642)
 .venv/bin/python ceo_dashboard.py
 # 포트 변경
-HERMES_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
+BOGO_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 # 접속: http://127.0.0.1:8642   (외부 노출 안 됨 — 루프백 전용)
 ```
 
@@ -150,28 +150,28 @@ HERMES_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 
 ## 가장 쉬운 시작 — 더블클릭 (macOS)
 
-터미널 타이핑이 귀찮으면 프로젝트 루트의 **`헤르메스 시작.command`** 파일을 Finder에서 더블클릭한다.
+터미널 타이핑이 귀찮으면 프로젝트 루트의 **`BOGO 시작.command`** 파일을 Finder에서 더블클릭한다.
 
 - 아직 미설치면 → 자동으로 `setup`(venv+의존성+config+launchd 등록) 수행
 - 이미 상시 가동 중이면 → 중복 기동 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
 - 끝나면 현재 상태(PID/종료코드/역할)를 한국어로 표시하고, 오류 시 창이 닫히지 않고 원인을 보여준다
 
-내부적으로 `app/hermes_ctl.sh` 를 호출할 뿐이라 동작은 아래 명령들과 동일하다.
+내부적으로 `app/bogo_ctl.sh` 를 호출할 뿐이라 동작은 아래 명령들과 동일하다.
 (처음 다운로드 시 `우클릭 → 열기` 한 번으로 Gatekeeper 허용)
 
 ## 가장 쉬운 시작 — 더블클릭 (Windows)
 
-mac 절과 완전 대칭. 프로젝트 루트의 **`헤르메스 시작.bat`** 파일을 탐색기에서 더블클릭한다.
+mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을 탐색기에서 더블클릭한다.
 
 - 아직 미등록이면 → 자동으로 `setup`(venv+의존성+config+**Task Scheduler** 등록) 수행
 - 이미 상시 가동 등록돼 있으면 → 중복 등록 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
 - 끝나면 현재 상태(역할별 Task State)를 한국어로 표시하고, 오류 시 창이 닫히지 않고(`pause`) 원인을 보여준다
 
-내부 동작: `헤르메스 시작.bat`(UTF-8 `chcp 65001`, `cd /d "%~dp0"` 로 한글·공백 경로 고정)
-→ `헤르메스 시작.launcher.ps1`(가동 상태 감지·분기 본체)
-→ `app\hermes_ctl.ps1 {setup|restart|status}`. mac 의 `.command`→`hermes_ctl.sh` 경로와 1:1 등가다.
+내부 동작: `BOGO 시작.bat`(UTF-8 `chcp 65001`, `cd /d "%~dp0"` 로 한글·공백 경로 고정)
+→ `BOGO 시작.launcher.ps1`(가동 상태 감지·분기 본체)
+→ `app\bogo_ctl.ps1 {setup|restart|status}`. mac 의 `.command`→`bogo_ctl.sh` 경로와 1:1 등가다.
 
-- 가동 상태는 `Get-ScheduledTask -TaskName "Hermes_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.hermes` 등가).
+- 가동 상태는 `Get-ScheduledTask -TaskName "BOGO_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.bogo` 등가).
 - PowerShell 7(`pwsh`)이 있으면 그것을, 없으면 Windows 기본 `powershell` 5.1 을 자동으로 사용한다.
 - 처음이라면 `python.org 3.12`(설치 시 "Add to PATH" 체크) 설치 후 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
 
@@ -190,21 +190,21 @@ cd app
 ### macOS / Linux
 
 ```bash
-./hermes_ctl.sh setup       # ① venv 휴대용 재생성 + 의존성 설치 + *.example→config 복사
+./bogo_ctl.sh setup       # ① venv 휴대용 재생성 + 의존성 설치 + *.example→config 복사
                             #   ② OS 감지해 상시 가동 등록 (mac=launchd / linux=systemd --user)
 # setup 안내대로 .env·*_config.json·channels.json 에 실제 값 입력 → 재시작
-./hermes_ctl.sh restart
+./bogo_ctl.sh restart
 ```
 
-부트스트랩만: `./hermes_ctl.sh bootstrap` · 서비스만: `./hermes_ctl.sh install`
-수동 단일 실행: `./hermes_ctl.sh run orchestrator` · 상태: `./hermes_ctl.sh status`
+부트스트랩만: `./bogo_ctl.sh bootstrap` · 서비스만: `./bogo_ctl.sh install`
+수동 단일 실행: `./bogo_ctl.sh run orchestrator` · 상태: `./bogo_ctl.sh status`
 
 ### Windows (PowerShell)
 
 ```powershell
-pwsh ./hermes_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Scheduler 등록
+pwsh ./bogo_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Scheduler 등록
 # .env·*_config.json·channels.json 에 실제 값 입력 후
-pwsh ./hermes_ctl.ps1 restart
+pwsh ./bogo_ctl.ps1 restart
 ```
 
 > **Python 3.12 필수**(3.14는 일부 wheel 미제공). 없으면 부트스트랩이 설치 안내 후 멈춘다.
@@ -236,7 +236,7 @@ pwsh ./hermes_ctl.ps1 restart
 ## 상시 무중단 가동 (3 OS 크로스플랫폼)
 
 4개 역할(`orchestrator`/`hr`/`dev` + CEO 관리 봇 `admin`)을 OS별 네이티브 서비스로 등록한다.
-**로그인/부팅 시 자동 기동 + 비정상 종료 시 자동 재시작**. 단일 진입점 `hermes_ctl` 이 OS를 감지해 분기한다.
+**로그인/부팅 시 자동 기동 + 비정상 종료 시 자동 재시작**. 단일 진입점 `bogo_ctl` 이 OS를 감지해 분기한다.
 
 | OS | 서비스 메커니즘 | 자동 재시작 | 한글 경로 |
 |----|----------------|------------|----------|
@@ -246,23 +246,23 @@ pwsh ./hermes_ctl.ps1 restart
 
 ```bash
 # mac/linux
-./hermes_ctl.sh install      # 등록+기동      ./hermes_ctl.sh uninstall   # 등록 해제
-./hermes_ctl.sh restart      # 재배포+재시작  ./hermes_ctl.sh status      # 상태
+./bogo_ctl.sh install      # 등록+기동      ./bogo_ctl.sh uninstall   # 등록 해제
+./bogo_ctl.sh restart      # 재배포+재시작  ./bogo_ctl.sh status      # 상태
 
 # windows
-pwsh ./hermes_ctl.ps1 install ; pwsh ./hermes_ctl.ps1 status
+pwsh ./bogo_ctl.ps1 install ; pwsh ./bogo_ctl.ps1 status
 ```
 
 모든 서비스 파일은 **템플릿**(`service/templates/`)에서 설치 시점에 `${HOME}`·repo 절대경로로 치환 생성된다 —
 사용자명·설치 위치가 어디든 자동 적응한다(하드코딩 0건).
-Linux 로그: `journalctl --user -u hermes@orchestrator -f`. Windows: 작업 스케줄러 기록.
+Linux 로그: `journalctl --user -u bogo@orchestrator -f`. Windows: 작업 스케줄러 기록.
 
 ### NVIDIA DGX Spark / Ubuntu ARM64 상시 가동 (최종 사내 운영 타깃)
 
 최종 운영 환경은 **NVIDIA DGX Spark**(DGX OS = Ubuntu 24.04, **ARM64/aarch64**, Python 3.12)다.
 이 저장소는 ARM64에서 **추가 빌드 도구 없이 `pip install` 만으로** 동작한다 — 근거:
 
-- `hermes-agent` 는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처와 무관하게 설치된다(요구: Python ≥3.11, <3.14).
+- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처와 무관하게 설치된다(요구: Python ≥3.11, <3.14, requirements.txt 참조).
 - `websockets` 는 `manylinux_2_17_aarch64` + `cp312` 휠을 제공해 ARM64 Python 3.12 에서 바로 설치된다.
 - 따라서 DGX Spark 에서도 컴파일러·헤더 없이 `bootstrap.sh` 가 venv 를 만들고 의존성을 그대로 받는다.
 
@@ -276,10 +276,10 @@ sudo apt install -y python3.12 python3.12-venv
 # ② clone 후 단일 부트스트랩 + systemd --user 등록 (OS 자동 감지)
 git clone <repo-url>
 cd app
-./hermes_ctl.sh setup        # bootstrap(venv+deps+config) → systemd --user 4역할 enable --now
+./bogo_ctl.sh setup        # bootstrap(venv+deps+config) → systemd --user 4역할 enable --now
 
 # ③ .env·*_config.json·channels.json 에 실제 값 입력 후 재시작
-./hermes_ctl.sh restart
+./bogo_ctl.sh restart
 ```
 
 부팅 상시 가동(로그아웃·재부팅 후에도 자동 기동)은 **systemd `--user` + linger** 로 보장된다.
@@ -288,31 +288,31 @@ cd app
 
 ```bash
 sudo loginctl enable-linger "$USER"     # 사용자 세션 없이도 user 서비스가 부팅 시 기동
-systemctl --user enable --now hermes@orchestrator.service   # (setup 이 이미 4역할 enable)
+systemctl --user enable --now bogo@orchestrator.service   # (setup 이 이미 4역할 enable)
 ```
 
 운영 확인·로그:
 
 ```bash
-./hermes_ctl.sh status                                  # 4역할 active 여부
-journalctl --user -u hermes@orchestrator -f             # 역할별 실시간 로그
+./bogo_ctl.sh status                                  # 4역할 active 여부
+journalctl --user -u bogo@orchestrator -f             # 역할별 실시간 로그
 loginctl show-user "$USER" | grep Linger                # Linger=yes 면 부팅 상시 가동 보장됨
 ```
 
 > Linux 는 TCC·한글 경로 문제가 없어 **저장소를 인플레이스로 직접 실행**한다(macOS 같은 ASCII 미러 불필요).
-> `service/templates/hermes@.service.template` 의 `__WORKDIR__` 가 설치 시점에 repo 절대경로로 치환되며,
+> `service/templates/bogo@.service.template` 의 `__WORKDIR__` 가 설치 시점에 repo 절대경로로 치환되며,
 > `Restart=always`+`RestartSec=10`+`MemoryMax=1G` 로 크래시·메모리 누수에서 자동 복원한다.
 
-### macOS만의 특수 사정 — 왜 ASCII 미러(`~/.hermes-bin/app`)가 필요한가
+### macOS만의 특수 사정 — 왜 ASCII 미러(`~/.bogo-bin/app`)가 필요한가
 
 macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트가 **`~/Desktop` 아래 파일의 내용을
 읽는 것(open/read)을 차단**한다(디렉토리 목록은 되지만 `cat`은 "Operation not permitted").
 이 저장소는 `~/Desktop` 아래 있어, launchd가 직접 실행하면 `.env`·`*_config.json`·`channels.json`·
 `agents/*.md`·venv를 못 읽어 **즉시 종료(exit 127)**된다.
 
-→ 해결: `hermes_ctl.sh install` 이 운영 실행본을 비보호 ASCII 경로 **`${HOME}/.hermes-bin/app`** 에 자동
+→ 해결: `bogo_ctl.sh install` 이 운영 실행본을 비보호 ASCII 경로 **`${HOME}/.bogo-bin/app`** 에 자동
 미러링(rsync)하고, 거기서 venv를 만든 뒤 launchd가 그쪽을 실행한다. **저장소가 source of truth**(git 추적),
-`${HOME}/.hermes-bin/app` 은 자동 생성·갱신되는 배포 복사본이다.
+`${HOME}/.bogo-bin/app` 은 자동 생성·갱신되는 배포 복사본이다.
 
 > **이 미러는 macOS 전용이며 launchd+TCC가 강제하는 우회다.** Linux·Windows 는 미러 없이 저장소를
 > 한글 경로 그대로 인플레이스 실행한다. 코드·런처(`run_role.sh`/`run_role.ps1`)는 자기 위치를 동적으로
@@ -323,19 +323,19 @@ macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트
 | 위치 | 역할 |
 |------|------|
 | `<repo>/app` | 소스(git). 코드·설정 편집은 여기서. |
-| `${HOME}/.hermes-bin/app` | launchd가 실제 실행하는 운영 복사본(자동 생성) |
-| `${HOME}/.hermes-bin/run_role.sh` | launchd가 부르는 런처(.env 로드 후 venv python exec) |
-| `${HOME}/Library/LaunchAgents/com.hermes.{orchestrator,hr,dev,admin}.plist` | 등록된 에이전트(템플릿에서 생성) |
-| `${HOME}/.hermes-bin/app/logs/<role>.{out,err}.log` | 역할별 stdout/stderr 로그 |
+| `${HOME}/.bogo-bin/app` | launchd가 실제 실행하는 운영 복사본(자동 생성) |
+| `${HOME}/.bogo-bin/run_role.sh` | launchd가 부르는 런처(.env 로드 후 venv python exec) |
+| `${HOME}/Library/LaunchAgents/com.bogo.{orchestrator,hr,dev,admin}.plist` | 등록된 에이전트(템플릿에서 생성) |
+| `${HOME}/.bogo-bin/app/logs/<role>.{out,err}.log` | 역할별 stdout/stderr 로그 |
 
 ### 최초 설치 (권장: 단일 명령)
 
 ```bash
-./hermes_ctl.sh setup     # 부트스트랩(venv+의존성+config) → ASCII 미러 생성 → 4개 launchd 등록+기동
+./bogo_ctl.sh setup     # 부트스트랩(venv+의존성+config) → ASCII 미러 생성 → 4개 launchd 등록+기동
 ```
 
 `setup` 은 내부적으로 미러 동기화, 미러 내 venv 생성, plist 템플릿 치환·설치를 모두 수행한다.
-코드/설정 수정 후 재배포는 `./hermes_ctl.sh restart` 한 줄이면 된다(미러 재동기화 + 4역할 재시작 포함).
+코드/설정 수정 후 재배포는 `./bogo_ctl.sh restart` 한 줄이면 된다(미러 재동기화 + 4역할 재시작 포함).
 
 ### 운영 명령 (start / stop / status / 로그)
 
@@ -343,29 +343,29 @@ macOS 개인정보 보호(TCC)는 launchd가 띄운 백그라운드 에이전트
 UID=$(id -u)
 
 # 상태: 1열=PID, 2열=마지막 종료코드(0=정상), 3열=라벨
-launchctl list | grep hermes
-ps -p $(launchctl list | grep com.hermes.dev | awk '{print $1}') -o pid,stat,command
+launchctl list | grep bogo
+ps -p $(launchctl list | grep com.bogo.dev | awk '{print $1}') -o pid,stat,command
 
 # 로그 실시간 보기
-tail -f ~/.hermes-bin/app/logs/orchestrator.out.log
-tail -f ~/.hermes-bin/app/logs/dev.err.log
+tail -f ~/.bogo-bin/app/logs/orchestrator.out.log
+tail -f ~/.bogo-bin/app/logs/dev.err.log
 
 # 한 역할 재시작(코드 무관, 강제 재기동)
-launchctl kickstart -k gui/$UID/com.hermes.dev
+launchctl kickstart -k gui/$UID/com.bogo.dev
 
 # 중지(stop = 정지, KeepAlive로 다시 살아남 → 완전 중지는 bootout)
-launchctl bootout gui/$UID/com.hermes.dev
+launchctl bootout gui/$UID/com.bogo.dev
 
-# 전체 중지/기동/재시작은 hermes_ctl 권장 (admin 포함 4역할 일괄)
-./hermes_ctl.sh uninstall   # 전체 중지+해제
-./hermes_ctl.sh install     # 전체 등록+기동
+# 전체 중지/기동/재시작은 bogo_ctl 권장 (admin 포함 4역할 일괄)
+./bogo_ctl.sh uninstall   # 전체 중지+해제
+./bogo_ctl.sh install     # 전체 등록+기동
 ```
 
 ### 코드/설정 수정 후 배포
 
 ```bash
 # 저장소에서 편집한 뒤 한 줄 — 미러 재동기화 + 4개 역할 재시작
-./hermes_ctl.sh restart
+./bogo_ctl.sh restart
 ```
 
 ### 자동 재시작 검증(실증 완료)
@@ -374,12 +374,12 @@ launchctl bootout gui/$UID/com.hermes.dev
 로그에 부팅 배너 재출력됨을 확인했다. WS 끊김은 코드 내 지수 백오프가 자체 복구하고,
 프로세스 자체가 죽으면 launchd KeepAlive가 되살린다(이중 복원).
 
-> 단일 터미널 수동 기동: `./hermes_ctl.sh run <orchestrator|hr|dev|admin>`
-> (또는 미러 직접: `${HOME}/.hermes-bin/run_role.sh <role>`)
+> 단일 터미널 수동 기동: `./bogo_ctl.sh run <orchestrator|hr|dev|admin>`
+> (또는 미러 직접: `${HOME}/.bogo-bin/run_role.sh <role>`)
 
 ### 레거시 안내
 
-구 `launchd/` 디렉터리(`sync_app.sh`·구 `run_role.sh`·고정 plist)는 신규 크로스플랫폼 시스템(`hermes_ctl`
+구 `launchd/` 디렉터리(`sync_app.sh`·구 `run_role.sh`·고정 plist)는 신규 크로스플랫폼 시스템(`bogo_ctl`
 + `bootstrap.*` + `service/templates/`)으로 **완전히 대체되어 제거됐다**. 신규 시스템도 동일한
-`${HOME}/.hermes-bin` 경로를 쓰므로, 구 launchd 로 가동 중이던 기존 환경도 `hermes_ctl install`(또는
-`헤르메스 시작.command` 더블클릭) 한 번이면 그대로 인수인계된다(중복 라벨은 bootout 후 재등록).
+`${HOME}/.bogo-bin` 경로를 쓰므로, 구 launchd 로 가동 중이던 기존 환경도 `bogo_ctl install`(또는
+`BOGO 시작.command` 더블클릭) 한 번이면 그대로 인수인계된다(중복 라벨은 bootout 후 재등록).

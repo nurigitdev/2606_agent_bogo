@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermes cross-platform bootstrap (macOS / Linux).
+# BOGO cross-platform bootstrap (macOS / Linux).
 #
 # WHAT: From a fresh git clone or copy on ANY machine, this single command
 #   (1) locates a Python 3.12 interpreter,
@@ -92,5 +92,5 @@ copy_if_missing "channels.json.example"     "channels.json"
 say "부트스트랩 완료."
 say "다음 단계:"
 say "  1) .env / *_config.json / channels.json 에 실제 토큰·키·채널ID 입력"
-say "  2) 상시 가동 등록:  ./hermes_ctl.sh install"
-say "  3) 또는 수동 실행:  .venv/bin/python hermes_runtime.py orchestrator"
+say "  2) 상시 가동 등록:  ./bogo_ctl.sh install"
+say "  3) 또는 수동 실행:  .venv/bin/python bogo_runtime.py orchestrator"

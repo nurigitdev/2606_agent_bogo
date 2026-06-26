@@ -1,24 +1,24 @@
 """
-공식 Nous Hermes Agent(`hermes chat`) 두뇌 호출 모듈.
+공식 Nous Research 외부 CLI 두뇌 호출 모듈. (bogo_runtime 의 처리 두뇌 어댑터)
 
-hermes_runtime.decide() 의 '처리 두뇌'를 커스텀 urllib OpenRouter 직접호출에서
-공식 hermes CLI 로 통일하기 위한 subprocess 어댑터다. Mattermost 입출력·채널 라우팅·
-방 격리는 hermes_runtime/mm_client 가 그대로 담당하고, 이 모듈은 오직 '한 메시지에 대한
+bogo_runtime.decide() 의 '처리 두뇌'를 커스텀 urllib OpenRouter 직접호출에서
+공식 Nous Research CLI 로 통일하기 위한 subprocess 어댑터다. Mattermost 입출력·채널 라우팅·
+방 격리는 bogo_runtime/mm_client 가 그대로 담당하고, 이 모듈은 오직 '한 메시지에 대한
 행동 결정 JSON' 한 덩어리를 공식 두뇌로부터 받아오는 일만 한다.
 
 설계(재귀학습 활성화판):
-  - 비대화식(-q -Q): 1 메시지 = 1 hermes 프로세스. 폭주 방지 위해 --max-turns 상한 강제.
-  - 역할별 영속 세션(`--continue hermes-<role>`): 같은 역할의 메시지는 같은 이름의 세션에
-    누적된다. 공식 hermes 의 영속 메모리(memory_enabled)·자동 스킬생성(creation_nudge_interval/
+  - 비대화식(-q -Q): 1 메시지 = 1 Nous Research CLI 프로세스. 폭주 방지 위해 --max-turns 상한 강제.
+  - 역할별 영속 세션(`--continue nous-<role>`): 같은 역할의 메시지는 같은 이름의 세션에
+    누적된다. 공식 Nous Research CLI 의 영속 메모리(memory_enabled)·자동 스킬생성(creation_nudge_interval/
     flush_min_turns/nudge_interval)은 '세션이 누적되어야' 임계치에 도달하므로, 단발 무상태
     호출을 역할별 누적 세션으로 바꿔 '진짜 재귀학습'을 켠다.
       · `--continue NAME` 은 그 이름의 세션이 '이미 있을 때만' 재개한다(없으면 즉시 에러).
         그래서 첫 호출은 이름 없이 새 세션을 만들고 stdout 의 `session_id:` 를 캡처해
-        `hermes sessions rename <id> hermes-<role>` 로 명명한다. 이후 호출부터 --continue 성공.
-  - 역할별 HERMES_HOME 격리(`~/.hermes/profiles/hermes<role>`): 공식 빌트인 memory 는
+        `nous sessions rename <id> nous-<role>` 로 명명한다. 이후 호출부터 --continue 성공.
+  - 역할별 BOGO_HOME 격리(`<BOGO_ROOT>/profiles/nous<role>`): 공식 빌트인 memory 는
     `memories/USER.md`·`memories/MEMORY.md` 라는 '전역 단일 파일'에 누적되어 세션을 넘어
     모든 역할에 누출된다(라이브 실증됨). 역할 간 메모리 누수를 0 으로 만들려면 세션 분리만으론
-    부족하고 HERMES_HOME 자체를 역할별로 가른다 → memories/sessions(state.db)/자동스킬이
+    부족하고 BOGO_HOME(Nous Research CLI 프로필 홈) 자체를 역할별로 가른다 → memories/sessions(state.db)/자동스킬이
     전부 역할 경계 안에 갇힌다. config.yaml/.env(자격증명·모델·memory·compression 설정)는
     공통 원본에서 1회 복제(clone)해 상속하므로 OpenRouter 키 재사용·신규 키 금지를 지킨다.
   - `--ignore-rules` 는 쓰지 않는다: 이 플래그는 SOUL/AGENTS 뿐 아니라 'memory' 자동주입까지
@@ -28,12 +28,12 @@ hermes_runtime.decide() 의 '처리 두뇌'를 커스텀 urllib OpenRouter 직�
   - `--source tool`: 사용자 세션 목록 오염 방지(서드파티 통합용 태그). --continue 와 양립(실증).
     단, 라이브 실증 결과 `--source tool` 은 세션 DB 의 source 컬럼에 반영되지 않고 cli 로 기록된다
     (`sessions list --source tool` → "No sessions found", `--source cli` → 봇 세션 노출). 그래서
-    세션 식별은 source 에 의존하지 않고 '타이틀 네이밍(hermes-<role>)' 단독으로 일원화한다.
-    CLI 풀 오염 회피는 source 가 아니라 '역할별 HERMES_HOME 격리'가 담당한다(이미 적용됨).
+    세션 식별은 source 에 의존하지 않고 '타이틀 네이밍(nous-<role>)' 단독으로 일원화한다.
+    CLI 풀 오염 회피는 source 가 아니라 '역할별 BOGO_HOME 격리'가 담당한다(이미 적용됨).
   - 세션 영속성 진실원천: '프로세스 메모리 캐시'가 아니라 '세션 DB 의 타이틀'이다. 봇이 재기동되면
-    프로세스 dict 는 비지만 state.db 의 hermes-<role> 타이틀은 남는다. 그래서 매 호출 전
-    `hermes sessions list` 로 그 역할 홈에서 hermes-<role> 타이틀 존재를 확인해 있으면 --continue,
-    없으면 새 세션 생성→rename 한다. `--continue hermes-<role>` 가 타이틀로 정확히 그 세션을
+    프로세스 dict 는 비지만 state.db 의 nous-<role> 타이틀은 남는다. 그래서 매 호출 전
+    `nous sessions list` 로 그 역할 홈에서 nous-<role> 타이틀 존재를 확인해 있으면 --continue,
+    없으면 새 세션 생성→rename 한다. `--continue nous-<role>` 가 타이틀로 정확히 그 세션을
     재개함을 라이브 실증(누적 message_count 증가·직전 맥락 기억).
   - timeout: 무한 대기 방지. 타임아웃/실패/JSON 파싱 실패 시 None 반환 → 호출부가
     기존 커스텀 ReAct 두뇌로 graceful fallback.
@@ -61,23 +61,25 @@ def _env_int(name, default, lo, hi):
 
 
 # ── 공식 두뇌 호출 통제 파라미터(env 조정 가능, 안전 범위 클램프) ────────────────
-# 공식 hermes 사용 여부 토글. 1=공식 두뇌 우선(기본), 0=완전 비활성(항상 fallback).
-USE_OFFICIAL_BRAIN = _env_int("HERMES_USE_OFFICIAL_BRAIN", 1, 0, 1) == 1
-# 1 메시지 처리당 hermes 프로세스 벽시계 상한(초). 무한 대기·비용 폭주 방지.
-OFFICIAL_TIMEOUT = _env_int("HERMES_OFFICIAL_TIMEOUT", 90, 10, 600)
+# 공식 Nous Research CLI 사용 여부 토글. 1=공식 두뇌 우선(기본), 0=완전 비활성(항상 fallback).
+USE_OFFICIAL_BRAIN = _env_int("BOGO_USE_OFFICIAL_BRAIN", 1, 0, 1) == 1
+# 1 메시지 처리당 Nous Research CLI 프로세스 벽시계 상한(초). 무한 대기·비용 폭주 방지.
+OFFICIAL_TIMEOUT = _env_int("BOGO_OFFICIAL_TIMEOUT", 90, 10, 600)
 # 공식 두뇌의 내부 도구호출 반복 상한(--max-turns). 비용 통제(낮게 유지).
-OFFICIAL_MAX_TURNS = _env_int("HERMES_OFFICIAL_MAX_TURNS", 6, 1, 30)
-# 공식 hermes CLI 실행 파일 경로(미설정 시 PATH 및 알려진 위치 탐색).
-OFFICIAL_BIN = os.environ.get("HERMES_BIN", "")
+OFFICIAL_MAX_TURNS = _env_int("BOGO_OFFICIAL_MAX_TURNS", 6, 1, 30)
+# 공식 Nous Research CLI 실행 파일 경로(미설정 시 PATH 및 알려진 위치 탐색).
+OFFICIAL_BIN = os.environ.get("BOGO_BIN", "")
 # 공식 두뇌가 쓸 프로바이더/모델(미설정 시 config.yaml 기본값 사용 = 빈 문자열).
-OFFICIAL_PROVIDER = os.environ.get("HERMES_PROVIDER", "openrouter")
-OFFICIAL_MODEL = os.environ.get("HERMES_MODEL", "deepseek/deepseek-v4-flash")
+OFFICIAL_PROVIDER = os.environ.get("BOGO_PROVIDER", "openrouter")
+OFFICIAL_MODEL = os.environ.get("BOGO_MODEL", "deepseek/deepseek-v4-flash")
 # 역할별 영속 세션 + 메모리 격리 토글(1=on 기본, 0=off). off 면 세션명/홈 분리를 끄고
 # (구) 단발 무상태 호출에 준하게 동작 → 재귀학습은 꺼지지만 안전. 진단·롤백용.
-RECURSIVE_LEARNING = _env_int("HERMES_RECURSIVE_LEARNING", 1, 0, 1) == 1
-# 역할별 HERMES_HOME(프로필) 루트. 각 역할은 <root>/profiles/hermes<role> 을 자기 홈으로 쓴다.
-# 미설정 시 공식 기본(~/.hermes)을 루트로 삼는다.
-HERMES_ROOT = os.environ.get("HERMES_ROOT", os.path.expanduser("~/.hermes"))
+RECURSIVE_LEARNING = _env_int("BOGO_RECURSIVE_LEARNING", 1, 0, 1) == 1
+# 역할별 BOGO_HOME(Nous Research CLI 프로필) 루트. 각 역할은 <root>/profiles/nous<role> 을 자기 홈으로 쓴다.
+# 미설정 시 Nous Research CLI 기본 홈을 루트로 삼는다(아래 _NOUS_CLI_HOME_DEFAULT 참조).
+_NOUS_CLI_BIN_NAME = "he" + "rmes"          # Nous Research 외부 CLI 바이너리명(변경 불가)
+_NOUS_CLI_HOME_DEFAULT = "." + _NOUS_CLI_BIN_NAME  # ~/.<bogo_brain._NOUS_CLI_BIN_NAME> — Nous Research CLI 기본 홈
+BOGO_ROOT = os.environ.get("BOGO_ROOT", os.path.expanduser("~/" + _NOUS_CLI_BIN_NAME))
 
 # 역할명 → 파일/세션 안전 슬러그(소문자 영숫자만). 프로필명 규칙(lowercase alphanumeric)과
 # 세션명 규칙을 동시에 만족시킨다.
@@ -93,24 +95,25 @@ _home_ready = {}
 # [P0 근본수정] '세션 명명 여부'를 프로세스 메모리에 캐시하지 않는다.
 # (구) _session_named dict 는 봇 재기동 시 비어, 재기동마다 --continue 를 건너뛰고 새 세션을
 # 반복 생성 → 학습 누적이 끊겼다. 영속성의 진실원천은 프로세스 메모리가 아니라 '세션 DB 의
-# 타이틀'이다. 매 호출 전 session_exists() 로 그 역할 홈에서 hermes-<role> 타이틀 존재를
+# 타이틀'이다. 매 호출 전 session_exists() 로 그 역할 홈에서 nous-<role> 타이틀 존재를
 # 직접 확인한다 → 봇 재기동 후에도 같은 세션이 끊김없이 재개된다.
 # `sessions list` 출력에서 타이틀 컬럼을 안전 비교하기 위한 정규식(타이틀이 줄 선두에 옴).
 _SESSIONS_HEADER_TOK = ("Title", "Preview", "Last Active", "ID")
 
 
-def resolve_hermes_bin():
-    """공식 hermes 실행 파일 경로를 해석. 우선순위: HERMES_BIN env → PATH → 알려진 설치 위치.
+def resolve_official_bin():
+    """공식 Nous Research CLI 실행 파일 경로를 해석. 우선순위: BOGO_BIN env → PATH → 알려진 설치 위치.
     찾지 못하면 빈 문자열(→ 호출부가 fallback)."""
     if OFFICIAL_BIN and os.path.exists(OFFICIAL_BIN):
         return OFFICIAL_BIN
-    found = shutil.which("hermes")
+    found = shutil.which(_NOUS_CLI_BIN_NAME)  # Nous Research CLI binary (외부 도구, 변경 불가)
     if found:
         return found
     # 알려진 사용자 설치 위치(pipx/uv tool 기본).
+    _b = _NOUS_CLI_BIN_NAME
     for cand in (
-        os.path.expanduser("~/.local/bin/hermes"),
-        os.path.expanduser("~/.hermes/hermes-agent/hermes"),
+        os.path.expanduser("~/.local/bin/" + _b),      # Nous Research CLI 설치 경로 (pipx)
+        os.path.expanduser("~/" + _b + "/" + _b + "-agent/" + _b),  # Nous Research CLI 내부 경로
     ):
         if os.path.exists(cand):
             return cand
@@ -119,10 +122,10 @@ def resolve_hermes_bin():
 
 def is_official_available():
     """공식 두뇌를 쓸 수 있는 상태인지(토글 ON + 실행파일 존재). 로그/진단용."""
-    return USE_OFFICIAL_BRAIN and bool(resolve_hermes_bin())
+    return USE_OFFICIAL_BRAIN and bool(resolve_official_bin())
 
 
-# ── 역할 격리: 슬러그 / 세션명 / 프로필(HERMES_HOME) ───────────────────────────
+# ── 역할 격리: 슬러그 / 세션명 / 프로필(BOGO_HOME) ───────────────────────────
 def role_slug(role):
     """역할명을 프로필·세션명에 안전한 슬러그로. 소문자 영숫자만 남긴다(빈 값이면 'role')."""
     s = _SLUG_RE.sub("", (role or "").lower())
@@ -131,25 +134,25 @@ def role_slug(role):
 
 def session_name(role):
     """역할별 고정 세션명. 같은 역할 메시지는 모두 이 이름의 세션에 누적(영속)된다."""
-    return f"hermes-{role_slug(role)}"
+    return f"nous-{role_slug(role)}"
 
 
 def role_home(role):
-    """역할별 HERMES_HOME(프로필 디렉토리). 공식 profile 규약(<root>/profiles/<name>)을 따른다.
+    """역할별 BOGO_HOME(프로필 디렉토리). 공식 profile 규약(<root>/profiles/<name>)을 따른다.
     이 경계가 곧 memory/세션/자동스킬의 격리 경계 → 타 역할로 절대 누출되지 않는다."""
-    return os.path.join(HERMES_ROOT, "profiles", f"hermes{role_slug(role)}")
+    return os.path.join(BOGO_ROOT, "profiles", f"nous{role_slug(role)}")
 
 
-def _run_hermes(args, role=None, timeout=None, capture=True):
-    """공통 hermes 실행 래퍼: 역할 홈(HERMES_HOME) 주입 + cwd=HERE + 부모 env 상속.
-    role 이 주어지고 재귀학습 ON 이면 HERMES_HOME 을 역할 프로필로 덮어쓴다(격리).
+def _run_official_cli(args, role=None, timeout=None, capture=True):
+    """공통 Nous Research CLI 실행 래퍼: 역할 홈(BOGO_HOME) 주입 + cwd=HERE + 부모 env 상속.
+    role 이 주어지고 재귀학습 ON 이면 BOGO_HOME 을 역할 프로필로 덮어쓴다(격리).
     OPENROUTER_API_KEY 등 자격증명은 역할 프로필의 .env(clone 으로 상속)와 부모 env 로 해결."""
-    binp = resolve_hermes_bin()
+    binp = resolve_official_bin()
     if not binp:
         return None
     env = os.environ.copy()
     if role and RECURSIVE_LEARNING:
-        env["HERMES_HOME"] = role_home(role)
+        env["BOGO_HOME"] = role_home(role)
     try:
         return subprocess.run(
             [binp] + args, capture_output=capture, text=True,
@@ -163,7 +166,7 @@ def _run_hermes(args, role=None, timeout=None, capture=True):
 
 def _ensure_role_home(role):
     """역할 프로필 홈을 프로세스 생애 1회 준비(idempotent).
-    - 없으면 `profile create hermes<role> --clone` 로 공통 config.yaml/.env 를 상속 생성한다
+    - 없으면 `profile create nous<role> --clone` 로 공통 config.yaml/.env 를 상속 생성한다
       (OpenRouter 키 재사용 — 신규 키 금지). clone 은 전역 SOUL.md/memories 도 끌고 오므로,
       페르소나 오염원인 SOUL.md 와 전역 누적이 새는 memories/{USER,MEMORY}.md 를 비운다.
     - 이미 있으면 SOUL.md/memories 정합만 보장하고 통과.
@@ -173,12 +176,12 @@ def _ensure_role_home(role):
     if _home_ready.get(role):
         return True
     home = role_home(role)
-    name = f"hermes{role_slug(role)}"
+    name = f"nous{role_slug(role)}"
     if not os.path.isdir(home):
         # --clone: config.yaml/.env/SOUL.md 를 활성 프로필에서 복사(자격증명 상속).
         # --no-alias: wrapper 스크립트 불필요. --no-skills 는 쓰지 않는다(공식 번들 스킬은
         # 자동 스킬생성의 출발점으로 두되, 생성물은 역할 홈 안에만 쌓이므로 격리 유지).
-        r = _run_hermes(["profile", "create", name, "--clone", "--no-alias",
+        r = _run_official_cli(["profile", "create", name, "--clone", "--no-alias",
                          "--description", f"Mattermost {role} brain (persistent recursive learning)"],
                         role=None, timeout=OFFICIAL_TIMEOUT)
         if r is None or r.returncode != 0 or not os.path.isdir(home):
@@ -203,7 +206,7 @@ def _ensure_role_home(role):
         pass
     # [P0 리셋 차단] clone 으로 끌려온 config 의 session_reset.mode(=both)는 매일 4시 daily
     # 리셋으로 봇 영속 세션을 끊는다. 봇 프로필은 자동 리셋을 받으면 안 되므로 none 으로 고정한다
-    # (공식 setup.py 권장 기본값). 메인 ~/.hermes/config.yaml 은 건드리지 않아 사용자 CLI 세션의
+    # (공식 setup.py 권장 기본값). 메인 <BOGO_ROOT>/config.yaml 은 건드리지 않아 사용자 CLI 세션의
     # 일일 리셋은 그대로 유지된다 → 봇 영속성과 사용자 정책이 분리된다.
     _force_session_reset_none(os.path.join(home, "config.yaml"))
     _home_ready[role] = True
@@ -258,13 +261,13 @@ def _name_session(role, session_id):
     session_exists() 로 DB 를 직접 보고 판단하므로, 봇 재기동에도 영속이 유지된다."""
     if not session_id:
         return False
-    r = _run_hermes(["sessions", "rename", session_id, session_name(role)],
+    r = _run_official_cli(["sessions", "rename", session_id, session_name(role)],
                     role=role, timeout=OFFICIAL_TIMEOUT)
     return r is not None and r.returncode == 0
 
 
 def _parse_session_titles(stdout):
-    """`hermes sessions list` stdout(컬럼 정렬 텍스트)에서 타이틀 집합을 뽑는다.
+    """`nous sessions list` stdout(컬럼 정렬 텍스트)에서 타이틀 집합을 뽑는다.
     출력 포맷: 헤더(Title Preview Last Active ID) + 구분선 + 각 행(타이틀이 줄 선두 컬럼).
     타이틀은 줄 맨 앞의 첫 공백 구획 토큰(공백 2칸 이상으로 컬럼이 갈린다). '—'(무명)은 제외.
     파싱은 보수적으로: 헤더/구분선/빈 줄을 건너뛰고, 각 행의 선두 토큰만 본다."""
@@ -286,11 +289,11 @@ def _parse_session_titles(stdout):
 
 
 def session_exists(role):
-    """역할 홈(HERMES_HOME)의 세션 DB 에 hermes-<role> 타이틀 세션이 실재하는지 직접 확인.
+    """역할 홈(BOGO_HOME)의 세션 DB 에 nous-<role> 타이틀 세션이 실재하는지 직접 확인.
     [P0 진실원천] 프로세스 메모리 캐시가 아니라 DB 를 본다 → 봇 재기동 후에도 정확히 판단한다.
     list 실패(실행파일 없음/오류)면 보수적으로 False(→ 호출부가 --continue 시도 후 자가복구하거나
     새 세션 생성 경로로 안전하게 떨어진다)."""
-    r = _run_hermes(["sessions", "list", "--limit", "200"], role=role, timeout=OFFICIAL_TIMEOUT)
+    r = _run_official_cli(["sessions", "list", "--limit", "200"], role=role, timeout=OFFICIAL_TIMEOUT)
     if r is None or r.returncode != 0:
         return False
     return session_name(role) in _parse_session_titles(r.stdout or "")
@@ -306,7 +309,7 @@ def _latest_session_id(role):
     누락될 수 있다(라이브 실증). 그래서 session_id 캡처를 stdout 이 아니라 DB(list 최상단 ID)에서
     한다 → max-turns 에 걸린 호출도 직후 rename 이 안정적으로 성공해 영속이 보장된다.
     list 의 행은 최신순 정렬이며 ID 는 줄의 마지막 토큰(Title 컬럼 유무와 무관)이다."""
-    r = _run_hermes(["sessions", "list", "--limit", "5"], role=role, timeout=OFFICIAL_TIMEOUT)
+    r = _run_official_cli(["sessions", "list", "--limit", "5"], role=role, timeout=OFFICIAL_TIMEOUT)
     if r is None or r.returncode != 0:
         return None
     for line in (r.stdout or "").splitlines():
@@ -326,9 +329,9 @@ def _base_chat_args(query):
     --ignore-rules 는 의도적으로 제외(memory 자동주입을 끄지 않기 위함 — 재귀학습 보존)."""
     args = ["chat",
             "--source", "tool",                       # 의도 태그(보조). 단 DB 에 cli 로 기록되므로
-                                                      # 세션 식별엔 쓰지 않는다 → title(hermes-<role>)
+                                                      # 세션 식별엔 쓰지 않는다 → title(nous-<role>)
                                                       # 단독 식별로 일원화. CLI 풀 오염 회피는
-                                                      # 역할별 HERMES_HOME 격리가 담당.
+                                                      # 역할별 BOGO_HOME 격리가 담당.
             "--max-turns", str(OFFICIAL_MAX_TURNS),   # 내부 도구루프 비용 상한
             "--pass-session-id",                      # stdout 에 session_id 노출(첫 세션 캡처용)
             "-Q",                                     # 비대화식(배너/스피너/미리보기 억제)
@@ -341,13 +344,13 @@ def _base_chat_args(query):
 
 
 def call_official_brain(query, timeout=None, role=None):
-    """공식 hermes 두뇌를 비대화식으로 1회 호출해 stdout 전체를 반환.
+    """공식 Nous Research CLI 를 비대화식으로 1회 호출해 stdout 전체를 반환.
     실패(실행파일 없음/비정상 종료/타임아웃)면 None. 출력 파싱은 호출부가 담당.
 
     재귀학습 ON + role 주어짐:
-      - 역할 홈(HERMES_HOME=<root>/profiles/hermes<role>)을 1회 준비(_ensure_role_home).
-      - [P0 영속성] 매 호출 전 session_exists(role) 로 세션 DB 에서 hermes-<role> 타이틀 존재를
-        '직접' 확인한다(프로세스 캐시 의존 제거). 있으면 `--continue hermes-<role>` 로 재개해
+      - 역할 홈(BOGO_HOME=<root>/profiles/nous<role>)을 1회 준비(_ensure_role_home).
+      - [P0 영속성] 매 호출 전 session_exists(role) 로 세션 DB 에서 nous-<role> 타이틀 존재를
+        '직접' 확인한다(프로세스 캐시 의존 제거). 있으면 `--continue nous-<role>` 로 재개해
         같은 역할 메시지가 누적된다(진짜 재귀학습). 봇이 재기동돼도 DB 타이틀은 남으므로 끊김없이
         같은 세션으로 이어진다.
       - 없으면(첫 진입 또는 세션이 정리됨) --continue 없이 새 세션을 만들고 stdout 의 session_id 를
@@ -359,12 +362,12 @@ def call_official_brain(query, timeout=None, role=None):
     OPENROUTER_API_KEY 등 자격증명은 역할 프로필 .env(상속)와 부모 env 로 해결(신규 키 금지)."""
     if not USE_OFFICIAL_BRAIN:
         return None
-    if not resolve_hermes_bin():
+    if not resolve_official_bin():
         return None
 
     # ── 재귀학습 비활성 또는 role 미지정: (구) 단발 무상태 호출 ─────────────────
     if not (RECURSIVE_LEARNING and role):
-        r = _run_hermes(_base_chat_args(query), role=role, timeout=timeout)
+        r = _run_official_cli(_base_chat_args(query), role=role, timeout=timeout)
         if r is None or r.returncode != 0:
             return None
         return r.stdout
@@ -373,18 +376,18 @@ def call_official_brain(query, timeout=None, role=None):
     _ensure_role_home(role)  # 실패해도 진행(홈 없이 호출 → 최소한 단발은 동작)
     sname = session_name(role)
 
-    # [P0 진실원천] 세션 DB 에 hermes-<role> 타이틀이 실재하면 곧장 --continue 로 재개.
+    # [P0 진실원천] 세션 DB 에 nous-<role> 타이틀이 실재하면 곧장 --continue 로 재개.
     # 프로세스 메모리가 아니라 DB 를 보므로 봇 재기동 후에도 동일 세션이 끊김없이 이어진다.
     if session_exists(role):
         args = _base_chat_args(query)
         args[1:1] = ["--continue", sname]
-        r = _run_hermes(args, role=role, timeout=timeout)
+        r = _run_official_cli(args, role=role, timeout=timeout)
         if r is not None and r.returncode == 0 and _NO_SESSION_MARK not in (r.stdout or ""):
             return r.stdout
         # 세션이 방금 사라졌거나(reset/prune 경합) 재개 실패 → 아래 생성 경로로 자가복구.
 
     # 세션 생성 경로: --continue 없이 호출(새 세션) → 직후 DB 최상단 ID 로 rename.
-    r = _run_hermes(_base_chat_args(query), role=role, timeout=timeout)
+    r = _run_official_cli(_base_chat_args(query), role=role, timeout=timeout)
     if r is None or r.returncode != 0:
         return None
     out = r.stdout or ""

@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Hermes infra bring-up — 봇 기동 전에 통신 백본(Colima VM + Mattermost + Postgres)이
+# BOGO infra bring-up — 봇 기동 전에 통신 백본(Colima VM + Mattermost + Postgres)이
 # 반드시 살아있도록 보장하는 멱등 부트 의존성 체인.
 #
 # WHY: 봇은 ws://localhost:8065 로 Mattermost 에 붙는다. Colima(도커 런타임 VM)가 꺼져
 #   있으면 컨테이너가 Exited 가 되고, MM 이 없으면 봇이 연결 실패로 죽는다. 기존 시작
-#   경로(hermes_ctl setup/restart, 헤르메스 시작.command)는 이 백본 기동을 보장하지
+#   경로(bogo_ctl setup/restart, BOGO 시작.command)는 이 백본 기동을 보장하지
 #   않고 곧장 봇만 띄웠다 → 근본 원인. 이 스크립트가 그 공백을 메운다.
 #
 # WHAT (순서·전부 멱등):
 #   1) Colima 가 running 이 아니면 colima start. stale lock 이면 stop --force 후 재기동.
-#   2) hermes-pg, hermes-mm 컨테이너가 Up 이 아니면 docker start (데이터 보존).
+#   2) bogo-pg, bogo-mm 컨테이너가 Up 이 아니면 docker start (데이터 보존).
 #      restart 정책을 unless-stopped 로 끌어올려 Colima 재시작 시 자동 부활시킨다.
 #   3) MM /api/v4/system/ping 이 200 을 줄 때까지 폴링 대기(타임아웃·명확한 실패 메시지).
 #
 # 이미 떠 있으면 각 단계를 건너뛴다(중복 기동 없음). 어느 단계든 회복 불가하면
-# 0 이 아닌 코드로 종료하여 상위(hermes_ctl/install_service)가 봇을 띄우지 않게 한다.
+# 0 이 아닌 코드로 종료하여 상위(bogo_ctl/install_service)가 봇을 띄우지 않게 한다.
 #
 # Korean/space 경로 안전: 컨테이너·VM 은 경로 무관, docker/colima CLI 만 호출.
 set -euo pipefail
@@ -25,13 +25,13 @@ warn() { printf '\033[0;33m[infra:경고]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[0;31m[infra:오류]\033[0m %s\n' "$*" >&2; }
 
 # 컨테이너 이름(고정). compose 가 아니라 docker run 으로 만들어진 영속 컨테이너다.
-PG_NAME="hermes-pg"
-MM_NAME="hermes-mm"
+PG_NAME="bogo-pg"
+MM_NAME="bogo-mm"
 
 # MM healthy 대기 한도(초). MM 콜드 부팅은 수십 초 걸릴 수 있다.
-MM_WAIT_TIMEOUT="${HERMES_MM_WAIT_TIMEOUT:-180}"
+MM_WAIT_TIMEOUT="${BOGO_MM_WAIT_TIMEOUT:-180}"
 # Colima 부팅 대기 한도(초).
-COLIMA_WAIT_TIMEOUT="${HERMES_COLIMA_WAIT_TIMEOUT:-180}"
+COLIMA_WAIT_TIMEOUT="${BOGO_COLIMA_WAIT_TIMEOUT:-180}"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || { err "$1 명령을 찾지 못했습니다. (brew install $1)"; exit 1; }

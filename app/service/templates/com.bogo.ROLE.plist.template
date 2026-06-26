@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.hermes.__ROLE__</string>
+    <string>com.bogo.__ROLE__</string>
 
     <!-- launchd corrupts non-ASCII (Hangul) UTF-8 bytes in paths it executes, and macOS
          TCC denies launchd-spawned agents read access to ~/Desktop file CONTENTS. So the
@@ -17,11 +17,11 @@
     </array>
 
     <!-- admin(ceo_admin_runtime.py) 는 에이전트 .md 를 원본 git 워크트리에 쓰고 커밋해야 한다.
-         미러(__APP__)에는 .git 이 없으므로, launchd 가 원본 repo 절대경로를 HERMES_REPO 로
+         미러(__APP__)에는 .git 이 없으므로, launchd 가 원본 repo 절대경로를 BOGO_REPO 로
          주입한다. 다른 역할도 무해하게 가지고 있어 일관성을 위해 모든 plist 에 동일 주입. -->
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HERMES_REPO</key>
+        <key>BOGO_REPO</key>
         <string>__REPO__</string>
     </dict>
 

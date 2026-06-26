@@ -24,11 +24,11 @@
 
 배포 모델(중요):
   - source of truth = Desktop 원본 git repo(app/). 모든 .md 쓰기·git 커밋은 항상 여기에 한다.
-  - macOS launchd 는 ASCII 미러(~/.hermes-bin/app)에서 데몬을 실행한다. 미러는 .git 이 제외된
+  - macOS launchd 는 ASCII 미러(~/.bogo-bin/app)에서 데몬을 실행한다. 미러는 .git 이 제외된
     rsync 복사본이라 git/파일쓰기 대상이 될 수 없다(써도 다음 sync 에 소실).
-  - 따라서 원본 repo 경로를 HERMES_REPO 환경변수로 주입받아 거기에 쓰고, 거기서 git 커밋한 뒤
+  - 따라서 원본 repo 경로를 BOGO_REPO 환경변수로 주입받아 거기에 쓰고, 거기서 git 커밋한 뒤
     원본→미러 단방향 sync + 데몬 리로드를 한다. 미설정·부재·비 repo 면 즉시 에러 중단(거짓 양성 금지).
-  - Linux/Windows 는 인플레이스 실행이라 미러=원본이며 HERMES_REPO 가 곧 실행 경로가 된다.
+  - Linux/Windows 는 인플레이스 실행이라 미러=원본이며 BOGO_REPO 가 곧 실행 경로가 된다.
 """
 import asyncio
 import difflib
@@ -48,17 +48,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def _resolve_repo():
     """파일 쓰기·git 커밋의 단일 진실 경로(Desktop 원본 repo)를 확정한다.
 
-    우선순위: 환경변수 HERMES_REPO > HERE(인플레이스 실행). 어느 쪽이든 실제 git
-    워크트리(.git 존재)여야 하며, 아니면 즉시 중단한다. launchd 미러(~/.hermes-bin/app)
+    우선순위: 환경변수 BOGO_REPO > HERE(인플레이스 실행). 어느 쪽이든 실제 git
+    워크트리(.git 존재)여야 하며, 아니면 즉시 중단한다. launchd 미러(~/.bogo-bin/app)
     는 .git 이 없으므로 여기서 자연히 걸러져, 미러에 쓰고 '적용 완료'로 거짓 보고하는
     사태를 원천 차단한다.
     """
-    cand = os.environ.get("HERMES_REPO", "").strip() or HERE
+    cand = os.environ.get("BOGO_REPO", "").strip() or HERE
     repo = os.path.realpath(os.path.expanduser(cand))
     if not os.path.isdir(repo):
         sys.stderr.write(
             f"치명: 원본 repo 경로가 존재하지 않습니다: {repo}\n"
-            "HERMES_REPO 환경변수에 Desktop 원본 app/ 절대경로를 설정하세요.\n")
+            "BOGO_REPO 환경변수에 Desktop 원본 app/ 절대경로를 설정하세요.\n")
         raise SystemExit(3)
     # git 워크트리 멤버십을 git 자체로 판별한다. app/ 이 git repo 의 하위 디렉터리이고
     # .git 은 상위(프로젝트 루트)에 있을 수 있으므로, .git 의 직접 존재가 아니라
@@ -73,7 +73,7 @@ def _resolve_repo():
     if inside.returncode != 0 or inside.stdout.strip() != "true":
         sys.stderr.write(
             f"치명: 원본 repo 가 git 워크트리가 아닙니다: {repo}\n"
-            "이 경로는 rsync 미러일 가능성이 큽니다. launchd 데몬은 HERMES_REPO 로 "
+            "이 경로는 rsync 미러일 가능성이 큽니다. launchd 데몬은 BOGO_REPO 로 "
             "Desktop 원본 repo 절대경로를 받아야 합니다(미러에 쓰면 다음 sync 에 소실됨).\n")
         raise SystemExit(3)
     if not os.path.isdir(os.path.join(repo, "agents")):
@@ -314,22 +314,22 @@ def apply_change(role):
 
 
 def _sync_and_reload(role):
-    """원본 repo → 미러(~/.hermes-bin/app) 단방향 동기화 후 해당 역할 데몬 리로드.
+    """원본 repo → 미러(~/.bogo-bin/app) 단방향 동기화 후 해당 역할 데몬 리로드.
 
     핵심: SRC 를 항상 원본 REPO 로 고정한다. launchd 컨텍스트에서 sync 스크립트의
     SRC 가 미러 자신이 되면 self-copy(no-op)가 되어 변경이 반영되지 않으므로,
-    여기서 HERMES_REPO=REPO 를 명시 주입해 단방향을 강제한다.
+    여기서 BOGO_REPO=REPO 를 명시 주입해 단방향을 강제한다.
     Linux/Windows 는 인플레이스라 미러가 없으면 이 단계는 자연히 생략된다.
     """
     notes = []
-    app = os.path.join(os.path.expanduser("~"), ".hermes-bin", "app")
+    app = os.path.join(os.path.expanduser("~"), ".bogo-bin", "app")
     sync = os.path.join(REPO, "launchd", "sync_app.sh")
     # 미러가 실제로 존재하고 원본과 다른 경로일 때만 sync 한다(인플레이스 self-sync 차단).
     if os.path.isdir(app) and os.path.realpath(app) != os.path.realpath(REPO) and os.path.exists(sync):
-        env = dict(os.environ, HERMES_REPO=REPO)
+        env = dict(os.environ, BOGO_REPO=REPO)
         r = subprocess.run([sync], capture_output=True, text=True, env=env)
         notes.append("미러 동기화" + ("" if r.returncode == 0 else f" 실패({r.stderr.strip()[:80]})"))
-    label = f"com.hermes.{role}"
+    label = f"com.bogo.{role}"
     try:
         uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
         r = subprocess.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],

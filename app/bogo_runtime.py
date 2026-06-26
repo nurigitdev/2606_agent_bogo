@@ -1,5 +1,5 @@
 """
-사내 업무 에이전트 — Hermes AIAgent 런타임. (BENAN 결함 수정판)
+사내 업무 에이전트 — BOGO AIAgent 런타임. (BENAN 결함 수정판)
 
 BENAN 적대적 심사 반영:
   1) 메모리 쓰기(save_mem) — memo/closed 시 롤링 저장
@@ -9,7 +9,7 @@ BENAN 적대적 심사 반영:
   5) 멘션 엄격화(@username/풀네임/안전 별칭만)
   6) FALLBACK 모델 실제 배선
   7) API 키 환경변수(.env) 우선
-실행: <venv>/python hermes_runtime.py <orchestrator|hr|dev>
+실행: <venv>/python bogo_runtime.py <orchestrator|hr|dev>
 """
 import asyncio
 import json
@@ -21,7 +21,7 @@ import urllib.request
 import websockets
 
 import agent_schema as A
-import hermes_brain as B
+import bogo_brain as B
 import vault_integration as V  # Vault RAG·영속 어댑터(graceful — 실패해도 기존 동작 보존)
 import vault_schema as VS      # 노트 태그 슬러그 등 스키마 유틸(채널명 안전화)
 
@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def _die_usage(msg: str):
     avail = ", ".join(sorted(A.load_roles()))
-    sys.stderr.write(f"{msg}\n사용법: python hermes_runtime.py <{avail}>\n")
+    sys.stderr.write(f"{msg}\n사용법: python bogo_runtime.py <{avail}>\n")
     raise SystemExit(2)
 
 
@@ -115,13 +115,13 @@ def _env_int(name, default, lo, hi):
 # ── 에이전트 루프 비용·지연 통제 파라미터(전부 env 조정 가능, 안전 범위로 클램프) ─────
 # REACT_MAX_STEPS: ReAct 루프 1회 decide 당 LLM 호출 상한(thought→action 반복 수).
 #   기본 4. 1~8 로 클램프 — 단발(1) 대비 호출 증가를 구조적으로 상한 안에 가둔다.
-REACT_MAX_STEPS = _env_int("HERMES_REACT_MAX_STEPS", 4, 1, 8)
+REACT_MAX_STEPS = _env_int("BOGO_REACT_MAX_STEPS", 4, 1, 8)
 # 도구 결과를 observation 으로 환류할 때 토큰 폭주를 막는 문자 절단 상한.
-TOOL_RESULT_MAX_CHARS = _env_int("HERMES_TOOL_RESULT_MAX_CHARS", 1200, 200, 6000)
+TOOL_RESULT_MAX_CHARS = _env_int("BOGO_TOOL_RESULT_MAX_CHARS", 1200, 200, 6000)
 # get_channel_history 도구가 한 번에 가져올 수 있는 최근 메시지 수 상한.
-TOOL_HISTORY_MAX = _env_int("HERMES_TOOL_HISTORY_MAX", 24, 4, 60)
+TOOL_HISTORY_MAX = _env_int("BOGO_TOOL_HISTORY_MAX", 24, 4, 60)
 # Reflexion 최종 점검 패스 활성화 여부(1=on, 0=off). on 이어도 패스는 정확히 1회만.
-REFLEXION_ON = _env_int("HERMES_REFLEXION", 1, 0, 1) == 1
+REFLEXION_ON = _env_int("BOGO_REFLEXION", 1, 0, 1) == 1
 # 도구 호출 결과 토큰 절단과 별개로, decide 1회의 전체 LLM 호출 절대 상한(무한루프 백스톱).
 #   = ReAct 단계(REACT_MAX_STEPS) + Reflexion(최대 1) + 형식오류 재시도 여유(1).
 LLM_CALL_HARD_CAP = REACT_MAX_STEPS + 2
@@ -577,7 +577,7 @@ def _reflexion_pass(sysmsg, user, decision, corrections, channel_id, calls):
 
 def _decide_fallback(cname, channel_id, sp, text, corrections, learn_note=None):
     """커스텀 두뇌(보존된 fallback): ReAct 다단계 루프 + (선택)Reflexion 자기검증.
-    공식 hermes 두뇌 호출이 실패/타임아웃/파싱실패일 때만 쓰인다. 비용 통제:
+    공식 외부 CLI(bogo_brain) 두뇌 호출이 실패/타임아웃/파싱실패일 때만 쓰인다. 비용 통제:
     ReAct 단계 상한·도구 결과 절단·finalize 조기탈출·하드캡·Reflexion 최대 1회."""
     sysmsg = A.system_prompt(SPEC, COMMON_RULES, ROUTING,
                              memo=load_mem(), room_memo=load_room_mem(channel_id),
@@ -609,13 +609,13 @@ def _decide_fallback(cname, channel_id, sp, text, corrections, learn_note=None):
 
 
 def decide(cname, channel_id, sp, text):
-    """이 봇의 '처리 두뇌' 단일 진입점. 두뇌는 공식 Nous Hermes Agent(`hermes chat`)로
+    """이 봇의 '처리 두뇌' 단일 진입점. 두뇌는 공식 외부 CLI(`nous chat` 등)로
     통일한다. Mattermost 입출력·채널 라우팅·방 격리·메모리 3층은 이 함수 밖(run/저장부)이
     그대로 담당하고, 여기서는 '한 메시지 → 행동 결정 dict' 변환만 한다.
 
     경로:
-      1) 공식 두뇌(hermes_brain.decide_via_official): 페르소나·공통규칙·라우팅·교정/학습/
-         방메모·대화이력·출력계약을 합성한 query 를 공식 hermes 에 비대화식으로 1회 던져
+      1) 공식 두뇌(bogo_brain.decide_via_official): 페르소나·공통규칙·라우팅·교정/학습/
+         방메모·대화이력·출력계약을 합성한 query 를 공식 외부 CLI 에 비대화식으로 1회 던져
          행동 결정 JSON 을 받는다(1메시지=1호출, --max-turns/timeout 으로 폭주·무한대기 차단).
       2) 실패/타임아웃/JSON 파싱 실패/스키마 위반 → 보존된 커스텀 ReAct 두뇌로 graceful
          fallback(_decide_fallback). 두뇌만 교체됐을 뿐 기존 안전망은 그대로 살아 있다.
@@ -633,8 +633,8 @@ def decide(cname, channel_id, sp, text):
     rag_ctx = V.retrieve_context(f"{text}\n{cname}", role=ROLE, team=TEAM_LABEL,
                                  existing_text=base_learn)
     learn_for_brain = (base_learn + ("\n" + rag_ctx if rag_ctx else "")).strip()
-    # ── 1차: 공식 hermes 두뇌 ───────────────────────────────────────────────
-    if B.USE_OFFICIAL_BRAIN and B.resolve_hermes_bin():
+    # ── 1차: 공식 bogo 두뇌 ───────────────────────────────────────────────
+    if B.USE_OFFICIAL_BRAIN and B.resolve_official_bin():
         convo = "\n".join(history(channel_id))
         try:
             d = B.decide_via_official(
@@ -730,7 +730,7 @@ async def run():
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))
         ensure_bot_membership()
-        brain = "공식hermes" if B.is_official_available() else "커스텀(공식 미가용)"
+        brain = "공식bogo" if B.is_official_available() else "커스텀(공식 미가용)"
         if B.is_official_available() and B.RECURSIVE_LEARNING:
             sess = f" 영속세션:{B.session_name(ROLE)} 홈:{B.role_home(ROLE)}"
         else:

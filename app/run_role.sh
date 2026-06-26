@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermes role launcher (macOS manual / Linux / WSL).
+# BOGO role launcher (macOS manual / Linux / WSL).
 # Usage: run_role.sh <orchestrator|hr|dev|admin>
 #
 # Loads .env (OPENROUTER_API_KEY etc.) then execs the venv python runtime.
@@ -15,15 +15,15 @@ HERE="$(cd "$(dirname "$SRC")" && pwd)"
 
 # Layout-aware app root resolution.
 #   In-place run    : this script sits AT the app root (.venv/.env beside it)  -> APP=$HERE
-#   macOS mirror run : this script is copied to ~/.hermes-bin/run_role.sh while
-#                      the app contents are mirrored to ~/.hermes-bin/app/      -> APP=$HERE/app
-# Pick whichever directory actually holds the runtime (hermes_runtime.py).
-if [ -f "$HERE/hermes_runtime.py" ]; then
+#   macOS mirror run : this script is copied to ~/.bogo-bin/run_role.sh while
+#                      the app contents are mirrored to ~/.bogo-bin/app/      -> APP=$HERE/app
+# Pick whichever directory actually holds the runtime (bogo_runtime.py).
+if [ -f "$HERE/bogo_runtime.py" ]; then
   APP="$HERE"
-elif [ -f "$HERE/app/hermes_runtime.py" ]; then
+elif [ -f "$HERE/app/bogo_runtime.py" ]; then
   APP="$HERE/app"
 else
-  echo "[run_role] 앱 루트를 찾지 못했습니다 (hermes_runtime.py 없음): $HERE" >&2
+  echo "[run_role] 앱 루트를 찾지 못했습니다 (bogo_runtime.py 없음): $HERE" >&2
   exit 1
 fi
 cd "$APP"
@@ -42,8 +42,8 @@ if [ ! -x "$VENV_PY" ]; then
   exit 1
 fi
 
-# 'admin' = 역할별 학습방 개조 봇(ceo_admin_runtime.py), 나머지는 hermes_runtime.py.
+# 'admin' = 역할별 학습방 개조 봇(ceo_admin_runtime.py), 나머지는 bogo_runtime.py.
 if [ "$ROLE" = "admin" ]; then
   exec "$VENV_PY" -u "$APP/ceo_admin_runtime.py"
 fi
-exec "$VENV_PY" -u "$APP/hermes_runtime.py" "$ROLE"
+exec "$VENV_PY" -u "$APP/bogo_runtime.py" "$ROLE"

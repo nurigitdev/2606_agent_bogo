@@ -1,7 +1,7 @@
 """
 공용 저수준 클라이언트 — OpenRouter LLM + Mattermost REST.
 
-hermes_runtime.py(역할 에이전트)와 ceo_admin_runtime.py(CEO 업데이트 파이프라인)가 공유한다.
+bogo_runtime.py(역할 에이전트)와 ceo_admin_runtime.py(CEO 업데이트 파이프라인)가 공유한다.
 부작용(sys.argv 파싱 등) 없이 import 가능하도록 순수 함수/클래스만 둔다.
 """
 import json

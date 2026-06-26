@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Hermes always-on service installer (macOS launchd / Linux systemd --user).
+# BOGO always-on service installer (macOS launchd / Linux systemd --user).
 #
 # OS-detected, username-agnostic (everything derived from ${HOME} and this repo's
 # resolved path). No /Users/<name> is ever hardcoded.
 #
-#   macOS : mirrors the repo to an ASCII path ${HOME}/.hermes-bin/app (REQUIRED —
+#   macOS : mirrors the repo to an ASCII path ${HOME}/.bogo-bin/app (REQUIRED —
 #           launchd corrupts Hangul paths and TCC blocks ~/Desktop reads), installs
 #           4 launchd user agents from the plist template.
 #   Linux : installs a systemd --user template unit and enables 4 instances. Runs
@@ -33,8 +33,8 @@ ACTION="${1:-install}"
 # ════════════════════════════════════════════════════════════════════════
 # macOS — launchd + ASCII mirror
 # ════════════════════════════════════════════════════════════════════════
-mac_app="${HOME}/.hermes-bin/app"
-mac_launcher="${HOME}/.hermes-bin/run_role.sh"
+mac_app="${HOME}/.bogo-bin/app"
+mac_launcher="${HOME}/.bogo-bin/run_role.sh"
 mac_logs="${mac_app}/logs"
 mac_la="${HOME}/Library/LaunchAgents"
 
@@ -66,21 +66,21 @@ mac_install_colima_agent() {
     return 0
   fi
   local brew_bin; brew_bin="$(dirname "$colima_bin")"
-  local plist="$mac_la/com.hermes.colima.plist"
+  local plist="$mac_la/com.bogo.colima.plist"
   sed -e "s#__COLIMA__#$colima_bin#g" \
       -e "s#__BREW_BIN__#$brew_bin#g" \
       -e "s#__HOME__#$HOME#g" \
       -e "s#__LOGS__#$mac_logs#g" \
-      "$TPL/com.hermes.colima.plist.template" > "$plist"
+      "$TPL/com.bogo.colima.plist.template" > "$plist"
   local uid; uid="$(id -u)"
-  launchctl bootout "gui/$uid/com.hermes.colima" >/dev/null 2>&1 || true
+  launchctl bootout "gui/$uid/com.bogo.colima" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$uid" "$plist"
-  say "등록: com.hermes.colima (부팅 시 Colima 자동 기동)"
+  say "등록: com.bogo.colima (부팅 시 Colima 자동 기동)"
 }
 
 mac_install() {
   # Place an ASCII-path launcher that launchd calls (run_role.sh from the mirror).
-  mkdir -p "${HOME}/.hermes-bin" "$mac_la"
+  mkdir -p "${HOME}/.bogo-bin" "$mac_la"
   cp "$REPO/run_role.sh" "$mac_launcher"
   chmod +x "$mac_launcher"
   mac_sync
@@ -89,16 +89,16 @@ mac_install() {
   "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
   for r in "${ROLES[@]}"; do
-    local plist="$mac_la/com.hermes.$r.plist"
+    local plist="$mac_la/com.bogo.$r.plist"
     sed -e "s#__ROLE__#$r#g" \
         -e "s#__LAUNCHER__#$mac_launcher#g" \
         -e "s#__APP__#$mac_app#g" \
         -e "s#__REPO__#$REPO#g" \
         -e "s#__LOGS__#$mac_logs#g" \
-        "$TPL/com.hermes.ROLE.plist.template" > "$plist"
-    launchctl bootout "gui/$uid/com.hermes.$r" >/dev/null 2>&1 || true
+        "$TPL/com.bogo.ROLE.plist.template" > "$plist"
+    launchctl bootout "gui/$uid/com.bogo.$r" >/dev/null 2>&1 || true
     launchctl bootstrap "gui/$uid" "$plist"
-    say "등록+기동: com.hermes.$r"
+    say "등록+기동: com.bogo.$r"
   done
   say "macOS launchd 설치 완료. 상태:  ./service/install_service.sh status"
 }
@@ -106,14 +106,14 @@ mac_install() {
 mac_uninstall() {
   local uid; uid="$(id -u)"
   for r in "${ROLES[@]}"; do
-    launchctl bootout "gui/$uid/com.hermes.$r" >/dev/null 2>&1 || true
-    rm -f "$mac_la/com.hermes.$r.plist"
-    say "해제: com.hermes.$r"
+    launchctl bootout "gui/$uid/com.bogo.$r" >/dev/null 2>&1 || true
+    rm -f "$mac_la/com.bogo.$r.plist"
+    say "해제: com.bogo.$r"
   done
   # Colima 부팅 자동시작 LaunchAgent 도 함께 해제(콜리마 VM 자체는 건드리지 않음).
-  launchctl bootout "gui/$uid/com.hermes.colima" >/dev/null 2>&1 || true
-  rm -f "$mac_la/com.hermes.colima.plist"
-  say "해제: com.hermes.colima"
+  launchctl bootout "gui/$uid/com.bogo.colima" >/dev/null 2>&1 || true
+  rm -f "$mac_la/com.bogo.colima.plist"
+  say "해제: com.bogo.colima"
   say "launchd 등록 해제 완료. (미러 $mac_app 는 보존 — 수동 삭제 가능)"
 }
 
@@ -124,40 +124,40 @@ mac_restart() {
   "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
   for r in "${ROLES[@]}"; do
-    launchctl kickstart -k "gui/$uid/com.hermes.$r" && say "재시작: com.hermes.$r"
+    launchctl kickstart -k "gui/$uid/com.bogo.$r" && say "재시작: com.bogo.$r"
   done
 }
 
 mac_status() {
-  launchctl list | grep hermes || say "(실행 중인 com.hermes.* 없음)"
+  launchctl list | grep bogo || say "(실행 중인 com.bogo.* 없음)"
 }
 
 # ════════════════════════════════════════════════════════════════════════
 # Linux — systemd --user (in-place, Hangul-safe)
 # ════════════════════════════════════════════════════════════════════════
 sd_dir="${HOME}/.config/systemd/user"
-sd_unit="$sd_dir/hermes@.service"
+sd_unit="$sd_dir/bogo@.service"
 
 linux_install() {
   command -v systemctl >/dev/null 2>&1 || { err "systemctl 미발견 — systemd 환경이 아닙니다."; exit 1; }
   chmod +x "$REPO/run_role.sh"
   mkdir -p "$sd_dir"
-  sed -e "s#__WORKDIR__#$REPO#g" "$TPL/hermes@.service.template" > "$sd_unit"
+  sed -e "s#__WORKDIR__#$REPO#g" "$TPL/bogo@.service.template" > "$sd_unit"
   systemctl --user daemon-reload
   # Lingering so user services survive logout / run at boot.
   loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || \
     say "참고: 'sudo loginctl enable-linger $(id -un)' 를 실행하면 로그아웃 후에도 유지됩니다."
   for r in "${ROLES[@]}"; do
-    systemctl --user enable --now "hermes@$r.service"
-    say "등록+기동: hermes@$r"
+    systemctl --user enable --now "bogo@$r.service"
+    say "등록+기동: bogo@$r"
   done
-  say "Linux systemd 설치 완료. 로그:  journalctl --user -u hermes@orchestrator -f"
+  say "Linux systemd 설치 완료. 로그:  journalctl --user -u bogo@orchestrator -f"
 }
 
 linux_uninstall() {
   for r in "${ROLES[@]}"; do
-    systemctl --user disable --now "hermes@$r.service" >/dev/null 2>&1 || true
-    say "해제: hermes@$r"
+    systemctl --user disable --now "bogo@$r.service" >/dev/null 2>&1 || true
+    say "해제: bogo@$r"
   done
   rm -f "$sd_unit"
   systemctl --user daemon-reload || true
@@ -167,14 +167,14 @@ linux_uninstall() {
 linux_restart() {
   chmod +x "$REPO/run_role.sh"
   for r in "${ROLES[@]}"; do
-    systemctl --user restart "hermes@$r.service" && say "재시작: hermes@$r"
+    systemctl --user restart "bogo@$r.service" && say "재시작: bogo@$r"
   done
 }
 
 linux_status() {
   for r in "${ROLES[@]}"; do
-    printf '%-14s ' "hermes@$r"
-    systemctl --user is-active "hermes@$r.service" 2>/dev/null || true
+    printf '%-14s ' "bogo@$r"
+    systemctl --user is-active "bogo@$r.service" 2>/dev/null || true
   done
 }
 

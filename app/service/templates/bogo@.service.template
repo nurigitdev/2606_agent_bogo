@@ -1,12 +1,12 @@
-# systemd user service template for Hermes (Linux).
-# Installed as ~/.config/systemd/user/hermes@.service by install_service.sh.
+# systemd user service template for BOGO (Linux).
+# Installed as ~/.config/systemd/user/bogo@.service by install_service.sh.
 # Linux has no TCC restriction and handles UTF-8 (Hangul) paths natively, so it
 # runs the repo IN PLACE — no ASCII mirror needed. %i is the role instance
-# (orchestrator|hr|dev|admin):  systemctl --user start hermes@orchestrator
+# (orchestrator|hr|dev|admin):  systemctl --user start bogo@orchestrator
 #
 # __WORKDIR__ is substituted at install time (the absolute repo path, may contain Hangul).
 [Unit]
-Description=Hermes agent (%i)
+Description=BOGO agent (%i)
 After=network-online.target
 Wants=network-online.target
 
@@ -18,7 +18,7 @@ Restart=always
 RestartSec=10
 # Memory-leak guard: kernel restarts the unit if RSS exceeds the cap.
 MemoryMax=1G
-# Structured stdout/stderr go to the journal: journalctl --user -u hermes@%i
+# Structured stdout/stderr go to the journal: journalctl --user -u bogo@%i
 StandardOutput=journal
 StandardError=journal
 
