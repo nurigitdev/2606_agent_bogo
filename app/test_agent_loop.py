@@ -245,6 +245,42 @@ def test_system_prompt_react_injection():
     print("[PASS] system_prompt ReAct 주입 + 단발 하위 호환 통과")
 
 
+def test_autonomous_completion_in_finalize_contract():
+    """자율 완결(공통규칙 §2-1) 지침이 공식 두뇌 출력계약에 주입되는지 회귀 검증.
+    되묻기로 끝내지 말고 옵션·소요·리스크·추천·후속을 스스로 채우라는 핵심 의미론이
+    finalize_schema_instruction 에 들어 있어야 한다(단발·떠먹임 근본수정의 단일 출처)."""
+    instr = A.finalize_schema_instruction()
+    assert "자율 완결" in instr, "자율 완결 지침이 출력계약에 없음"
+    assert "되묻고 끝내지 마라" in instr, "되묻기 금지 지침 누락"
+    assert "추정" in instr, "추정 채움 지침 누락"
+    print("[PASS] 출력계약 자율 완결(되묻기 금지·추정 채움) 주입 통과")
+
+
+def test_autonomous_completion_in_react_addendum():
+    """자율 완결 지침이 fallback ReAct 작동 지침에도 주입되는지 회귀 검증.
+    공식 두뇌·fallback 두 경로 모두 같은 '되묻지 말고 완결' 의미론을 갖게 한다."""
+    add = A.react_system_addendum(5)
+    assert "되묻기 전에" in add or "되묻고 끝내는 finalize 는 임무" in add, \
+        "ReAct 지침에 자율 완결/되묻기 금지 누락"
+    assert "(추정: 근거)" in add or "추정" in add, "ReAct 지침에 추정 채움 누락"
+    print("[PASS] ReAct 작동지침 자율 완결 주입 통과")
+
+
+def test_common_rules_autonomous_section():
+    """공통규칙 §2-1(사장 질문 0 — 자율 완결)이 전 에이전트 system_prompt 에 상속 주입되는지
+    검증. 박민철 전용이던 '사장 질문 0 즉결'을 공통으로 일반화한 것이 모든 봇에 닿아야 한다."""
+    common = A.load_common_rules()
+    assert "사장 질문 0" in common, "공통규칙에 자율 완결 §2-1 섹션이 없음(일반화 누락)"
+    # 옛 §2 의 '되묻기 권장' 문구("부족 항목을 콕 집어 되묻는다")가 능동형으로 교체됐는지 확인.
+    assert "부족 항목을 콕 집어 되묻는다" not in common, "옛 되묻기 권장 문구가 §2에 남아있음"
+    assert "스스로 채워서 올린다" in common, "§2 자율 채움 문구로 교체 안 됨"
+    # system_prompt 가 공통규칙을 실제로 상속 주입하는지(전 봇 공통 도달 경로) 확인.
+    spec = {"prompt": "페르소나", "name": "n", "primary": "방"}
+    sp = A.system_prompt(spec, common, "라우팅")
+    assert "사장 질문 0" in sp, "system_prompt 가 공통규칙 자율 완결 섹션을 주입하지 않음"
+    print("[PASS] 공통규칙 자율 완결 §2-1 일반화 + system_prompt 상속 통과")
+
+
 def test_tool_result_truncation():
     """도구 결과는 TOOL_RESULT_MAX_CHARS 로 절단되어 토큰 폭주를 막는다."""
     big = "가" * (H.TOOL_RESULT_MAX_CHARS + 5000)
@@ -268,6 +304,10 @@ if __name__ == "__main__":
     test_reflexion_corrects_violation()
     test_history_tool_cap()
     test_system_prompt_react_injection()
+    test_autonomous_completion_in_finalize_contract()
+    test_autonomous_completion_in_react_addendum()
+    test_common_rules_autonomous_section()
     test_tool_result_truncation()
     print("\n전체 통과 ✓ — ReAct 반복상한·finalize 조기탈출·도구 화이트리스트(fail-closed)·"
-          "observation 환류·Reflexion 1회·교정위반 재확정·history 상한·ReAct 주입·토큰 절단")
+          "observation 환류·Reflexion 1회·교정위반 재확정·history 상한·ReAct 주입·"
+          "자율완결(출력계약·ReAct·공통규칙 일반화)·토큰 절단")

@@ -114,8 +114,12 @@ def _env_int(name, default, lo, hi):
 
 # ── 에이전트 루프 비용·지연 통제 파라미터(전부 env 조정 가능, 안전 범위로 클램프) ─────
 # REACT_MAX_STEPS: ReAct 루프 1회 decide 당 LLM 호출 상한(thought→action 반복 수).
-#   기본 4. 1~8 로 클램프 — 단발(1) 대비 호출 증가를 구조적으로 상한 안에 가둔다.
-REACT_MAX_STEPS = _env_int("BOGO_REACT_MAX_STEPS", 4, 1, 8)
+#   기본 5. 1~8 로 클램프 — 단발(1) 대비 호출 증가를 구조적으로 상한 안에 가둔다.
+#   [자율 완결 근본수정] 4→5: 자료 요청 시 '도구 조사 → 옵션·소요·리스크 추정 채움 →
+#   finalize'로 단계 소비가 늘어, 4단계에선 조사 후 옵션을 채울 추론 여유가 부족해 되묻기로
+#   조기 종료될 수 있었다. 1단계 더 줘 '되묻지 말고 스스로 완결'할 추론 폭을 확보한다(상한 8은
+#   유지 → 비용 폭주는 여전히 구조적으로 차단).
+REACT_MAX_STEPS = _env_int("BOGO_REACT_MAX_STEPS", 5, 1, 8)
 # 도구 결과를 observation 으로 환류할 때 토큰 폭주를 막는 문자 절단 상한.
 TOOL_RESULT_MAX_CHARS = _env_int("BOGO_TOOL_RESULT_MAX_CHARS", 1200, 200, 6000)
 # get_channel_history 도구가 한 번에 가져올 수 있는 최근 메시지 수 상한.
