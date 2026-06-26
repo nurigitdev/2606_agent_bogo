@@ -8,7 +8,7 @@ CEO 가 Mattermost 의 여러 채널(인사총무팀/개발팀/보고라인/CEO�
   (c) 에이전트 현황     — agent_schema.load_roles 의 role 목록 + 봇 활성 여부
   (d) 에이전트 개조 연계 — 역할별 학습방에서 자연어 지시 → ceo_admin_runtime 파이프라인 안내
 
-설계 원칙(기존 Hermes 인프라 그대로 재사용, 신규 의존성·신규 API 키 0):
+설계 원칙(기존 BOGO 인프라 그대로 재사용, 신규 의존성·신규 API 키 0):
   - 통신:   mm_client.MM(REST) — 토큰은 박민철(nk_config.json)을 재사용. 박민철은
             CEO브리핑·양 보고라인 멤버라 읽기/쓰기 권한이 이미 있다.
   - 데이터: channels.json / teams.json / agents/*.md 를 agent_schema 로 로드.
@@ -17,7 +17,7 @@ CEO 가 Mattermost 의 여러 채널(인사총무팀/개발팀/보고라인/CEO�
             게시 가능한 채널은 화이트리스트(채널/보고라인/브리핑)로 제한.
   - 의존성: 표준 라이브러리(http.server)만 사용 — node/npm·FastAPI 등 추가 0.
 
-실행:   <venv>/python ceo_dashboard.py        (포트 기본 8787, HERMES_DASHBOARD_PORT 로 변경)
+실행:   <venv>/python ceo_dashboard.py        (포트 기본 8787, BOGO_DASHBOARD_PORT 로 변경)
 인증:   기존 봇 토큰(nk_config.json)만. ANTHROPIC_API_KEY 등 신규 키 요구 없음.
 
 배포 모델: 읽기 전용 조회·게시만 하므로 git/파일쓰기 없음 → 미러/원본 구분 불요.
@@ -48,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 루프백 전용. 외부(0.0.0.0)로 절대 바꾸지 말 것 — 인증 게이트 없는 로컬 대시보드다.
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "8642"))
+PORT = int(os.environ.get("BOGO_DASHBOARD_PORT", "8642"))
 
 # 게시에 쓸 봇: 박민철(nk). CEO브리핑·양 보고라인의 멤버이므로 읽기/쓰기가 가능하다.
 # 별도 봇 계정·신규 토큰 생성 없이 기존 토큰을 재사용한다.
@@ -93,7 +93,7 @@ WHITELIST_NAMES = {c["name"] for c in WHITELIST}
 # ── 인증·세션 (ceo_auth) ─────────────────────────────────────────────────────
 ACCOUNTS = AUTH.load_accounts()
 SESSIONS = AUTH.SessionStore()
-COOKIE_NAME = "hermes_sid"
+COOKIE_NAME = "bogo_sid"
 
 
 def channels_for_role(identity):
@@ -932,12 +932,10 @@ _CSS = """
   .login-card input { width:100%; min-height:48px; background:var(--canvas); color:var(--ink);
     border:1px solid var(--hairline-soft); border-radius:var(--r-md);
     padding:0 var(--space-4); font-size:17px; letter-spacing:-0.32px; }
-  .login-card input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  .login-card input:focus { outline:none; border-color:var(--ink-faint); }
   .login-card button { width:100%; margin-top:var(--space-4); }
   .login-err { color:#b3261e; font-size:14px; margin-top:var(--space-4); min-height:18px;
     text-align:center; letter-spacing:-0.2px; }
-  .login-hint { color:var(--ink-faint); font-size:13px; margin-top:var(--space-6);
-    text-align:center; line-height:1.6; letter-spacing:-0.2px; }
   @media (max-width:1024px){
     .grid { grid-template-columns:repeat(2,1fr); }
     .roster { grid-template-columns:repeat(2,1fr); }
@@ -988,8 +986,8 @@ _CSS = """
     display:flex; align-items:center; justify-content:center; background:transparent; border:none;
     border-radius:var(--r-sm); color:var(--ink-muted); cursor:pointer; transition:background var(--motion); }
   .nav-collapse:hover { background:rgba(0,0,0,.05); color:var(--ink-soft); }
-  /* 펴기 버튼(topbar 맨 앞, 접힘 시에만 노출) */
-  .nav-open { display:none; }
+  /* 펴기 버튼(stage 좌상단, 접힘 시에만 노출) */
+  .nav-open { display:none; position:absolute; top:var(--gap-3); left:var(--gap-3); z-index:4; }
   .stage.nav-collapsed .nav-open { display:flex; }
   .nav-scroll { flex:1 1 auto; overflow-y:auto; padding:var(--gap-2) var(--gap-3) var(--gap-4); }
   .nav-foot { flex:0 0 auto; border-top:1px solid var(--hairline); padding:var(--gap-3) var(--gap-4); }
@@ -1048,24 +1046,12 @@ _CSS = """
   .profile .pf-logout:hover { color:var(--ink); }
 
   /* ── 메인 영역 ── */
-  .stage { flex:1 1 auto; display:flex; flex-direction:column; min-width:0; height:100%; }
-  .topbar { flex:0 0 auto; display:flex; align-items:center; gap:var(--gap-3);
-    padding:var(--gap-3) var(--gap-6); min-height:56px; border-bottom:1px solid transparent; }
+  .stage { flex:1 1 auto; display:flex; flex-direction:column; min-width:0; height:100%; position:relative; }
   .icon-btn { background:transparent; border:1px solid var(--hairline-soft); border-radius:var(--r-sm);
     width:36px; height:36px; min-height:36px; padding:0; display:flex; align-items:center;
     justify-content:center; cursor:pointer; color:var(--ink-soft); font-size:16px;
     transition:background var(--motion); }
   .icon-btn:hover { background:rgba(0,0,0,.04); }
-  .topbar .stage-title { font-size:var(--fz-16); font-weight:600; letter-spacing:-0.3px; color:var(--ink); }
-  /* 상단 3-숫자 스트립(드릴다운) */
-  .stat-strip { margin-left:auto; display:flex; gap:var(--gap-2); }
-  .stat { display:flex; align-items:baseline; gap:6px; background:var(--canvas);
-    border:1px solid var(--hairline); border-radius:var(--r-pill); padding:6px 14px; cursor:pointer;
-    transition:border-color var(--motion), box-shadow var(--motion); }
-  .stat:hover { border-color:var(--accent-line); box-shadow:var(--shadow-1); }
-  .stat .sv { font-size:var(--fz-16); font-weight:700; color:var(--ink); letter-spacing:-0.3px;
-    font-variant-numeric:tabular-nums; }
-  .stat .sl { font-size:var(--fz-13); color:var(--ink-muted); letter-spacing:-0.1px; }
 
   .stage-scroll { flex:1 1 auto; overflow-y:auto; }
   .col { max-width:var(--col-w); margin:0 auto; padding:var(--gap-8) var(--gap-6) var(--gap-6); }
@@ -1085,9 +1071,6 @@ _CSS = """
   .stage.is-empty .dock { position:static; width:100%; padding-bottom:0; }
   .chat-empty-greet { font-size:var(--fz-16); color:var(--ink-muted); text-align:center;
     letter-spacing:-0.2px; margin-bottom:var(--gap-5); }
-  .stage.is-empty .topbar { border-bottom-color:transparent; }
-  .stage:not(.is-empty) .topbar { border-bottom:1px solid var(--hairline); }
-  .stage.is-empty .stat-strip { display:none; }
   /* 첫 전송 FLIP 후 첫 버블 페이드인 */
   @keyframes bubbleIn { from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:none; } }
   .bubble-row.fresh { animation:bubbleIn 180ms cubic-bezier(.4,0,.2,1); }
@@ -1137,9 +1120,6 @@ _CSS = """
     background:var(--ink); color:var(--on-dark); display:flex; align-items:center; justify-content:center;
     font-size:17px; line-height:1; transition:background var(--motion); }
   .send-btn:disabled { background:var(--hairline-soft); color:var(--ink-faint); opacity:1; }
-  .dock-hint { max-width:var(--col-w); margin:var(--gap-2) auto 0; text-align:center; font-size:var(--fz-13);
-    color:var(--ink-faint); letter-spacing:-0.1px; }
-  .dock-hint b { color:var(--ink-soft); font-weight:600; }
 
   /* ── 우측 슬라이드 패널(상세) ── */
   .panel-scrim { position:fixed; inset:0; background:rgba(0,0,0,.32); opacity:0; pointer-events:none;
@@ -1197,18 +1177,13 @@ _CSS = """
   .cmdk-empty { color:var(--ink-muted); font-size:var(--fz-14); padding:var(--gap-5); text-align:center; }
 
   .scrim { display:none; }
-  @media (max-width:860px){
-    .stat-strip .stat .sl { display:none; }
-  }
   @media (max-width:768px){
     .ws { position:relative; }
     .nav { position:absolute; z-index:50; top:0; left:0; box-shadow:var(--shadow-2); }
     .nav.collapsed { margin-left:calc(-1 * var(--side-w)); box-shadow:none; }
     .scrim { display:none; position:absolute; inset:0; z-index:45; background:rgba(0,0,0,.35); }
     .scrim.show { display:block; }
-    .col, .dock-shell, .dock-hint { max-width:100%; }
-    .stat-strip { gap:var(--gap-1); }
-    .stat { padding:6px 10px; }
+    .col, .dock-shell { max-width:100%; }
   }
 """
 
@@ -1220,15 +1195,15 @@ def build_login_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hermes 로그인</title>
+<title>에이전트 BOGO 로그인</title>
 <style>""" + _CSS + """</style>
 </head>
 <body>
 <div class="promo-banner">루프백 전용(127.0.0.1) · <b>외부에 노출되지 않습니다</b></div>
 <div class="login-wrap">
   <form class="login-card" id="loginForm" autocomplete="off">
-    <div class="logo-mark">H</div>
-    <h1>Hermes 로그인</h1>
+    <div class="logo-mark">B</div>
+    <h1>에이전트 BOGO 로그인</h1>
     <div class="field">
       <label for="lid">아이디</label>
       <input id="lid" type="text" autocomplete="username" placeholder="아이디 (admin / ceo / e1 / e2 / e3)" required>
@@ -1239,8 +1214,6 @@ def build_login_html():
     </div>
     <button id="loginBtn" type="submit">로그인</button>
     <div class="login-err" id="err"></div>
-    <div class="login-hint">데모 계정 · 비밀번호 모두 <b>1111</b><br>
-      admin (관리자) · ceo (CEO) · e1·e2·e3 (직원)</div>
   </form>
 </div>
 <script>
@@ -1278,7 +1251,7 @@ def build_index_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hermes 워크스페이스</title>
+<title>에이전트 BOGO 워크스페이스</title>
 <style>""" + _CSS + """</style>
 </head>
 <body class="app-shell">
@@ -1287,8 +1260,8 @@ def build_index_html():
   <!-- 사이드바: 얇게, 그룹화, active 표시, 접힘 -->
   <nav class="nav" id="nav">
     <div class="nav-head">
-      <span class="logo-mark">H</span>
-      <span class="brandname">Hermes</span>
+      <span class="logo-mark">B</span>
+      <span class="brandname">에이전트 BOGO</span>
       <button class="nav-collapse" id="navCollapse" title="사이드바 접기 (&#8984;\\)" aria-label="사이드바 접기 (Cmd+\\)"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path></svg></button>
     </div>
     <div class="nav-scroll">
@@ -1335,15 +1308,7 @@ def build_index_html():
 
   <!-- 메인 무대(한 번에 한 뷰) -->
   <main class="stage">
-    <div class="topbar">
-      <button class="icon-btn nav-open" id="navOpen" title="사이드바 펴기 (&#8984;\\)" aria-label="사이드바 펴기 (Cmd+\\)"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path></svg></button>
-      <span class="stage-title" id="stageTitle"></span>
-      <div class="stat-strip" id="statStrip">
-        <button class="stat" data-view="roster" id="statAgents"><span class="sv" id="svAgents">–</span><span class="sl">활성 에이전트</span></button>
-        <button class="stat" data-view="history" id="statPending"><span class="sv" id="svPending">0</span><span class="sl">대기 응답</span></button>
-        <button class="stat" data-view="reports" id="statReports"><span class="sv" id="svReports">–</span><span class="sl">신규 보고</span></button>
-      </div>
-    </div>
+    <button class="icon-btn nav-open" id="navOpen" title="사이드바 펴기 (&#8984;\\)" aria-label="사이드바 펴기 (Cmd+\\)"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path></svg></button>
     <div class="stage-scroll" id="stageScroll">
       <div id="stageBody"></div>
     </div>
@@ -1355,7 +1320,6 @@ def build_index_html():
           <button class="send-btn" id="send" title="전송" aria-label="전송" disabled><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg></button>
         </div>
       </div>
-      <div class="dock-hint">대상 · <b id="targetName">…</b> · Enter 전송 · Shift+Enter 줄바꿈</div>
     </div>
   </main>
 </div>
@@ -1406,7 +1370,7 @@ async function api(path, opts){
 }
 
 // ── 대화 세션(localStorage; 서버 스키마 무변경) ──────────────────────────────
-function sessKey(){ return 'hermes_sessions_'+((me&&me.login_id)||'anon'); }
+function sessKey(){ return 'bogo_sessions_'+((me&&me.login_id)||'anon'); }
 function loadSessions(){
   try{ sessions = JSON.parse(localStorage.getItem(sessKey())||'[]'); }catch(e){ sessions=[]; }
   if(!Array.isArray(sessions)) sessions=[];
@@ -1442,9 +1406,10 @@ function setBadge(id, val, alert){
 function refreshStats(){
   const act = roster.filter(r=>r.bot_active).length;
   const inactive = roster.length - act;
-  document.getElementById('svAgents').textContent = roster.length ? (act+'/'+roster.length) : '–';
-  document.getElementById('svPending').textContent = pendingCount();
-  document.getElementById('svReports').textContent = teamGroups.length || '–';
+  // topbar 제거됨: stat-strip 요소(svAgents/svPending/svReports)가 없으면 건너뜀(가드)
+  const elA=document.getElementById('svAgents'); if(elA) elA.textContent = roster.length ? (act+'/'+roster.length) : '–';
+  const elP=document.getElementById('svPending'); if(elP) elP.textContent = pendingCount();
+  const elR=document.getElementById('svReports'); if(elR) elR.textContent = teamGroups.length || '–';
   // 과거질문 = 대기 세션수(주의), 보고 = 신규 없으면 미표시, 현황 = 비활성 에이전트수(0이면 숨김)
   setBadge('cntHistory', pendingCount(), true);
   setBadge('cntReports', 0, false);
@@ -1457,12 +1422,15 @@ const VIEW_TITLE={chat:'새 작업',history:'과거 질문',reports:'보고',ros
 function ellip(s,n){ s=s||''; return s.length>n ? s.slice(0,n-1)+'…' : s; }
 // 모드별 topbar 제목: chat이면 msgs 있을 때만 세션 제목, 아니면 빈값. 그 외 뷰는 VIEW_TITLE.
 function setStageTitle(){
+  // topbar 제거됨: stageTitle 요소가 없으면 무시(가드)
+  const el=document.getElementById('stageTitle');
+  if(!el) return;
   let t='';
   if(view==='chat'){
     const has=activeSession&&activeSession.msgs&&activeSession.msgs.length;
     t = has ? ellip(activeSession.title||'대화',40) : '';
   } else { t=VIEW_TITLE[view]||''; }
-  document.getElementById('stageTitle').textContent=t;
+  el.textContent=t;
 }
 function setView(v){
   view=v;
@@ -1769,17 +1737,17 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
   document.getElementById('pfRole').textContent=(ROLE_KO[me.role]||me.role)
     +(me.login_id&&me.login_id!==label?' · '+me.login_id:'');
   document.getElementById('pfAvatar').textContent=(label||'H').trim().charAt(0).toUpperCase();
-  document.title='Hermes '+(ROLE_KO[me.role]||'')+' 워크스페이스';
+  document.title='에이전트 BOGO '+(ROLE_KO[me.role]||'')+' 워크스페이스';
   if(/Mac|iPhone|iPad/.test(navigator.platform||'')) ; else document.getElementById('cmdkKbd').textContent='Ctrl K';
 
   // role 분기: ceo/admin 만 에이전트현황·기억보관소
   if(me.role==='ceo'||me.role==='admin'){
     document.getElementById('navRoster').style.display='';
-    document.getElementById('statAgents').style.display='';
+    const sa=document.getElementById('statAgents'); if(sa) sa.style.display='';  // topbar 제거 가드
     document.getElementById('navSettings').style.display='';
     const vn=document.getElementById('navVault'); if(vn) vn.style.display='';
   } else {
-    document.getElementById('statAgents').style.display='none';
+    const sa=document.getElementById('statAgents'); if(sa) sa.style.display='none';  // topbar 제거 가드
   }
 
   // 데이터 로드
@@ -1787,7 +1755,7 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
     const d=await api('/api/channels');
     channels=d.channels; defaultPost=d.default_post_channel;
     buildTeamGroups();
-    document.getElementById('targetName').textContent=defaultPost||'없음';
+    const tn=document.getElementById('targetName'); if(tn) tn.textContent=defaultPost||'없음';  // dock-hint 제거 가드
   }catch(e){ toast('초기화 실패: '+e.message); }
 
   loadSessions();
@@ -1850,14 +1818,14 @@ def build_vault_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hermes 기억 보관소</title>
+<title>에이전트 BOGO 기억 보관소</title>
 <style>""" + _CSS + """</style>
 </head>
 <body>
 <div class="promo-banner">루프백 전용(127.0.0.1) · <b>누적 기억(Vault/RAG)</b> · 외부에 노출되지 않습니다</div>
 <header>
   <div class="brand">
-    <span class="logo-mark">H</span>
+    <span class="logo-mark">B</span>
     <h1>기억 보관소</h1>
   </div>
   <div class="nav-meta">
