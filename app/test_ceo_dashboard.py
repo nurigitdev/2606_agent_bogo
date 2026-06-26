@@ -68,6 +68,20 @@ class BindTest(unittest.TestCase):
         self.assertEqual(D.HOST, "127.0.0.1")
         self.assertNotEqual(D.HOST, "0.0.0.0")
 
+    def test_mattermost_base_uses_ipv4_literal_not_localhost(self):
+        """회귀: Mattermost REST 베이스는 127.0.0.1(IPv4 리터럴)이어야 한다.
+
+        버그: 'localhost' 를 쓰면 macOS getaddrinfo 가 IPv6 ::1 을 먼저 반환하는데,
+        colima ssh 포트포워드는 IPv4(*:8065)만 바인딩하므로 ::1:8065 연결이
+        [Errno 61] Connection refused 로 실패한다. 그 결과 대시보드의 모든
+        Mattermost 호출(history/post/bot_status)이 끊겨 "연결 안 됨"이 된다.
+        ASCII 미러가 stale 해 이 수정이 누락되면 이 단언이 바로 잡아낸다.
+        """
+        import mm_client as C
+        self.assertIn("127.0.0.1", C.MM_BASE)
+        self.assertNotIn("localhost", C.MM_BASE)
+        self.assertTrue(C.MM_BASE.endswith("/api/v4"))
+
 
 class HistoryTest(unittest.TestCase):
     def setUp(self):
