@@ -17,7 +17,9 @@ CEO 가 Mattermost 의 여러 채널(인사총무팀/개발팀/보고라인/CEO�
             게시 가능한 채널은 화이트리스트(채널/보고라인/브리핑)로 제한.
   - 의존성: 표준 라이브러리(http.server)만 사용 — node/npm·FastAPI 등 추가 0.
 
-실행:   <venv>/python ceo_dashboard.py        (포트 기본 8787, BOGO_DASHBOARD_PORT 로 변경)
+실행:   <venv>/python ceo_dashboard.py        (포트 기본 8642, BOGO_DASHBOARD_PORT 로 변경)
+        상시 가동은 launchd(com.bogo.dashboard) / systemd(bogo@dashboard) 가 소유 —
+        service/install_service.sh 가 봇 4역할과 함께 KeepAlive 로 등록한다.
 인증:   기존 봇 토큰(nk_config.json)만. ANTHROPIC_API_KEY 등 신규 키 요구 없음.
 
 배포 모델: 읽기 전용 조회·게시만 하므로 git/파일쓰기 없음 → 미러/원본 구분 불요.
@@ -2034,6 +2036,8 @@ def build_vault_html():
       (c) 노트 클릭 → 모달로 frontmatter + 본문 열람(경로는 서버가 traversal 차단)
     Obsidian 파일 경로/URI 도 함께 표기해 CEO 가 옵시디언으로 직접 열 수 있게 한다.
     공통 _CSS(Apple 디자인 시스템) 계승. 모든 출력은 esc()로 XSS 이스케이프.
+    대시보드(INDEX_HTML)와 동일한 SaaS 사이드바 셸(body.app-shell·.ws·.nav)을 사용해
+    디자인 일관성을 유지하며, 사이드바 nav 로 양방향 이동(대시보드↔보관소)이 가능하다.
     """
     return """<!DOCTYPE html>
 <html lang="ko">
@@ -2041,42 +2045,86 @@ def build_vault_html():
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>에이전트 BOGO 기억 보관소</title>""" + _FAVICON_LINKS + """
-<style>""" + _CSS + """</style>
+<style>""" + _CSS + """
+/* vault 페이지 전용: stage-scroll 이 full-height 스크롤 영역이 됨 */
+.vault-stage { flex:1 1 auto; overflow-y:auto; }
+.vault-content { max-width:1080px; margin:0 auto; padding:var(--gap-6) var(--gap-6) var(--gap-8); }
+</style>
 </head>
-<body>
+<body class="app-shell">
 <div class="promo-banner">루프백 전용(127.0.0.1) · <b>누적 기억(Vault/RAG)</b> · 외부에 노출되지 않습니다</div>
-<header>
-  <div class="brand">
-    <img class="logo-mark" src="/static/logo.svg" alt="에이전트 BOGO" width="30" height="30">
-    <h1>기억 보관소</h1>
-  </div>
-  <div class="nav-meta">
-    <span class="rag-badge" id="ragBadge">RAG 상태…</span>
-    <a class="chip nav-link" href="/">대시보드</a>
-    <span class="chip logout" id="logout">로그아웃</span>
-  </div>
-</header>
-<div class="wrap">
-  <section class="tile tile-parchment"><div class="tile-inner">
-    <div class="section-head"><h2 class="section-title">기억 검색</h2></div>
-    <div class="vault-toolbar">
-      <div class="vault-search">
-        <input id="q" type="text" placeholder="누적된 보고·피드백·결정에서 검색 (예: LLM 비용)">
-        <button id="searchBtn">검색</button>
+<div class="ws">
+  <!-- 사이드바: 대시보드와 동일한 구조, 기억 보관소 항목 active 표시 -->
+  <nav class="nav" id="nav">
+    <div class="nav-head">
+      <img class="logo-mark" src="/static/logo.svg" alt="에이전트 BOGO" width="26" height="26">
+      <span class="brandname">에이전트 BOGO</span>
+    </div>
+    <div class="nav-scroll">
+      <div class="nav-group">
+        <div class="nav-group-label">워크스페이스</div>
+        <a class="nav-item" href="/">
+          <span class="ni-ico"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path><path d="M3 9h18"></path></svg></span>
+          <span class="ni-txt">대시보드</span>
+        </a>
+        <a class="nav-item active" href="/vault" aria-current="page">
+          <span class="ni-ico"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg></span>
+          <span class="ni-txt">기억 보관소</span>
+        </a>
       </div>
     </div>
-    <div class="vault-filters">
-      <select id="fRole"><option value="">역할 전체</option></select>
-      <select id="fTeam"><option value="">팀 전체</option></select>
-      <select id="fType"><option value="">유형 전체</option></select>
-      <span class="pill" id="resultMeta"></span>
+    <div class="nav-foot">
+      <div class="profile">
+        <span class="avatar" id="pfAvatar">H</span>
+        <div class="pf-meta">
+          <div class="pf-name" id="pfName">…</div>
+          <div class="pf-role" id="pfRole"></div>
+        </div>
+        <button class="pf-logout" id="logout">로그아웃</button>
+      </div>
     </div>
-  </div></section>
-  <section class="tile tile-light"><div class="tile-inner">
-    <div class="section-head"><h2 class="section-title" id="listTitle">최신 노트</h2></div>
-    <div class="note-list" id="noteList"><div class="empty">불러오는 중…</div></div>
-  </div></section>
+  </nav>
+
+  <!-- 메인 영역 -->
+  <main class="stage">
+    <div class="vault-stage">
+      <div class="vault-content">
+        <!-- 페이지 헤더 -->
+        <div class="view-head" style="display:flex;align-items:center;gap:var(--gap-4);margin-bottom:var(--gap-6);">
+          <div style="flex:1;">
+            <h2 style="font-size:var(--fz-24);font-weight:700;letter-spacing:-0.4px;color:var(--ink);margin:0 0 var(--gap-1);line-height:1.2;">기억 보관소</h2>
+            <p style="font-size:var(--fz-14);color:var(--ink-muted);margin:0;letter-spacing:-0.2px;">누적 보고·피드백·결정을 검색하고 열람합니다.</p>
+          </div>
+          <span class="rag-badge" id="ragBadge">RAG 상태…</span>
+        </div>
+
+        <!-- 검색 영역 -->
+        <div style="background:var(--parchment);border:1px solid var(--hairline);border-radius:var(--r-lg);padding:var(--gap-5) var(--gap-6);margin-bottom:var(--gap-6);">
+          <div class="vault-toolbar">
+            <div class="vault-search">
+              <input id="q" type="text" placeholder="누적된 보고·피드백·결정에서 검색 (예: LLM 비용)">
+              <button id="searchBtn">검색</button>
+            </div>
+          </div>
+          <div class="vault-filters">
+            <select id="fRole"><option value="">역할 전체</option></select>
+            <select id="fTeam"><option value="">팀 전체</option></select>
+            <select id="fType"><option value="">유형 전체</option></select>
+            <span class="pill" id="resultMeta"></span>
+          </div>
+        </div>
+
+        <!-- 노트 목록 -->
+        <div>
+          <h3 id="listTitle" style="font-size:var(--fz-16);font-weight:600;letter-spacing:-0.3px;color:var(--ink);margin:0 0 var(--gap-4);">최신 노트</h3>
+          <div class="note-list" id="noteList"><div class="empty">불러오는 중…</div></div>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
+
+<!-- 노트 상세 모달 -->
 <div class="modal-back" id="modalBack">
   <div class="modal" id="modal">
     <button class="mclose" id="mclose">&times;</button>
@@ -2216,7 +2264,19 @@ document.getElementById('logout').addEventListener('click', async ()=>{
   try{ await fetch('/api/logout',{method:'POST'}); }catch(e){}
   location.href='/login';
 });
-(async function(){ await loadList(); })();
+// 프로필 정보 로드 (사이드바 하단 표시용)
+(async function(){
+  try{
+    const me=await api('/api/me');
+    const label=me.label||me.login_id||'';
+    const ROLE_KO={ceo:'CEO',admin:'관리자',staff:'직원'};
+    document.getElementById('pfName').textContent=label||'사용자';
+    document.getElementById('pfRole').textContent=(ROLE_KO[me.role]||me.role)
+      +(me.login_id&&me.login_id!==label?' · '+me.login_id:'');
+    document.getElementById('pfAvatar').textContent=(label||'H').trim().charAt(0).toUpperCase();
+  }catch(e){ /* 세션 만료는 api() 내부에서 /login 리디렉트 처리됨 */ }
+  await loadList();
+})();
 </script>
 </body>
 </html>"""
