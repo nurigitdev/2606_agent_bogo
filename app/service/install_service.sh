@@ -196,8 +196,33 @@ mac_restart() {
   fi
 }
 
+# 미러 동기화 드리프트 감지: 원본(REPO)과 ASCII 미러(mac_app)의 핵심 코드 파일이
+# 어긋나면 경고한다. launchd 데몬은 미러본을 실행하므로, 원본만 고치고 restart 를
+# 안 하면 미러가 stale 채로 남아 "대시보드/봇이 옛 코드로 동작"하는 사고가 조용히
+# 발생한다(예: mm_client 의 MM_BASE localhost→127.0.0.1 수정 미반영 시 Mattermost
+# 연결이 ::1 거부로 실패). status 단계에서 이 드리프트를 즉시 가시화한다.
+mac_check_mirror_sync() {
+  [ -d "$mac_app" ] || { say "미러 없음(아직 install 안 됨): $mac_app"; return 0; }
+  local drift=0 f
+  for f in ceo_dashboard.py mm_client.py agent_schema.py bogo_runtime.py \
+           ceo_admin_runtime.py teams.json channels.json; do
+    [ -f "$REPO/$f" ] || continue
+    if [ ! -f "$mac_app/$f" ] || ! cmp -s "$REPO/$f" "$mac_app/$f"; then
+      printf '\033[0;33m[service]\033[0m   ⚠ 미러 불일치: %s\n' "$f"
+      drift=1
+    fi
+  done
+  if [ "$drift" -eq 1 ]; then
+    printf '\033[0;33m[service]\033[0m 미러가 원본과 어긋났습니다 → 데몬이 옛 코드를 실행 중입니다.\n'
+    printf '\033[0;33m[service]\033[0m 복구: ./service/install_service.sh restart\n'
+  else
+    say "미러 동기화 OK (원본 ↔ $mac_app 핵심 파일 일치)"
+  fi
+}
+
 mac_status() {
   launchctl list | grep bogo || say "(실행 중인 com.bogo.* 없음)"
+  mac_check_mirror_sync
 }
 
 # ════════════════════════════════════════════════════════════════════════

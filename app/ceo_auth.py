@@ -27,7 +27,9 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MM_BASE = "http://localhost:8065/api/v4"
+# NOTE: localhost(=::1 우선 해석) 대신 127.0.0.1 강제.
+# colima ssh 포트포워드가 IPv4(*:8065)만 바인딩해 ::1 로는 Errno 61 refused 가 난다.
+MM_BASE = "http://127.0.0.1:8065/api/v4"
 
 # 세션 수명(초). 만료 세션은 검증 시 폐기한다.
 SESSION_TTL = 12 * 3600

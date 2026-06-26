@@ -69,7 +69,9 @@ KEY = os.environ.get("OPENROUTER_API_KEY") or LLM.get("api_key", "")
 MODEL = LLM["model"]
 FALLBACK = LLM.get("fallback", "openai/gpt-4o-mini")
 BASE_URL = LLM.get("base_url", "https://openrouter.ai/api/v1")
-MM = "http://localhost:8065/api/v4"
+# NOTE: localhost(=::1 우선 해석) 대신 127.0.0.1 강제.
+# colima ssh 포트포워드가 IPv4(*:8065)만 바인딩해 ::1 로는 Errno 61 refused 가 난다.
+MM = "http://127.0.0.1:8065/api/v4"
 
 NAME = SPEC["name"]
 USERNAME = SPEC["username"]
@@ -763,7 +765,7 @@ async def run():
     # open_timeout: MM 부재 시 connect 가 무한 대기하지 않게 상한을 둔다.
     # ping_interval/ping_timeout: keepalive ping 으로 좀비 연결(반쯤 끊긴 소켓)을 감지해
     # 끊어준다 → run_forever 의 백오프 재접속 루프가 작동할 수 있게 한다.
-    async with websockets.connect("ws://localhost:8065/api/v4/websocket",
+    async with websockets.connect("ws://127.0.0.1:8065/api/v4/websocket",
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))

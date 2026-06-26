@@ -2,7 +2,8 @@
 # BOGO infra bring-up — 봇 기동 전에 통신 백본(Colima VM + Mattermost + Postgres)이
 # 반드시 살아있도록 보장하는 멱등 부트 의존성 체인.
 #
-# WHY: 봇은 ws://localhost:8065 로 Mattermost 에 붙는다. Colima(도커 런타임 VM)가 꺼져
+# WHY: 봇은 ws://127.0.0.1:8065 로 Mattermost 에 붙는다(localhost 는 ::1 로 먼저
+#   풀려 colima IPv4-only 포워드에서 refused 가 나므로 IPv4 강제). Colima(도커 런타임 VM)가 꺼져
 #   있으면 컨테이너가 Exited 가 되고, MM 이 없으면 봇이 연결 실패로 죽는다. 기존 시작
 #   경로(bogo_ctl setup/restart, BOGO 시작.command)는 이 백본 기동을 보장하지
 #   않고 곧장 봇만 띄웠다 → 근본 원인. 이 스크립트가 그 공백을 메운다.

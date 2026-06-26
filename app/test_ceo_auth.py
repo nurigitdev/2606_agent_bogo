@@ -167,8 +167,12 @@ class HtmlRegressionTest(unittest.TestCase):
     def test_login_html_exists_and_has_form(self):
         self.assertIn("/api/login", D.LOGIN_HTML)
         self.assertIn("비밀번호", D.LOGIN_HTML)
-        # 데모 기본값 1111 이 힌트로 명시되어 있어야 동작 안내가 된다.
-        self.assertIn("1111", D.LOGIN_HTML)
+        # 로그인 폼의 핵심 입력(아이디 id=lid / 비밀번호 type=password)이 존재해야 한다.
+        # 데모 기본 비밀번호(1111)를 로그인 화면에 평문으로 노출하지 않는다 — 자격증명
+        # 힌트 노출은 보안 안티패턴이라 HTML 단언에서 제외한다(데모 비번 안내는
+        # accounts_config 주석/README 등 비공개 문서에서만 제공).
+        self.assertIn('id="lid"', D.LOGIN_HTML)
+        self.assertIn('type="password"', D.LOGIN_HTML)
 
     def test_apple_design_tokens_preserved(self):
         # Apple 디자인 시스템 핵심 토큰 계승 확인.
@@ -178,6 +182,46 @@ class HtmlRegressionTest(unittest.TestCase):
 
     def test_loopback_only_preserved(self):
         self.assertEqual(D.HOST, "127.0.0.1")
+
+
+class MattermostIPv4ForcedRegressionTest(unittest.TestCase):
+    """회귀: Mattermost 접속 URL 의 IPv4(127.0.0.1) 강제.
+
+    Bug was: 대시보드 채널 상세에서 "Mattermost 연결 실패: <urlopen error
+        [Errno 61] Connection refused>" — /api/history 로드 실패.
+    Root cause: 소스가 http(s)/ws://localhost:8065 를 사용. macOS 에서 localhost 는
+        ::1(IPv6) 로 먼저 풀리는데, colima 의 ssh 포트포워드가 IPv4(*:8065)만
+        바인딩해 ::1 로는 Errno 61 Connection refused 가 발생.
+    Fixed in: ceo_auth.MM_BASE, mm_client.MM_BASE, bogo_runtime.MM 및 ws,
+        ceo_admin_runtime ws — 모두 127.0.0.1 로 강제.
+
+    이 테스트는 어떤 소스가 다시 localhost:8065 로 회귀하면 즉시 실패한다.
+    네트워크 0 — 상수 문자열만 검증한다.
+    """
+
+    def _assert_ipv4(self, url):
+        self.assertNotIn("localhost", url, f"localhost(=::1 우선) 금지: {url}")
+        self.assertIn("127.0.0.1", url, f"IPv4 강제 필요: {url}")
+
+    def test_ceo_auth_mm_base_is_ipv4(self):
+        self._assert_ipv4(AUTH.MM_BASE)
+
+    def test_mm_client_mm_base_is_ipv4(self):
+        import mm_client
+        self._assert_ipv4(mm_client.MM_BASE)
+
+    def test_runtime_sources_have_no_localhost_mm(self):
+        # 인라인 ws URL 등 상수가 아닌 접속 지점까지 소스 텍스트로 전수 검증.
+        import os
+        here = os.path.dirname(os.path.abspath(__file__))
+        for fname in ("bogo_runtime.py", "ceo_admin_runtime.py", "ceo_auth.py",
+                      "mm_client.py"):
+            with open(os.path.join(here, fname), encoding="utf-8") as f:
+                src = f.read()
+            for bad in ("://localhost:8065", "://localhost:8067"):
+                self.assertNotIn(
+                    bad, src,
+                    f"{fname} 에 {bad} 잔존 — IPv6 거부 회귀 위험")
 
 
 if __name__ == "__main__":
