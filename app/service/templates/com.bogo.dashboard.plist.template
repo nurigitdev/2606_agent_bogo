@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bogo.dashboard</string>
+
+    <!-- CEO 대시보드(ceo_dashboard.py)를 launchd 가 상시 소유한다. 기존엔 oneclick 의
+         nohup 단발 프로세스라 터미널 종료/슬립/수동 kill 마다 죽고 부활하지 못했다 →
+         봇 4역할과 동일하게 KeepAlive 로 승격해 재발을 막는다.
+         launchd 는 Hangul 경로를 손상시키고 ~/Desktop TCC 를 막으므로, 봇과 똑같이
+         ASCII 미러(__APP__)의 런처(__LAUNCHER__)만 실행한다. 'dashboard' 인자를 받은
+         run_role.sh 가 .env 로드 후 venv python 으로 ceo_dashboard.py 를 exec 한다.
+         모든 경로는 ${HOME} 기반으로 install 시 치환 — username 하드코딩 없음. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LAUNCHER__</string>
+        <string>dashboard</string>
+    </array>
+
+    <!-- BOGO_DASHBOARD_PORT: 대시보드 리슨 포트(기본 8642). 루프백 바인딩(127.0.0.1)은
+         ceo_dashboard.py 가 HOST 하드코딩으로 강제하므로 외부 노출 위험 없음.
+         BOGO_REPO: 봇과 일관성을 위해 동일 주입(대시보드는 미사용이나 무해). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BOGO_DASHBOARD_PORT</key>
+        <string>__DASH_PORT__</string>
+        <key>BOGO_REPO</key>
+        <string>__REPO__</string>
+    </dict>
+
+    <!-- Start at login and keep alive: restart on any non-clean / crash exit AND on
+         a clean exit too — the dashboard is a long-running server that should never
+         voluntarily exit; if it does (kill, slip), launchd must bring it back. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restart to avoid crash loops (min seconds between spawns). -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__LOGS__/dashboard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGS__/dashboard.err.log</string>
+</dict>
+</plist>

@@ -11,12 +11,16 @@
 #    1) venv·의존성 점검 (없으면 bootstrap)
 #    2) Vault RAG reindex (visibility 스키마 반영, 1회)
 #    3) Mattermost 통신 백본(Colima→컨테이너→MM readiness)  ← infra_up.sh 재사용
-#    4) CEO 대시보드(127.0.0.1:8642) 기동 + 헬스체크          ← 본 스크립트가 관리
-#    5) 에이전트 봇 4역할(launchd/systemd)                    ← bogo_ctl.sh 재사용
+#    4) 에이전트 봇 4역할 + CEO 대시보드 launchd/systemd 등록 ← bogo_ctl.sh→install_service.sh
+#    5) CEO 대시보드(127.0.0.1:8642) 헬스체크                ← launchd 가 띄운 것 확인만
 #
-#  멱등: 재실행해도 이미 떠 있는 것은 재사용(중복 기동 X). 대시보드가 죽어 있으면
-#    좀비 PID 정리 후 재기동. 포트 점유 시 그 PID 가 우리 대시보드면 재사용,
-#    아니면 안전 종료 후 우리 것으로 재기동.
+#  재발 방지(핵심): 대시보드는 더 이상 oneclick 의 nohup 단발 프로세스가 아니다. 봇 4역할과
+#    동일하게 launchd(com.bogo.dashboard) / systemd(bogo@dashboard) 가 KeepAlive 로 상시
+#    소유한다 → 터미널 종료/슬립/수동 kill 에도 자동 부활한다. oneclick 은 등록을 보장하고
+#    헬스체크만 한다(직접 기동·중복 nohup 없음). 진짜 정지는 stop(서비스 등록 해제).
+#
+#  멱등: 재실행해도 이미 떠 있는 것은 재사용(중복 기동 X). install_service.sh 가 기존 등록을
+#    bootout 후 재등록(멱등)하며, 과거 nohup 대시보드가 포트를 잡고 있으면 안전 정리한다.
 #
 #  보안: 대시보드는 반드시 127.0.0.1(루프백)에서만 listen. 외부 노출 금지.
 #  로그·PID: app/logs/ 에만 기록(.gitignore 처리됨).
@@ -125,10 +129,11 @@ step_infra() {
 }
 
 # ════════════════════════════════════════════════════════════════════════
-# 4) CEO 대시보드 (127.0.0.1:8642) — 멱등·포트충돌 안전·헬스체크
+# 4·5) CEO 대시보드 (127.0.0.1:8642) — launchd 상시 소유, oneclick 은 헬스체크만
 # ════════════════════════════════════════════════════════════════════════
 dashboard_running_pid() {
-  # PID 파일이 가리키는 프로세스가 살아있고 우리 대시보드면 그 PID 출력.
+  # launchd 가 소유하면 PID 파일이 없으므로, 포트 LISTEN 중인 우리 ceo_dashboard.py 를
+  # 진실원으로 본다(과거 nohup 호환을 위해 PID 파일도 함께 확인).
   if [ -f "$DASH_PID_FILE" ]; then
     local p; p="$(cat "$DASH_PID_FILE" 2>/dev/null || true)"
     if [ -n "${p:-}" ] && kill -0 "$p" 2>/dev/null; then
@@ -137,81 +142,38 @@ dashboard_running_pid() {
       fi
     fi
   fi
+  for p in $(pids_on_port "$DASH_PORT"); do
+    if ps -p "$p" -o command= 2>/dev/null | grep -q "ceo_dashboard.py"; then
+      echo "$p"; return 0
+    fi
+  done
   return 1
 }
 
 step_dashboard() {
-  say "[4/5] CEO 대시보드 기동 ($DASH_HOST:$DASH_PORT, 루프백 전용)..."
+  say "[5/5 후] CEO 대시보드 헬스체크 ($DASH_HOST:$DASH_PORT, 루프백 전용, launchd 소유)..."
 
-  # 4-a. 이미 우리 대시보드가 살아있고 헬스 OK면 재사용(중복 기동 금지).
-  if dashboard_running_pid >/dev/null; then
-    local rp; rp="$(dashboard_running_pid)"
-    if http_ok "http://$DASH_HOST:$DASH_PORT/login"; then
-      ok "대시보드 이미 정상 가동 중 (PID $rp) — 재사용."
-      return 0
-    fi
-    warn "대시보드 PID $rp 존재하나 응답 없음 → 좀비로 간주, 정리 후 재기동."
-    kill "$rp" 2>/dev/null || true; sleep 1; kill -9 "$rp" 2>/dev/null || true
-    rm -f "$DASH_PID_FILE"
-  fi
+  # 설계 변경(재발 방지): 대시보드는 더 이상 oneclick 의 nohup 단발 프로세스가 아니라
+  # launchd(com.bogo.dashboard) / systemd(bogo@dashboard) 가 KeepAlive 로 상시 소유한다.
+  # 그 등록은 step_bots → bogo_ctl.sh → install_service.sh 에서 봇과 함께 이뤄진다.
+  # 따라서 여기서는 "직접 기동"하지 않고, launchd 가 띄운 대시보드가 살아 응답하는지만
+  # 헬스체크로 확인한다(터미널 종료/슬립/수동 kill 에도 launchd 가 자동 부활시킨다).
 
-  # 4-b. 포트 점유 검사. 우리 ceo_dashboard 면 재사용, 아니면 안전 종료.
-  local holders; holders="$(pids_on_port "$DASH_PORT")"
-  if [ -n "$holders" ]; then
-    local mine="" foreign=""
-    while IFS= read -r pid; do
-      [ -z "$pid" ] && continue
-      if ps -p "$pid" -o command= 2>/dev/null | grep -q "ceo_dashboard.py"; then
-        mine="$pid"
-      else
-        foreign="$foreign $pid"
-      fi
-    done <<< "$holders"
-    if [ -n "$mine" ] && http_ok "http://$DASH_HOST:$DASH_PORT/login"; then
-      ok "포트 $DASH_PORT 를 기존 대시보드(PID $mine)가 사용 중 — 재사용."
-      echo "$mine" > "$DASH_PID_FILE"
-      return 0
-    fi
-    if [ -n "${foreign// /}" ]; then
-      warn "포트 $DASH_PORT 를 BOGO 외 프로세스($foreign)가 점유 → 안전 종료 시도."
-      for p in $foreign; do kill "$p" 2>/dev/null || true; done
-      sleep 1
-      for p in $foreign; do kill -9 "$p" 2>/dev/null || true; done
-    fi
-    if [ -n "$mine" ]; then
-      kill "$mine" 2>/dev/null || true; sleep 1; kill -9 "$mine" 2>/dev/null || true
-    fi
-  fi
+  # 혹시 과거 버전이 남긴 nohup 단발 대시보드 PID 파일이 있으면 무시(launchd 가 진실원).
+  rm -f "$DASH_PID_FILE" 2>/dev/null || true
 
-  # 4-c. 기동(루프백 바인딩은 ceo_dashboard.py 가 HOST=127.0.0.1 로 하드코딩).
-  if [ ! -f "$HERE/ceo_dashboard.py" ]; then
-    err "ceo_dashboard.py 가 없습니다."
-    return 1
-  fi
-  # .env 로드(봇 토큰·키). nk_config.json 의 bot_token 이 비면 대시보드가 SystemExit.
-  if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
-  BOGO_DASHBOARD_PORT="$DASH_PORT" nohup "$VENV_PY" -u "$HERE/ceo_dashboard.py" \
-    >"$DASH_OUT" 2>"$DASH_ERR" &
-  local newpid=$!
-  echo "$newpid" > "$DASH_PID_FILE"
-
-  # 4-d. 헬스체크 폴링.
   local waited=0
   while [ "$waited" -lt "$DASH_HEALTH_TIMEOUT" ]; do
-    if ! kill -0 "$newpid" 2>/dev/null; then
-      err "대시보드가 기동 직후 종료됨. 원인(흔히 nk_config.json bot_token 누락):"
-      tail -n 15 "$DASH_ERR" >&2 || true
-      rm -f "$DASH_PID_FILE"
-      return 1
-    fi
     if http_ok "http://$DASH_HOST:$DASH_PORT/login"; then
-      ok "대시보드 정상 (PID $newpid) — http://$DASH_HOST:$DASH_PORT"
+      local pid; pid="$(pids_on_port "$DASH_PORT" | head -1)"
+      ok "대시보드 정상 (launchd 소유, PID ${pid:-?}) — http://$DASH_HOST:$DASH_PORT"
       return 0
     fi
     sleep 1; waited=$((waited + 1))
   done
-  err "대시보드가 ${DASH_HEALTH_TIMEOUT}s 안에 응답하지 않음. 로그: logs/dashboard.err.log"
-  tail -n 15 "$DASH_ERR" >&2 || true
+  err "대시보드가 ${DASH_HEALTH_TIMEOUT}s 안에 응답하지 않음(launchd com.bogo.dashboard 확인 필요)."
+  err "  진단: launchctl print gui/\$(id -u)/com.bogo.dashboard ; tail logs/dashboard.err.log"
+  tail -n 15 "$DASH_ERR" 2>/dev/null >&2 || true
   return 1
 }
 
@@ -248,23 +210,31 @@ step_bots() {
 # ════════════════════════════════════════════════════════════════════════
 # 정지 / 상태
 # ════════════════════════════════════════════════════════════════════════
+# 대시보드 launchd(com.bogo.dashboard) / systemd(bogo@dashboard) 를 등록 해제해 '진짜로'
+# 정지시킨다. 단순 kill 은 KeepAlive 가 즉시 부활시키므로 stop 의도를 달성하지 못한다.
+dashboard_service_stop() {
+  case "$(uname -s)" in
+    Darwin)
+      local uid; uid="$(id -u)"
+      launchctl bootout "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1 || true ;;
+    Linux)
+      systemctl --user disable --now "bogo@dashboard.service" >/dev/null 2>&1 || true ;;
+  esac
+}
+
 do_stop() {
   local all="${1:-}"
-  say "대시보드 정지..."
+  say "대시보드 정지(launchd/systemd 등록 해제 → KeepAlive 부활 차단)..."
+  dashboard_service_stop
   local stopped=0
-  if dashboard_running_pid >/dev/null; then
-    local p; p="$(dashboard_running_pid)"
-    kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true
-    stopped=1
-  fi
-  # PID 파일과 무관하게 포트를 잡은 우리 대시보드도 청소.
+  # 등록 해제 후에도 잔존하는 우리 대시보드 프로세스(과거 nohup 포함)를 청소.
   for p in $(pids_on_port "$DASH_PORT"); do
     if ps -p "$p" -o command= 2>/dev/null | grep -q "ceo_dashboard.py"; then
       kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true; stopped=1
     fi
   done
   rm -f "$DASH_PID_FILE"
-  [ "$stopped" = 1 ] && ok "대시보드 정지됨." || say "대시보드는 떠 있지 않았습니다."
+  ok "대시보드 정지됨(서비스 등록 해제 완료)."
 
   if [ "$all" = "--all" ]; then
     say "봇 launchd/systemd 등록 해제(상시가동 중지)..."
@@ -314,8 +284,10 @@ do_start() {
     err "3단계(백본) 실패 — 중단."
     return 1
   fi
-  step_dashboard || { err "4단계(대시보드) 실패 — 중단(봇은 띄우지 않음)."; return 1; }
-  step_bots      || { err "5단계(봇) 실패 — 대시보드는 떠 있음."; return 1; }
+  # 봇·대시보드 모두 launchd/systemd 상시 가동으로 등록(install_service.sh 가 둘 다 올린다).
+  step_bots      || { err "4단계(봇+대시보드 등록) 실패 — 중단."; return 1; }
+  # launchd 가 올린 대시보드가 응답할 때까지 헬스체크(직접 기동 아님, 자동 부활 소유는 launchd).
+  step_dashboard || { err "5단계(대시보드 헬스체크) 실패 — launchd 상태 확인 필요."; return 1; }
 
   printf '\n%s════ 전 구성요소 활성화 완료 ════%s\n' "$C_OK" "$C_RST"
   printf '  • CEO 대시보드 :  %shttp://%s:%s%s\n' "$C_OK" "$DASH_HOST" "$DASH_PORT" "$C_RST"

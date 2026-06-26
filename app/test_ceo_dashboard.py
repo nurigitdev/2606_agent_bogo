@@ -396,6 +396,90 @@ class RenderedHtmlIntegrityTest(unittest.TestCase):
                     f"{name}: 종료되지 않은 JS 문자열 리터럴 `='\\'` 패턴 발견 "
                     f"(파이썬 백슬래시 이중 이스케이프 누락 회귀)")
 
+    def test_dock_chips_distinguish_team_and_report(self):
+        """회귀: 채널 선택 칩이 team_channel·report_channel 을 구분해 표시.
+
+        Bug was: 칩 라벨이 `c.team_label || c.name` 만 써서, 같은 팀의
+          team_channel 과 report_channel 이 동일한 team_label 로 중복 표시됨
+          (화면: 'CEO · 인사총무 · 인사총무 · 개발 · 개발'). 어느 칩이 어느
+          채널로 전송되는지 사용자가 구분 불가.
+        Root cause: 응답에 이미 있는 kind(briefing/team/report)를 칩 표시에
+          반영하지 않음.
+        Fixed in: chipLabel(c,list) — kind 로 역할 분기. 같은 team_label 이
+          둘 이상이면 '○○ 팀'/'○○ 보고' 접미사로 구분, 유일하면 라벨만,
+          briefing 은 항상 'CEO'.
+
+        정적 가드: INDEX_HTML JS 에 chipLabel 정의·사용이 존재해야 한다.
+        """
+        js = "\n".join(self._scripts(D.INDEX_HTML))
+        self.assertIn("function chipLabel(", js,
+                      "INDEX: chipLabel 헬퍼 정의 누락")
+        self.assertIn("chipLabel(c, channels)", js,
+                      "INDEX: renderDockChips 가 chipLabel 을 쓰지 않음")
+        # 칩 라벨이 team_label 단독(`c.team_label || c.name`)으로 되돌아가지 않도록 가드
+        self.assertNotIn("const label = c.team_label || c.name;", js,
+                         "INDEX: 칩이 team_label 단독으로 회귀(중복 라벨 재발)")
+
+    def test_chip_label_logic_executes(self):
+        """회귀(동작 실증): node 로 chipLabel 을 실제 실행해 구분을 검증.
+
+        같은 team_label('개발')을 team/report 가 공유할 때 서로 다른 라벨이
+        나오고, briefing 은 'CEO', team_label 이 유일하면 접미사가 없어야 한다.
+        node 없으면 환경 제약으로 skip.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+        import os
+        import json
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node 미설치 — chipLabel 동작 검증 건너뜀")
+        js = "\n".join(self._scripts(D.INDEX_HTML))
+        m = re.search(
+            r"function chipLabel\(c, list\)\{.*?\n\}", js, re.DOTALL)
+        self.assertTrue(m, "INDEX: chipLabel 함수 본문 추출 실패")
+        fn = m.group(0)
+        # 화면 시나리오 재현: CEO 브리핑 + 개발 팀/보고(중복) + 단독 팀.
+        harness = fn + """
+const channels = [
+  {name:'ceo-brief', kind:'briefing', team_label:'CEO'},
+  {name:'dev-team',  kind:'team',   team_label:'개발'},
+  {name:'dev-report',kind:'report', team_label:'개발'},
+  {name:'hr-team',   kind:'team',   team_label:'인사총무'},
+  {name:'hr-report', kind:'report', team_label:'인사총무'},
+  {name:'solo-team', kind:'team',   team_label:'기획'}
+];
+const out = channels.map(c=>chipLabel(c, channels));
+console.log(JSON.stringify(out));
+"""
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(harness)
+            path = f.name
+        try:
+            proc = subprocess.run(
+                [node, path], capture_output=True, text=True, timeout=20)
+        finally:
+            os.unlink(path)
+        self.assertEqual(proc.returncode, 0,
+                         f"chipLabel 실행 실패:\n{proc.stderr}")
+        labels = json.loads(proc.stdout.strip())
+        # briefing → 'CEO'
+        self.assertEqual(labels[0], "CEO")
+        # 중복 team_label(개발) → team/report 가 서로 다른 라벨
+        self.assertNotEqual(labels[1], labels[2],
+                            "중복 team_label 의 team/report 가 동일 라벨로 표시됨")
+        self.assertEqual(labels[1], "개발 팀")
+        self.assertEqual(labels[2], "개발 보고")
+        # 인사총무도 동일하게 구분
+        self.assertNotEqual(labels[3], labels[4])
+        # 유일 team_label(기획) → 접미사 없이 라벨만
+        self.assertEqual(labels[5], "기획")
+        # 칩 라벨 전체가 중복 없이 유일(어느 칩이 어느 채널인지 식별 가능)
+        self.assertEqual(len(set(labels)), len(labels),
+                         f"칩 라벨 중복 발생: {labels}")
+
     def test_inline_scripts_parse_as_valid_js(self):
         """회귀: 렌더된 인라인 <script> 가 실제 JS 파서로 파싱되는가.
 

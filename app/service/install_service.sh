@@ -19,6 +19,9 @@ set -euo pipefail
 
 ROLES=(orchestrator hr dev admin)
 
+# CEO 대시보드 리슨 포트(루프백 전용). 환경변수로 덮어쓰기 가능, 기본 8642.
+DASH_PORT="${BOGO_DASHBOARD_PORT:-8642}"
+
 # Repo root = app/ (this script lives in app/service/).
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SELF/.." && pwd)"
@@ -100,7 +103,34 @@ mac_install() {
     launchctl bootstrap "gui/$uid" "$plist"
     say "등록+기동: com.bogo.$r"
   done
+  # CEO 대시보드(127.0.0.1:DASH_PORT)도 봇과 동일하게 launchd 상시 소유로 승격.
+  # 기존 oneclick nohup 단발 프로세스가 떠 있으면 중복 LISTEN 충돌하므로 먼저 정리한다.
+  mac_kill_legacy_dashboard
+  local dplist="$mac_la/com.bogo.dashboard.plist"
+  sed -e "s#__LAUNCHER__#$mac_launcher#g" \
+      -e "s#__APP__#$mac_app#g" \
+      -e "s#__REPO__#$REPO#g" \
+      -e "s#__DASH_PORT__#$DASH_PORT#g" \
+      -e "s#__LOGS__#$mac_logs#g" \
+      "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
+  launchctl bootout "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$uid" "$dplist"
+  say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
   say "macOS launchd 설치 완료. 상태:  ./service/install_service.sh status"
+}
+
+# launchd 가 대시보드를 소유하기 전에, oneclick 이 띄운 단발 nohup 대시보드(원본 Desktop
+# 경로 또는 미러)를 안전 종료한다. 우리 ceo_dashboard.py 프로세스만 골라 죽인다(포트 점유
+# 충돌·이중 LISTEN 방지). 외부 프로세스는 건드리지 않는다.
+mac_kill_legacy_dashboard() {
+  local holders; holders="$(lsof -nP -iTCP:"$DASH_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
+  for p in $holders; do
+    if ps -p "$p" -o command= 2>/dev/null | grep -q "ceo_dashboard.py"; then
+      kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true
+      say "기존 nohup 대시보드(PID $p) 정리 → launchd 소유로 이관."
+    fi
+  done
+  rm -f "$mac_app/logs/dashboard.pid" "$REPO/logs/dashboard.pid" 2>/dev/null || true
 }
 
 mac_uninstall() {
@@ -110,6 +140,10 @@ mac_uninstall() {
     rm -f "$mac_la/com.bogo.$r.plist"
     say "해제: com.bogo.$r"
   done
+  # CEO 대시보드 launchd 해제(미러·로그는 보존).
+  launchctl bootout "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1 || true
+  rm -f "$mac_la/com.bogo.dashboard.plist"
+  say "해제: com.bogo.dashboard"
   # Colima 부팅 자동시작 LaunchAgent 도 함께 해제(콜리마 VM 자체는 건드리지 않음).
   launchctl bootout "gui/$uid/com.bogo.colima" >/dev/null 2>&1 || true
   rm -f "$mac_la/com.bogo.colima.plist"
@@ -126,6 +160,21 @@ mac_restart() {
   for r in "${ROLES[@]}"; do
     launchctl kickstart -k "gui/$uid/com.bogo.$r" && say "재시작: com.bogo.$r"
   done
+  # 대시보드가 아직 등록 안 됐을 수 있다(구버전에서 올린 경우) → 없으면 등록, 있으면 재시작.
+  if launchctl print "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1; then
+    launchctl kickstart -k "gui/$uid/com.bogo.dashboard" && say "재시작: com.bogo.dashboard"
+  else
+    mac_kill_legacy_dashboard
+    local dplist="$mac_la/com.bogo.dashboard.plist"
+    sed -e "s#__LAUNCHER__#$mac_launcher#g" \
+        -e "s#__APP__#$mac_app#g" \
+        -e "s#__REPO__#$REPO#g" \
+        -e "s#__DASH_PORT__#$DASH_PORT#g" \
+        -e "s#__LOGS__#$mac_logs#g" \
+        "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
+    launchctl bootstrap "gui/$uid" "$dplist"
+    say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
+  fi
 }
 
 mac_status() {
@@ -151,6 +200,10 @@ linux_install() {
     systemctl --user enable --now "bogo@$r.service"
     say "등록+기동: bogo@$r"
   done
+  # CEO 대시보드(127.0.0.1:DASH_PORT)도 동일 템플릿 인스턴스로 상시 가동. run_role.sh 가
+  # 'dashboard' 인자를 받아 ceo_dashboard.py 를 exec 하며, BOGO_DASHBOARD_PORT 기본 8642.
+  systemctl --user enable --now "bogo@dashboard.service"
+  say "등록+기동: bogo@dashboard (127.0.0.1:$DASH_PORT)"
   say "Linux systemd 설치 완료. 로그:  journalctl --user -u bogo@orchestrator -f"
 }
 
@@ -159,6 +212,8 @@ linux_uninstall() {
     systemctl --user disable --now "bogo@$r.service" >/dev/null 2>&1 || true
     say "해제: bogo@$r"
   done
+  systemctl --user disable --now "bogo@dashboard.service" >/dev/null 2>&1 || true
+  say "해제: bogo@dashboard"
   rm -f "$sd_unit"
   systemctl --user daemon-reload || true
   say "systemd 등록 해제 완료."
@@ -169,6 +224,9 @@ linux_restart() {
   for r in "${ROLES[@]}"; do
     systemctl --user restart "bogo@$r.service" && say "재시작: bogo@$r"
   done
+  # 대시보드 인스턴스가 아직 enable 안 됐으면(구버전) 등록까지, 있으면 재시작.
+  systemctl --user enable --now "bogo@dashboard.service" 2>/dev/null || true
+  systemctl --user restart "bogo@dashboard.service" && say "재시작: bogo@dashboard"
 }
 
 linux_status() {
@@ -176,6 +234,8 @@ linux_status() {
     printf '%-14s ' "bogo@$r"
     systemctl --user is-active "bogo@$r.service" 2>/dev/null || true
   done
+  printf '%-14s ' "bogo@dashboard"
+  systemctl --user is-active "bogo@dashboard.service" 2>/dev/null || true
 }
 
 # ════════════════════════════════════════════════════════════════════════

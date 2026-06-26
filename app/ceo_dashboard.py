@@ -474,6 +474,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_static(self, rel):
+        """static/ 정적 파일 서빙(로고·파비콘). 경로 탈출 차단·MIME 매핑."""
+        # 경로 정규화 후 static 디렉터리 밖이면 거부(directory traversal 방지)
+        base = os.path.join(HERE, "static")
+        target = os.path.normpath(os.path.join(base, rel.lstrip("/")))
+        if not target.startswith(base + os.sep) or not os.path.isfile(target):
+            return self._json({"error": "not found"}, 404)
+        ext = os.path.splitext(target)[1].lower()
+        ctype = {
+            ".svg": "image/svg+xml", ".png": "image/png",
+            ".ico": "image/x-icon", ".webp": "image/webp",
+        }.get(ext, "application/octet-stream")
+        with open(target, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
+
     # ── 세션/쿠키 헬퍼 ──────────────────────────────────────────────────────
     def _identity(self):
         """요청 쿠키의 세션 토큰 -> 유효 신원. 없으면 None."""
@@ -522,6 +543,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
+        # 정적 자산(로고·파비콘)은 인증 이전에 공개 서빙 — 로그인 화면에서도 필요.
+        if path == "/favicon.ico":
+            return self._send_static("favicon.ico")
+        if path.startswith("/static/"):
+            return self._send_static(path[len("/static/"):])
         ident = self._identity()
         if path == "/login":
             if ident:
@@ -696,6 +722,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)[:200]}, 500)
 
 
+# ── 공유 파비콘 링크 (전 페이지 <head> 공통) ─────────────────────────────────
+_FAVICON_LINKS = """
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
+<link rel="shortcut icon" href="/favicon.ico">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+<meta name="theme-color" content="#1C5FAE">"""
+
+
 # ── 공유 CSS (Apple 디자인 시스템; 로그인·메인 공통) ──────────────────────────
 _CSS = """
   :root {
@@ -743,11 +780,11 @@ _CSS = """
     display:flex; align-items:center; gap:var(--space-4); flex-wrap:wrap;
   }
   .brand { display:flex; align-items:center; gap:var(--space-3); }
+  /* 로고 마크: 투명 배경 SVG 이미지(에이전트 BOGO M/나비 마크). 배경·테두리 없음. */
   .logo-mark {
-    width:30px; height:30px; border-radius:var(--r-sm); flex:0 0 auto;
-    background:var(--ink); color:var(--on-dark);
-    display:flex; align-items:center; justify-content:center;
-    font-weight:600; font-size:15px; letter-spacing:-0.3px;
+    width:30px; height:30px; flex:0 0 auto;
+    display:block; object-fit:contain;
+    background:transparent; border:none;
   }
   header h1 { font-size:19px; font-weight:600; letter-spacing:-0.32px; margin:0; color:var(--ink); }
   .nav-meta { margin-left:auto; display:flex; align-items:center; gap:var(--space-3); flex-wrap:wrap; }
@@ -953,9 +990,6 @@ _CSS = """
   .login-card button { width:100%; margin-top:var(--space-4); }
   .login-err { color:#b3261e; font-size:14px; margin-top:var(--space-4); min-height:18px;
     text-align:center; letter-spacing:-0.2px; }
-  .login-hint { margin-top:var(--space-5); font-size:12px; line-height:1.6;
-    color:var(--ink-faint); text-align:center; letter-spacing:-0.1px; }
-  .login-hint b { color:var(--ink-soft); font-weight:600; }
   @media (max-width:1024px){
     .grid { grid-template-columns:repeat(2,1fr); }
     .roster { grid-template-columns:repeat(2,1fr); }
@@ -1215,18 +1249,18 @@ def build_login_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>에이전트 BOGO 로그인</title>
+<title>에이전트 BOGO 로그인</title>""" + _FAVICON_LINKS + """
 <style>""" + _CSS + """</style>
 </head>
 <body>
 <div class="promo-banner">루프백 전용(127.0.0.1) · <b>외부에 노출되지 않습니다</b></div>
 <div class="login-wrap">
   <form class="login-card" id="loginForm" autocomplete="off">
-    <div class="logo-mark">B</div>
+    <img class="logo-mark" src="/static/logo.svg" alt="에이전트 BOGO" width="44" height="44">
     <h1>에이전트 BOGO 로그인</h1>
     <div class="field">
       <label for="lid">아이디</label>
-      <input id="lid" type="text" autocomplete="username" placeholder="아이디 (admin / ceo / e1 / e2 / e3)" required>
+      <input id="lid" type="text" autocomplete="username" placeholder="아이디" required>
     </div>
     <div class="field">
       <label for="pw">비밀번호</label>
@@ -1234,8 +1268,6 @@ def build_login_html():
     </div>
     <button id="loginBtn" type="submit">로그인</button>
     <div class="login-err" id="err"></div>
-    <div class="login-hint">데모 계정 · 비밀번호 모두 <b>1111</b><br>
-      admin (관리자) · ceo (CEO) · e1·e2·e3 (직원)</div>
   </form>
 </div>
 <script>
@@ -1273,7 +1305,7 @@ def build_index_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>에이전트 BOGO 워크스페이스</title>
+<title>에이전트 BOGO 워크스페이스</title>""" + _FAVICON_LINKS + """
 <style>""" + _CSS + """</style>
 </head>
 <body class="app-shell">
@@ -1282,7 +1314,7 @@ def build_index_html():
   <!-- 사이드바: 얇게, 그룹화, active 표시, 접힘 -->
   <nav class="nav" id="nav">
     <div class="nav-head">
-      <span class="logo-mark">B</span>
+      <img class="logo-mark" src="/static/logo.svg" alt="에이전트 BOGO" width="26" height="26">
       <span class="brandname">에이전트 BOGO</span>
       <button class="nav-collapse" id="navCollapse" title="사이드바 접기 (&#8984;\\)" aria-label="사이드바 접기 (Cmd+\\)"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path></svg></button>
     </div>
@@ -1384,6 +1416,19 @@ function fmtTime(ms){ if(!ms) return ""; const d=new Date(ms);
 function toast(t){ const el=document.getElementById('toast'); el.textContent=t;
   el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2600); }
 function kindLabel(k){ return k==='team'?'팀':k==='report'?'보고라인':'브리핑'; }
+// 칩 표시 라벨: kind 로 채널 역할을 구분한다(team_channel 과 report_channel 은
+// 같은 team_label 을 공유하므로 라벨만으로는 중복 표시됨 → kind 로 분기).
+// 같은 team_label 이 현재 목록에서 둘 이상이면 반드시 접미사로 구분하고,
+// 유일하면 접미사 없이 팀명만 보여 군더더기를 없앤다. briefing 은 항상 'CEO'.
+function chipLabel(c, list){
+  if(c.kind==='briefing') return c.team_label || 'CEO';
+  const base = c.team_label || c.name;
+  // 같은 team_label 을 쓰는 채널이 둘 이상인지(=team+report 동시 노출) 확인
+  const dupe = (list||[]).filter(x=>x.kind!=='briefing'
+    && (x.team_label||x.name)===base).length > 1;
+  if(!dupe) return base;
+  return c.kind==='report' ? base+' 보고' : base+' 팀';
+}
 
 async function api(path, opts){
   const r=await fetch(path,opts);
@@ -1707,9 +1752,11 @@ function renderDockChips(){
   const seen=loadLastSeen();
   box.innerHTML=channels.map(c=>{
     const active = c.name===cur ? ' active' : '';
-    const label = c.team_label || c.name;
+    const label = chipLabel(c, channels);
+    // title: 실제 채널명 + 역할(어느 채널로 전송되는지 모호함 제거)
+    const tip = c.name+' · '+kindLabel(c.kind);
     return '<button type="button" class="team-chip'+active+'" data-ch="'+esc(c.name)
-      +'" data-new="'+esc(c.name)+'" title="'+esc(c.name)+'">'
+      +'" data-new="'+esc(c.name)+'" title="'+esc(tip)+'">'
       +'<span class="tc-dot"></span><span class="tc-label">'+esc(label)+'</span></button>';
   }).join('');
   box.querySelectorAll('.team-chip').forEach(el=>{
@@ -1971,14 +2018,14 @@ def build_vault_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>에이전트 BOGO 기억 보관소</title>
+<title>에이전트 BOGO 기억 보관소</title>""" + _FAVICON_LINKS + """
 <style>""" + _CSS + """</style>
 </head>
 <body>
 <div class="promo-banner">루프백 전용(127.0.0.1) · <b>누적 기억(Vault/RAG)</b> · 외부에 노출되지 않습니다</div>
 <header>
   <div class="brand">
-    <span class="logo-mark">B</span>
+    <img class="logo-mark" src="/static/logo.svg" alt="에이전트 BOGO" width="30" height="30">
     <h1>기억 보관소</h1>
   </div>
   <div class="nav-meta">
