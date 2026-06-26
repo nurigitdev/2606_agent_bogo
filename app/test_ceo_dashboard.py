@@ -363,6 +363,71 @@ class RenderedHtmlIntegrityTest(unittest.TestCase):
                           f"{name}: 로그아웃 클릭 핸들러 누락")
             self.assertIn("fetch('/api/logout'", html, f"{name}: /api/logout 호출 누락")
 
+    @staticmethod
+    def _scripts(html):
+        # 인라인 <script> 본문만 추출(외부 src 스크립트는 제외).
+        return [
+            m.group(1)
+            for m in re.finditer(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+                                 html, re.DOTALL | re.IGNORECASE)
+        ]
+
+    def test_no_broken_backslash_string_literal(self):
+        """회귀: 파이썬 triple-quote 안의 JS 백슬래시 이중 이스케이프 누락 방지.
+
+        Bug was: ceo/admin/staff 로그인 후 메인 본문이 통째로 빈칸.
+        Root cause: INDEX_HTML 내장 JS 의 키바인딩
+          `e.key==='\\\\'` 가 파이썬 문자열에서 백슬래시 1개로 펼쳐져
+          서버가 보낸 JS 가 `e.key==='\\'` (종료되지 않은 문자열 리터럴)이 되었다.
+          이 한 줄이 <script> 전체를 SyntaxError 로 깨뜨려 init()·렌더 함수가
+          정의조차 되지 않아 본문이 비었다.
+        Fixed in: build_index_html() — 소스를 `'\\\\\\\\'` 로 바꿔 서버 JS 가
+          유효한 `'\\\\'`(이스케이프된 백슬래시 1개) 가 되도록 보정.
+        이 테스트는 렌더된 JS 에서 백슬래시 직후 따옴표가 바로 오는
+        (= 따옴표를 이스케이프해 문자열이 닫히지 않는) 위험 패턴을 직접 금지한다.
+        """
+        # 위험 패턴: 홀수 개 백슬래시 뒤에 작은따옴표가 와서 문자열을 종료하지 못함.
+        # 가장 단순·확실한 형태인  ='\'  (정확히 backslash 1개 + quote)를 금지.
+        bad = re.compile(r"='\\'")
+        for name, html in self.DOCS.items():
+            for js in self._scripts(html):
+                self.assertNotRegex(
+                    js, bad,
+                    f"{name}: 종료되지 않은 JS 문자열 리터럴 `='\\'` 패턴 발견 "
+                    f"(파이썬 백슬래시 이중 이스케이프 누락 회귀)")
+
+    def test_inline_scripts_parse_as_valid_js(self):
+        """회귀: 렌더된 인라인 <script> 가 실제 JS 파서로 파싱되는가.
+
+        node 가 있으면 `node --check` 로 전체 스크립트를 파싱해
+        어떤 SyntaxError 도 없음을 실증한다(빈 본문 버그의 근본 게이트).
+        node 가 없으면 환경 제약으로 skip.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node 미설치 — JS 파싱 검증 건너뜀")
+        for name, html in self.DOCS.items():
+            scripts = self._scripts(html)
+            self.assertTrue(scripts, f"{name}: 인라인 <script> 가 없음")
+            for idx, js in enumerate(scripts):
+                with tempfile.NamedTemporaryFile(
+                        "w", suffix=".js", delete=False, encoding="utf-8") as f:
+                    f.write(js)
+                    path = f.name
+                try:
+                    proc = subprocess.run(
+                        [node, "--check", path],
+                        capture_output=True, text=True, timeout=20)
+                finally:
+                    import os
+                    os.unlink(path)
+                self.assertEqual(
+                    proc.returncode, 0,
+                    f"{name} script#{idx} JS 파싱 실패(SyntaxError):\n{proc.stderr}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

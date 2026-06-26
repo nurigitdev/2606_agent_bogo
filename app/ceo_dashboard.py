@@ -1944,7 +1944,7 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
   ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); doSend(); } });
   document.addEventListener('keydown',e=>{
     if((e.metaKey||e.ctrlKey)&&(e.key==='k'||e.key==='K')){ e.preventDefault(); openCmdk(); }
-    else if((e.metaKey||e.ctrlKey)&&e.key==='\\'){ e.preventDefault(); toggleNav(); }
+    else if((e.metaKey||e.ctrlKey)&&e.key==='\\\\'){ e.preventDefault(); toggleNav(); }
     else if(e.key==='Escape'){ closePanel(); }
   });
 
