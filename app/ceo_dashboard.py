@@ -1139,7 +1139,7 @@ _CSS = """
   .chat-empty { height:100%; }
   /* ── 채팅 2모드: 빈 상태 = 입력창이 메인 중앙(.dock은 DOM 유지·위치만 전환) ── */
   .stage.is-empty .stage-scroll { display:flex; flex-direction:column; align-items:center; justify-content:center; }
-  .stage.is-empty .dock { position:static; width:100%; padding-bottom:0; }
+  /* 빈 상태/채팅 상태 모두 입력창은 화면 정중앙 유지(.dock base 규칙 그대로 사용) */
   .chat-empty-greet { font-size:var(--fz-16); color:var(--ink-muted); text-align:center;
     letter-spacing:-0.2px; margin-bottom:var(--gap-5); }
   /* 첫 전송 FLIP 후 첫 버블 페이드인 */
@@ -1176,8 +1176,9 @@ _CSS = """
   .row-card .rc-chev { color:var(--ink-faint); font-size:15px; flex:0 0 auto; }
   .list-empty { color:var(--ink-muted); font-size:var(--fz-14); padding:var(--gap-6) 0; text-align:center; }
 
-  /* ── 하단 통합 입력창 ── */
-  .dock { flex:0 0 auto; padding:0 var(--gap-6) var(--gap-5); background:var(--canvas); }
+  /* ── 통합 입력창: 화면 정중앙 배치(.stage 기준 absolute + transform 센터링) ── */
+  .dock { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:100%; box-sizing:border-box; padding:0 var(--gap-6); background:transparent; z-index:5; }
   .dock-shell { max-width:var(--col-w); margin:0 auto; }
   .chat-box { display:flex; align-items:flex-end; gap:var(--gap-2); background:var(--canvas);
     border:1px solid var(--hairline-soft); border-radius:26px; padding:8px 8px 8px var(--gap-5);
