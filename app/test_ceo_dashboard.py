@@ -560,89 +560,68 @@ class RenderedHtmlIntegrityTest(unittest.TestCase):
                     f"{name}: 종료되지 않은 JS 문자열 리터럴 `='\\'` 패턴 발견 "
                     f"(파이썬 백슬래시 이중 이스케이프 누락 회귀)")
 
-    def test_dock_chips_distinguish_team_and_report(self):
-        """회귀: 채널 선택 칩이 team_channel·report_channel 을 구분해 표시.
+    def test_dock_not_absolute_centered_must_be_flex_flow(self):
+        """회귀: 통합 입력창(.dock)이 채팅 누적 시 대화를 가리지 않아야 한다.
 
-        Bug was: 칩 라벨이 `c.team_label || c.name` 만 써서, 같은 팀의
-          team_channel 과 report_channel 이 동일한 team_label 로 중복 표시됨
-          (화면: 'CEO · 인사총무 · 인사총무 · 개발 · 개발'). 어느 칩이 어느
-          채널로 전송되는지 사용자가 구분 불가.
-        Root cause: 응답에 이미 있는 kind(briefing/team/report)를 칩 표시에
-          반영하지 않음.
-        Fixed in: chipLabel(c,list) — kind 로 역할 분기. 같은 team_label 이
-          둘 이상이면 '○○ 팀'/'○○ 보고' 접미사로 구분, 유일하면 라벨만,
-          briefing 은 항상 'CEO'.
+        Bug was: 빈 채팅뿐 아니라 메시지가 쌓인 채팅 상태에서도 입력창이
+          화면 세로 정중앙에 고정돼, 누적된 메시지 위로 떠서 대화 9~10번째
+          줄을 가려 '아예 못 쓸 수준'으로 깨졌다.
+        Root cause: 입력창 중앙배치 커밋(0db54a6)이 .dock 의 기본 규칙을
+          `position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+          z-index:5` 로 바꿔, .dock 을 normal flow 에서 떼어내 .stage 의 세로
+          중앙에 영구 고정했다. 채팅 모드에서도 동일 적용 → 입력창이
+          스크롤되는 메시지 영역 위에 겹쳐 떠버림.
+        Fixed in: ceo_dashboard.py _CSS — .dock 을 normal flex flow
+          (`flex:0 0 auto`)로 복구해 .stage-scroll 아래(하단)에 고정.
+          빈 상태에서만 `.stage.is-empty .dock{margin-top:auto;margin-bottom:auto}`
+          로 normal flow 안에서 세로 중앙 배치(absolute/transform 미사용).
 
-        정적 가드: INDEX_HTML JS 에 chipLabel 정의·사용이 존재해야 한다.
+        정적 가드: .dock 기본 규칙이 absolute 센터링으로 회귀하지 않도록 금지.
         """
-        js = "\n".join(self._scripts(D.INDEX_HTML))
-        self.assertIn("function chipLabel(", js,
-                      "INDEX: chipLabel 헬퍼 정의 누락")
-        self.assertIn("chipLabel(c, channels)", js,
-                      "INDEX: renderDockChips 가 chipLabel 을 쓰지 않음")
-        # 칩 라벨이 team_label 단독(`c.team_label || c.name`)으로 되돌아가지 않도록 가드
-        self.assertNotIn("const label = c.team_label || c.name;", js,
-                         "INDEX: 칩이 team_label 단독으로 회귀(중복 라벨 재발)")
+        css = D._CSS
+        # .dock 의 모든 규칙 블록을 수집(셀렉터가 정확히 `.dock` 단독인 것만).
+        # @media 안의 `.dock{transition:none}` 같은 부분 오버라이드와 구분해,
+        # background 를 지정하는 '기본 레이아웃 규칙' 블록을 식별한다.
+        dock_blocks = [
+            mm.group(1)
+            for mm in re.finditer(r"(?<![\w.-])\.dock\s*\{([^}]*)\}", css)
+        ]
+        self.assertTrue(dock_blocks, "_CSS 에서 .dock 규칙을 찾지 못함")
+        base = [b for b in dock_blocks if "background" in b]
+        self.assertEqual(
+            len(base), 1,
+            f".dock 기본(background 포함) 규칙이 정확히 1개여야 함: {len(base)}개")
+        dock_rule = base[0]
+        self.assertIn("flex:0 0 auto", dock_rule,
+                      ".dock 이 normal flex flow(flex:0 0 auto)가 아님 — "
+                      "하단 고정 레이아웃이 깨졌다")
+        self.assertNotIn("position:absolute", dock_rule,
+                         ".dock 이 absolute 센터링으로 회귀 — 채팅 누적 시 "
+                         "입력창이 대화를 가린다")
+        self.assertNotIn("translate(-50%,-50%)", dock_rule,
+                         ".dock 이 transform 센터링으로 회귀")
+        # 빈 상태 센터링 규칙은 normal flow(auto margin)로만 존재해야 한다.
+        self.assertRegex(
+            css, r"\.stage\.is-empty\s+\.dock\s*\{[^}]*margin-top:auto[^}]*\}",
+            "빈 상태 .dock 세로 중앙 규칙(margin-top:auto) 누락")
+        # 전체 CSS 어디에도 dock 을 absolute 로 띄우는 규칙이 남지 않도록 가드
+        self.assertNotRegex(
+            css, r"\.dock\s*\{[^}]*position:absolute",
+            ".dock 에 position:absolute 규칙이 남아있음(중앙 고정 회귀 잔재)")
 
-    def test_chip_label_logic_executes(self):
-        """회귀(동작 실증): node 로 chipLabel 을 실제 실행해 구분을 검증.
+    def test_no_removed_dock_chips_dead_references(self):
+        """회귀: 제거된 dock-chips 기능의 죽은 참조가 남지 않아야 한다.
 
-        같은 team_label('개발')을 team/report 가 공유할 때 서로 다른 라벨이
-        나오고, briefing 은 'CEO', team_label 이 유일하면 접미사가 없어야 한다.
-        node 없으면 환경 제약으로 skip.
+        커밋 54e711f 가 dock-chips 칩(renderDockChips/chipLabel/.dock-chips)을
+        의도적으로 제거했다. 이 잔재(함수 호출·DOM id·CSS 클래스)가 남으면
+        죽은 참조로 콘솔 에러·레이아웃 잔재를 일으킨다.
         """
-        import shutil
-        import subprocess
-        import tempfile
-        import os
-        import json
-        node = shutil.which("node")
-        if not node:
-            self.skipTest("node 미설치 — chipLabel 동작 검증 건너뜀")
-        js = "\n".join(self._scripts(D.INDEX_HTML))
-        m = re.search(
-            r"function chipLabel\(c, list\)\{.*?\n\}", js, re.DOTALL)
-        self.assertTrue(m, "INDEX: chipLabel 함수 본문 추출 실패")
-        fn = m.group(0)
-        # 화면 시나리오 재현: CEO 브리핑 + 개발 팀/보고(중복) + 단독 팀.
-        harness = fn + """
-const channels = [
-  {name:'ceo-brief', kind:'briefing', team_label:'CEO'},
-  {name:'dev-team',  kind:'team',   team_label:'개발'},
-  {name:'dev-report',kind:'report', team_label:'개발'},
-  {name:'hr-team',   kind:'team',   team_label:'인사총무'},
-  {name:'hr-report', kind:'report', team_label:'인사총무'},
-  {name:'solo-team', kind:'team',   team_label:'기획'}
-];
-const out = channels.map(c=>chipLabel(c, channels));
-console.log(JSON.stringify(out));
-"""
-        with tempfile.NamedTemporaryFile(
-                "w", suffix=".js", delete=False, encoding="utf-8") as f:
-            f.write(harness)
-            path = f.name
-        try:
-            proc = subprocess.run(
-                [node, path], capture_output=True, text=True, timeout=20)
-        finally:
-            os.unlink(path)
-        self.assertEqual(proc.returncode, 0,
-                         f"chipLabel 실행 실패:\n{proc.stderr}")
-        labels = json.loads(proc.stdout.strip())
-        # briefing → 'CEO'
-        self.assertEqual(labels[0], "CEO")
-        # 중복 team_label(개발) → team/report 가 서로 다른 라벨
-        self.assertNotEqual(labels[1], labels[2],
-                            "중복 team_label 의 team/report 가 동일 라벨로 표시됨")
-        self.assertEqual(labels[1], "개발 팀")
-        self.assertEqual(labels[2], "개발 보고")
-        # 인사총무도 동일하게 구분
-        self.assertNotEqual(labels[3], labels[4])
-        # 유일 team_label(기획) → 접미사 없이 라벨만
-        self.assertEqual(labels[5], "기획")
-        # 칩 라벨 전체가 중복 없이 유일(어느 칩이 어느 채널인지 식별 가능)
-        self.assertEqual(len(set(labels)), len(labels),
-                         f"칩 라벨 중복 발생: {labels}")
+        html = D.INDEX_HTML
+        for token in ("renderDockChips", "chipLabel", 'id="dockChips"',
+                      "getElementById('dockChips')", "class=\"dock-chips\"",
+                      "team-chip"):
+            self.assertNotIn(token, html,
+                             f"INDEX: 제거된 dock-chips 잔재 발견: {token}")
 
     def test_inline_scripts_parse_as_valid_js(self):
         """회귀: 렌더된 인라인 <script> 가 실제 JS 파서로 파싱되는가.
