@@ -223,6 +223,37 @@ class MattermostIPv4ForcedRegressionTest(unittest.TestCase):
                     bad, src,
                     f"{fname} 에 {bad} 잔존 — IPv6 거부 회귀 위험")
 
+    def test_no_localhost_scheme_anywhere_in_py_runtime(self):
+        """구조적 가드: app/ 하위 모든 .py 런타임 소스를 자동 전수 스캔해
+        'scheme://localhost:포트' 접속 패턴을 0건으로 강제한다.
+
+        앞 테스트는 4개 파일을 하드코딩하므로 새 파일이 생기면 커버 누락이 생긴다.
+        macOS 에서 localhost 는 ::1(IPv6) 우선 해석 → colima 포트포워드(IPv4 전용)에
+        Errno 61 로 거부되는 버그 클래스이므로, 파일 목록이 아니라 디렉토리 전체를
+        대상으로 삼아 '나중에 추가될 코드'까지 구조적으로 막는다.
+        주석/문자열 설명은 'http://localhost' 같은 실제 접속 스킴 형태만 잡도록
+        정규식으로 한정한다(예: 'localhost 는 ::1' 같은 한글 설명은 매치 안 됨).
+        테스트 파일(test_*.py)은 가드 자체가 localhost 문자열을 다루므로 제외한다.
+        """
+        import os
+        import re
+        here = os.path.dirname(os.path.abspath(__file__))
+        # scheme://localhost[:port] — http/https/ws/wss 등 모든 접속 스킴.
+        pat = re.compile(r"[a-z][a-z0-9+.\-]*://localhost\b", re.IGNORECASE)
+        offenders = []
+        for fn in os.listdir(here):
+            if not fn.endswith(".py") or fn.startswith("test_"):
+                continue
+            path = os.path.join(here, fn)
+            with open(path, encoding="utf-8") as f:
+                for i, line in enumerate(f, 1):
+                    if pat.search(line):
+                        offenders.append(f"{fn}:{i}: {line.strip()[:80]}")
+        self.assertEqual(
+            offenders, [],
+            "런타임 .py 에 scheme://localhost 접속 잔존(IPv6 ::1 거부 회귀 위험) — "
+            "127.0.0.1 로 교체하라:\n" + "\n".join(offenders))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

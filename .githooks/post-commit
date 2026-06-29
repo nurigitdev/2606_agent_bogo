@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# BOGO post-commit hook — 미러 드리프트 원천 차단.
+#
+# WHY: launchd 데몬은 ASCII 미러(~/.bogo-bin/app)를 실행하는데, macOS TCC 때문에
+#   데몬 자신은 ~/Desktop 원본의 "파일 내용 read" 가 막혀 스스로 동기화하지 못한다.
+#   반면 git 커밋은 '사용자 세션' 컨텍스트에서 일어나므로 원본 read 가 TCC 를 통과한다.
+#   따라서 코드가 커밋되는 바로 그 순간(=사용자 세션) 미러를 재동기화하고 데몬을
+#   재시작하면, "원본만 고치고 미러 동기화를 빠뜨려 데몬이 옛 코드로 도는" stale
+#   사고(예: mm_client localhost→127.0.0.1 미반영 → Mattermost ::1 Errno 61)가
+#   구조적으로 불가능해진다. 운영자가 restart 를 따로 기억할 필요가 없다.
+#
+# 안전성: 미러가 아직 설치 안 됐거나(install 전), app/ 변경이 없는 커밋이거나,
+#   launchctl 이 없으면(다른 OS) 조용히 빠진다 — 커밋 자체는 절대 막지 않는다.
+#   동기화 옵션은 service/install_service.sh 의 mac_sync 와 동일하게 유지한다.
+set -eu
+
+# 이 훅은 .git/hooks 또는 core.hooksPath(.githooks)에서 실행된다. repo 루트는
+# git 으로 안전하게 해석(훅 위치와 무관).
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$REPO_ROOT" ] || exit 0
+APP_SRC="$REPO_ROOT/app"
+MIRROR="${HOME}/.bogo-bin/app"
+
+# macOS launchd 환경 + 미러가 이미 설치된 경우에만 동작(그 외엔 무해 종료).
+case "$(uname -s)" in Darwin) : ;; *) exit 0 ;; esac
+command -v launchctl >/dev/null 2>&1 || exit 0
+[ -d "$MIRROR" ] || exit 0
+command -v rsync >/dev/null 2>&1 || exit 0
+
+# app/ 하위에 실제 변경이 있었던 커밋만 동기화(문서-only 커밋은 데몬 재시작 불필요).
+if ! git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | grep -q '^app/'; then
+  exit 0
+fi
+
+# 미러 재동기화(멱등). install_service.sh mac_sync 와 동일 제외 목록.
+rsync -a \
+  --exclude '__pycache__/' --exclude '.ruff_cache/' --exclude '.pytest_cache/' \
+  --exclude '.git/' --exclude '.venv/' --exclude '.env' --exclude '*.bak' \
+  --exclude 'logs/' \
+  "$APP_SRC"/ "$MIRROR"/ 2>/dev/null || {
+    echo "[post-commit] 미러 동기화 실패 — 수동 복구: ./app/service/install_service.sh restart" >&2
+    exit 0
+  }
+
+# 미러에서 직접 호출되는 ASCII 런처도 최신 run_role.sh 로 갱신(런처는 미러 밖에 있음).
+if [ -f "$APP_SRC/run_role.sh" ]; then
+  cp "$APP_SRC/run_role.sh" "${HOME}/.bogo-bin/run_role.sh" 2>/dev/null || true
+  chmod +x "${HOME}/.bogo-bin/run_role.sh" 2>/dev/null || true
+fi
+
+# 살아있는 BOGO 데몬만 골라 무중단 재시작(kickstart -k). 등록 안 된 라벨은 건너뛴다.
+uid="$(id -u)"
+restarted=""
+for label in com.bogo.orchestrator com.bogo.hr com.bogo.dev com.bogo.admin com.bogo.dashboard; do
+  if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+    launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 && restarted="$restarted $label"
+  fi
+done
+[ -n "$restarted" ] && echo "[post-commit] 미러 동기화 + 데몬 재시작:$restarted" >&2
+exit 0

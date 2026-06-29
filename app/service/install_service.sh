@@ -41,13 +41,30 @@ mac_launcher="${HOME}/.bogo-bin/run_role.sh"
 mac_logs="${mac_app}/logs"
 mac_la="${HOME}/Library/LaunchAgents"
 
+# git post-commit 훅 활성화 — 미러 드리프트 원천 차단의 핵심.
+# launchd 데몬은 TCC 로 ~/Desktop 원본 read 가 막혀 스스로 동기화하지 못한다. 대신
+# 커밋(=사용자 세션, TCC 통과) 시점에 .githooks/post-commit 이 미러 재동기화 + 데몬
+# 재시작을 자동 수행하게 한다. core.hooksPath 를 버전관리되는 .githooks 로 가리켜,
+# 새 클론/머신에서도 install 한 번이면 자동 활성화된다(.git/hooks 는 버전관리 안 됨).
+mac_enable_git_hooks() {
+  local groot; groot="$(cd "$REPO/.." && git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$groot" ] || { say "git 워크트리 아님 → post-commit 훅 등록 생략"; return 0; }
+  if [ -f "$groot/.githooks/post-commit" ]; then
+    chmod +x "$groot/.githooks/post-commit" 2>/dev/null || true
+    ( cd "$groot" && git config core.hooksPath .githooks )
+    say "git post-commit 훅 활성화: 커밋 시 미러 자동 동기화 + 데몬 재시작"
+  fi
+}
+
 mac_sync() {
   mkdir -p "$mac_app" "$mac_logs"
   rsync -a \
     --exclude '__pycache__/' \
     --exclude '.ruff_cache/' \
+    --exclude '.pytest_cache/' \
     --exclude '.git/' \
     --exclude '.venv/' \
+    --exclude '.env' \
     --exclude '*.bak' \
     --exclude 'logs/' \
     "$REPO"/ "$mac_app"/
@@ -108,6 +125,7 @@ mac_install() {
   cp "$REPO/run_role.sh" "$mac_launcher"
   chmod +x "$mac_launcher"
   mac_sync
+  mac_enable_git_hooks   # 커밋 시 미러 자동 동기화(드리프트 원천 차단)
   # Colima 부팅 자동시작 등록 + 지금 당장 통신 백본 보장(봇 등록 전에 MM 이 떠 있어야 즉사 없음).
   mac_install_colima_agent
   "$mac_app/infra_up.sh"
@@ -173,6 +191,7 @@ mac_uninstall() {
 mac_restart() {
   cp "$REPO/run_role.sh" "$mac_launcher"; chmod +x "$mac_launcher"
   mac_sync
+  mac_enable_git_hooks   # 멱등: restart 시에도 훅 활성 보장
   # 재시작 전에도 통신 백본을 보장한다(Colima/컨테이너가 내려가 있으면 봇이 또 즉사하므로).
   "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
