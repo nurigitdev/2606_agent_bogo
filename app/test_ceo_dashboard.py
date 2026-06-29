@@ -728,6 +728,65 @@ class RenderedHtmlIntegrityTest(unittest.TestCase):
                 "font-size", rule,
                 f"<img> .logo-mark 규칙에 죽은 font-size 잔재: {rule.strip()}")
 
+    def test_staff_report_mutations_blocked_at_handler_entry(self):
+        """회귀(benan 신규결함1 MAJOR): staff(보고 제출자)는 보고 상태변경 권한이 없다.
+
+        보고 뷰 재설계 후 행 호버 액션바의 승인·고정 아이콘이 staff 에 노출되고
+          approveReport/togglePin 등 mutate 핸들러에 role 가드가 없어, staff 가
+          클릭하면 localStorage 에 {status:done,decision:approved,pinned:true} 가
+          기록되는 권한 우회가 있었다. 표면 숨김(행 액션바 미노출)과 별개로 mutate
+          핸들러 진입부에 role 가드를 박아, 셀렉터 우회나 향후 서버 영속 승격 시에도
+          권한이 새지 않게 한다.
+
+        정적 가드: ① 공용 가드 isReportMutator()가 staff 를 차단하고 ② 모든
+          상태변경 핸들러가 진입부에서 그것을 호출하며 ③ 행 액션 디스패처도 staff
+          의 copy 외 액션을 막는지 검증한다.
+        """
+        html = D.INDEX_HTML
+        # ① staff 를 false 로 떨구는 공용 가드 존재
+        self.assertIn("function isReportMutator(){ return !(me&&me.role==='staff'); }", html,
+                      "staff 차단 공용 가드 isReportMutator() 누락")
+        # ② 모든 mutate 핸들러 진입부에서 가드 호출(가드 누락 핸들러가 권한을 새게 함)
+        for fn in ("approveReport", "completeReport", "togglePin",
+                   "addComment", "rejectReport", "followUp"):
+            pat = re.search(r"function\s+" + fn + r"\(([^)]*)\)\{(.*?)\n\}", html, re.S)
+            self.assertIsNotNone(pat, f"{fn} 핸들러를 찾지 못함")
+            self.assertIn("if(!isReportMutator()) return;", pat.group(2),
+                          f"{fn} 핸들러에 staff role 가드(isReportMutator) 누락")
+        # ③ 행 액션 디스패처: staff 는 copy 외 액션 차단
+        self.assertIn("if(me&&me.role==='staff'&&act!=='copy') return;", html,
+                      "handleRepAction 에 staff(copy 외) 차단 가드 누락")
+
+    def test_staff_report_row_actions_only_copy_visible(self):
+        """회귀(benan 신규결함1/3): staff 행 액션바엔 복사만 노출(승인·고정·후속 미노출).
+
+        승인·고정·후속 아이콘을 staff 에 보여주면 클릭→가드거부 토스트(offer-then-deny,
+          결함3)거나 권한 우회(결함1)다. 아이콘 자체를 안 그린다.
+
+        정적 가드: repRowHtml 의 rep-actions 가 staff 분기로 승인/고정/후속을
+          접고 copy 만 남기는지 검증한다.
+        """
+        html = D.INDEX_HTML
+        m = re.search(r"\+'<span class=\"rep-actions\">'(.*?)\+'</span></button>';", html, re.S)
+        self.assertIsNotNone(m, "rep-actions 액션바 블록을 찾지 못함")
+        block = m.group(1)
+        self.assertIn("me&&me.role==='staff'?''", block,
+                      "rep-actions 가 staff 분기로 승인/고정/후속을 접지 않음")
+        # data-act 승인/고정/후속은 staff 분기 안(접힘)에, copy 는 분기 밖(항상 노출)에 있어야 함
+        self.assertIn("data-act=\"copy\"", block, "복사 액션이 누락됨")
+
+    def test_staff_nav_reports_label_differentiated(self):
+        """회귀(benan 신규결함2 MINOR): staff nav 의 '보고 작성'/'받은 보고' 차별화.
+
+        staff nav 에서 chat='보고 작성'(제출)과 reports='보고'(열람)가 둘 다 '보고…'
+          로 시작해 혼동됐다. 열람 뷰 라벨을 '받은 보고'로 차별화한다.
+
+        정적 가드: staff IA 블록이 navReports 라벨을 '받은 보고'로 치환하는지 검증.
+        """
+        html = D.INDEX_HTML
+        self.assertIn("nrt.textContent='받은 보고'", html,
+                      "staff navReports 라벨을 '받은 보고'로 차별화하지 않음")
+
 
 class PermissionMatrixTest(unittest.TestCase):
     """회귀: 5계정(admin/ceo/e1/e2/e3) 권한 매트릭스가 의도대로 강제되는가.

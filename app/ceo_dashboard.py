@@ -1851,9 +1851,11 @@ function repRowHtml(r){
       +'</span>'
     +'</span>'
     +'<span class="rep-actions">'
-      +'<span class="rep-iconbtn'+(fl.status==='done'?' on':'')+'" role="button" tabindex="0" data-act="approve" title="승인" aria-label="승인">'+ICN.check+'</span>'
-      +'<span class="rep-iconbtn'+(fl.pinned?' on':'')+'" role="button" tabindex="0" data-act="pin" title="고정" aria-label="고정">'+ICN.pin+'</span>'
-      +'<span class="rep-iconbtn" role="button" tabindex="0" data-act="followup" title="후속 지시" aria-label="후속 지시">'+ICN.reply+'</span>'
+      // staff는 보고 제출자(read-only): 승인·고정·후속 액션 미노출, 복사만 제공
+      +(me&&me.role==='staff'?'':
+         '<span class="rep-iconbtn'+(fl.status==='done'?' on':'')+'" role="button" tabindex="0" data-act="approve" title="승인" aria-label="승인">'+ICN.check+'</span>'
+        +'<span class="rep-iconbtn'+(fl.pinned?' on':'')+'" role="button" tabindex="0" data-act="pin" title="고정" aria-label="고정">'+ICN.pin+'</span>'
+        +'<span class="rep-iconbtn" role="button" tabindex="0" data-act="followup" title="후속 지시" aria-label="후속 지시">'+ICN.reply+'</span>')
       +'<span class="rep-iconbtn" role="button" tabindex="0" data-act="copy" title="복사" aria-label="복사">'+ICN.copy+'</span>'
     +'</span></button>';
 }
@@ -1962,6 +1964,8 @@ function repById(id){ return reports.find(r=>r.id===id)||null; }
 // 행 호버 액션바 핸들러
 function handleRepAction(act, rid){
   const r=repById(rid); if(!r) return;
+  // staff는 read-only: 복사 외 상태변경 액션 일체 차단(표면 미노출과 별개의 근본 가드)
+  if(me&&me.role==='staff'&&act!=='copy') return;
   if(act==='approve'){ approveReport(rid); }
   else if(act==='pin'){ togglePin(rid); }
   else if(act==='followup'){ followUp(rid); }
@@ -1970,29 +1974,37 @@ function handleRepAction(act, rid){
 }
 
 // ── 워크플로 핸들러 ──────────────────────────────────────────────────────────
+// staff(보고 제출자)는 모든 보고 상태변경 권한이 없다. 각 mutate 핸들러 진입부에서
+// 근본 차단해 표면 숨김이 우회되거나 향후 서버 영속으로 승격돼도 권한이 새지 않게 한다.
+function isReportMutator(){ return !(me&&me.role==='staff'); }
 function approveReport(rid){
+  if(!isReportMutator()) return;
   setFlow(rid, {decision:'approved', status:'done', read:true});
   toast('승인했습니다 ✓'); syncAfterFlow(rid);
 }
 function completeReport(rid){
+  if(!isReportMutator()) return;
   setFlow(rid, {status:'done', read:true}); toast('완료 처리했습니다'); syncAfterFlow(rid);
 }
 function togglePin(rid){
+  if(!isReportMutator()) return;
   const cur=flowOf(rid); setFlow(rid, {pinned:!cur.pinned});
   toast(!cur.pinned?'상단에 고정했습니다':'고정을 해제했습니다'); syncAfterFlow(rid);
 }
 function addComment(rid, text){
+  if(!isReportMutator()) return;
   if(!text||!text.trim()) return;
   setFlow(rid, {comment:{text:text.trim(), ts:Date.now()}, read:true}); syncAfterFlow(rid);
 }
 function rejectReport(rid, reason){
+  if(!isReportMutator()) return;
   setFlow(rid, {decision:'rejected', status:'done', read:true, comment:{text:'[반려] '+reason, ts:Date.now()}});
   toast('반려 처리했습니다'); syncAfterFlow(rid);
 }
 function followUp(rid){
+  if(!isReportMutator()) return;
   const r=repById(rid); if(!r) return;
   // 후속 지시: 해당 팀 채널 프리필 + 인용 → 채팅 composer로 이동(/api/post 재사용)
-  if(me&&me.role==='staff'){ toast('후속 지시는 CEO 전용입니다'); return; }
   setFlow(rid, {status:'in_progress', read:true});
   startNewChat();
   if(activeSession) activeSession.channel=r.channel;
@@ -2312,6 +2324,8 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
   // staff IA 축소: '새 작업'→'보고 작성' 라벨 치환, '보고'를 기본 진입 강조, '과거 질문'은 하위로 이동
   if(me.role==='staff'){
     const nc=document.querySelector('#navChat .ni-txt'); if(nc) nc.textContent='보고 작성';
+    // '보고 작성'(제출)과 구분: 자기 팀에 올라온 보고 열람 뷰는 '받은 보고'로 차별화
+    const nrt=document.querySelector('#navReports .ni-txt'); if(nrt) nrt.textContent='받은 보고';
     const grp=document.querySelector('#navHistory')&&document.querySelector('#navHistory').parentNode;
     const nh=document.getElementById('navHistory'), nr=document.getElementById('navReports');
     // 보고를 과거 질문보다 위로(부차화)
