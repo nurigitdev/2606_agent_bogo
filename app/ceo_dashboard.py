@@ -762,7 +762,7 @@ _CSS = """
   :root {
     --ink:#1d1d1f; --ink-soft:#424245; --ink-muted:#6e6e73;
     --ink-faint:#86868b;
-    --blue:#0066cc; --blue-sky:#2997ff; --focus:#0071e3;
+    --blue:#0066cc; --blue-sky:#2997ff;
     --nav-black:#000000; --canvas:#ffffff; --parchment:#f5f5f7;
     --tile-dark:#1d1d1f; --tile-dark-2:#2a2a2c; --tile-dark-3:#252527;
     --hairline:#e0e0e0; --hairline-soft:#d2d2d7;
@@ -831,7 +831,7 @@ _CSS = """
   .vault-search input { flex:1; min-height:44px; background:var(--canvas); color:var(--ink);
     border:1px solid var(--hairline-soft); border-radius:var(--r-pill);
     padding:0 var(--space-5); font-size:15px; letter-spacing:-0.2px; }
-  .vault-search input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  .vault-search input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px var(--accent-soft); }
   .rag-badge { font-size:12px; color:var(--ink-muted); letter-spacing:-0.2px;
     padding:5px 12px; border:1px solid var(--hairline-soft); border-radius:var(--r-pill); }
   .rag-badge.off { color:#b3261e; border-color:rgba(179,38,30,.4); }
@@ -933,7 +933,7 @@ _CSS = """
     border-radius:var(--r-pill); padding:9px 18px;
     font-size:15px; font-weight:400; cursor:pointer; min-height:44px; letter-spacing:-0.2px;
   }
-  select:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  select:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px var(--accent-soft); }
   textarea {
     width:100%; min-height:104px;
     background:var(--canvas); color:var(--ink);
@@ -942,7 +942,7 @@ _CSS = """
     font-size:17px; line-height:1.47; letter-spacing:-0.374px;
   }
   textarea::placeholder { color:var(--ink-faint); }
-  textarea:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--focus); }
+  textarea:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px var(--accent-soft); }
   button {
     background:var(--blue); color:var(--on-dark); border:none;
     border-radius:var(--r-pill); padding:11px 22px;
@@ -981,7 +981,7 @@ _CSS = """
   .login-card { background:var(--canvas); border:1px solid var(--hairline);
     border-radius:var(--r-lg); padding:var(--space-12) var(--space-10);
     width:100%; max-width:420px; box-shadow:var(--shadow); }
-  .login-card .logo-mark { width:44px; height:44px; font-size:22px; margin:0 auto var(--space-6); }
+  .login-card .logo-mark { width:44px; height:44px; margin:0 auto var(--space-6); }
   .login-card h1 { font-size:28px; font-weight:600; letter-spacing:-0.4px; text-align:center;
     margin:0 0 var(--space-8); color:var(--ink); }
   .login-card .field { margin-bottom:var(--space-4); }
@@ -990,7 +990,7 @@ _CSS = """
   .login-card input { width:100%; min-height:48px; background:var(--canvas); color:var(--ink);
     border:1px solid var(--hairline-soft); border-radius:var(--r-md);
     padding:0 var(--space-4); font-size:17px; letter-spacing:-0.32px; }
-  .login-card input:focus { outline:none; border-color:var(--ink-faint); }
+  .login-card input:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px var(--accent-soft); }
   .login-card button { width:100%; margin-top:var(--space-4); }
   .login-err { color:#b3261e; font-size:14px; margin-top:var(--space-4); min-height:18px;
     text-align:center; letter-spacing:-0.2px; }
@@ -1037,7 +1037,7 @@ _CSS = """
   .nav.collapsed { margin-left:calc(-1 * var(--side-w)); }
   .nav-head { display:flex; align-items:center; gap:var(--gap-3);
     padding:var(--gap-4) var(--gap-5); flex:0 0 auto; }
-  .nav-head .logo-mark { width:26px; height:26px; font-size:13px; }
+  .nav-head .logo-mark { width:26px; height:26px; }
   .nav-head .brandname { font-weight:600; font-size:var(--fz-16); letter-spacing:-0.3px; color:var(--ink); }
   /* 사이드바 접기 버튼(nav-head 우측 끝) */
   .nav-collapse { margin-left:auto; flex:0 0 auto; width:28px; height:28px; min-height:28px; padding:0;
@@ -1598,7 +1598,7 @@ function renderReportsView(){
       +'<span class="rc-dot on"></span>'
       +'<span class="rc-title">CEO브리핑 (박민철)</span>'
       +'<span class="rc-sub">'+esc(b.name)+'</span>'
-      +'<span class="rc-badge" data-newbadge="'+esc(b.name)+'" style="display:none">NEW</span>'
+      +'<span class="rc-badge" data-newbadge-pin="1" style="display:none">NEW</span>'
       +'<span class="rc-chev">'+ICN.chevronRight+'</span></button>';
   }
   // 팀 카드(브리핑 채널이 속한 그룹은 위 핀 카드로 대체하되 그룹 자체는 유지)
@@ -1614,7 +1614,7 @@ function renderReportsView(){
   body.querySelectorAll('.row-card[data-tg]').forEach(el=>
     el.addEventListener('click',()=>openReportPanel(teamGroups[+el.dataset.tg])));
   // 신규 NEW 배지(비동기): 핀 카드 + 각 팀그룹
-  if(b){ latestTs(b.name).then(ts=>{ if(ts>(seen[b.name]||0)){ const e=body.querySelector('[data-newbadge="'+CSS.escape(b.name)+'"]'); if(e) e.style.display=''; } }); }
+  if(b){ latestTs(b.name).then(ts=>{ if(ts>(seen[b.name]||0)){ const e=body.querySelector('[data-newbadge-pin="1"]'); if(e) e.style.display=''; } }); }
   teamGroups.forEach((g,i)=>{
     (async()=>{
       let neu=false;

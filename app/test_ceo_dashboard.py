@@ -655,6 +655,76 @@ class RenderedHtmlIntegrityTest(unittest.TestCase):
                     proc.returncode, 0,
                     f"{name} script#{idx} JS 파싱 실패(SyntaxError):\n{proc.stderr}")
 
+    def test_focus_ring_uses_soft_halo_not_opaque_double_border(self):
+        """회귀: 입력 요소 focus 가 불투명 이중 테두리로 회귀하지 않아야 한다.
+
+        Bug was: select/textarea/.vault-search input/.login-card input focus 시
+          `border-color:var(--blue)` 위에 `box-shadow:0 0 0 2px var(--focus)`
+          (불투명 #0071e3 2px 링)이 겹쳐, 파란 테두리 바깥에 또 진한 파란 링이
+          이중으로 그려져 투박하게 보였다(.chat-box:focus-within 의 반투명
+          후광 패턴과 디자인 언어 불일치).
+        Fixed in: _CSS — 4개 focus 규칙 전부 반투명 후광
+          `box-shadow:0 0 0 3px var(--accent-soft)` 로 통일. dead 변수 --focus 제거.
+
+        정적 가드: 불투명 --focus 링과 그 변수 정의가 되살아나지 못하게 금지하고,
+          focus 후광이 디자인 시스템 토큰(--accent-soft)로만 통일됐는지 확인한다.
+        """
+        css = D._CSS
+        self.assertNotIn("var(--focus)", css,
+                         "dead 변수 var(--focus)(불투명 파란 이중 테두리) 회귀")
+        self.assertNotIn("--focus:", css,
+                         "--focus 변수 정의가 되살아남(dead 토큰)")
+        # focus 규칙의 box-shadow 는 반투명 후광(accent-soft)이거나 명시적 none
+        # (.chat-box textarea 는 :focus-within 가 후광을 맡아 자체 box-shadow:none)
+        # 둘 중 하나여야 한다 — 불투명 색상 링은 금지.
+        focus_rules = re.findall(r":focus\s*\{([^}]*box-shadow[^}]*)\}", css)
+        self.assertTrue(focus_rules, "box-shadow 를 쓰는 :focus 규칙을 찾지 못함")
+        for rule in focus_rules:
+            self.assertTrue(
+                "var(--accent-soft)" in rule or "box-shadow:none" in rule,
+                f"focus box-shadow 가 디자인 토큰(--accent-soft) 후광도 none 도 "
+                f"아님(불투명 링 의심): {rule.strip()}")
+        # 반투명 후광을 쓰는 :focus 규칙이 최소 1개는 존재해야 한다(통일 증명).
+        self.assertTrue(
+            any("var(--accent-soft)" in r for r in focus_rules),
+            "반투명 후광(--accent-soft)을 쓰는 focus 규칙이 하나도 없음")
+
+    def test_newbadge_pin_selector_is_stable_marker_not_channel_name(self):
+        """회귀: CEO브리핑 핀 카드 NEW 배지 셀렉터가 채널명 인코딩에 의존하지 않는다.
+
+        Bug class: 핀 카드 NEW 배지의 속성값은 HTML 이스케이프(esc), 조회 셀렉터는
+          CSS.escape 로 서로 다른 인코딩을 써, 채널명에 따옴표 등 특수문자가 들어오면
+          셀렉터 불일치로 NEW 배지가 표시되지 않는다. 핀 카드는 단 하나뿐이므로
+          채널명 셀렉터 자체가 불필요했다.
+        Fixed in: build_index_html() — 고정 마커 data-newbadge-pin="1" 로 교체.
+
+        정적 가드: 깨지기 쉬운 CSS.escape(채널명) 셀렉터가 되살아나지 못하게 금지.
+        """
+        html = D.INDEX_HTML
+        self.assertNotIn("CSS.escape", html,
+                         "CSS.escape(채널명) 셀렉터(인코딩 불일치 취약) 회귀")
+        self.assertNotIn('data-newbadge="', html,
+                         "채널명 기반 data-newbadge 속성(취약 셀렉터) 회귀")
+        self.assertIn('data-newbadge-pin="1"', html,
+                      "핀 카드 NEW 배지의 고정 마커(data-newbadge-pin) 누락")
+        self.assertIn("[data-newbadge-pin=\"1\"]", html,
+                      "핀 카드 NEW 배지 조회가 고정 마커 셀렉터를 쓰지 않음")
+
+    def test_logo_mark_has_no_dead_font_size(self):
+        """회귀: <img> 로고(.logo-mark)에 무의미한 font-size 잔재가 남지 않아야 한다.
+
+        .logo-mark 는 텍스트 로고에서 <img> SVG 로 교체됐는데, 과거 텍스트 시절의
+        font-size 선언이 .nav-head/.login-card 규칙에 죽은 속성으로 남아 있었다.
+        이미지에 font-size 는 효과가 없어 코드 위생 차원에서 제거한다.
+
+        정적 가드: .logo-mark 규칙에 font-size 가 다시 들어오지 못하게 금지.
+        """
+        css = D._CSS
+        for rule in re.findall(r"\.logo-mark\s*\{([^}]*)\}", css):
+            self.assertNotIn(
+                "font-size", rule,
+                f"<img> .logo-mark 규칙에 죽은 font-size 잔재: {rule.strip()}")
+
 
 class PermissionMatrixTest(unittest.TestCase):
     """회귀: 5계정(admin/ceo/e1/e2/e3) 권한 매트릭스가 의도대로 강제되는가.
