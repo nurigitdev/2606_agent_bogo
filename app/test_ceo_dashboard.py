@@ -677,5 +677,134 @@ console.log(JSON.stringify(out));
                     f"{name} script#{idx} JS 파싱 실패(SyntaxError):\n{proc.stderr}")
 
 
+class PermissionMatrixTest(unittest.TestCase):
+    """회귀: 5계정(admin/ceo/e1/e2/e3) 권한 매트릭스가 의도대로 강제되는가.
+
+    Bug class(가드): 권한 경계(channels_for_role·post_channels_for_role)가
+      accounts_config.json 의 role/staff_channels 와 어긋나면 직원이 타 부서
+      채널을 보거나 게시할 수 있다. E2E 전수 점검에서 실측한 기대 매트릭스를
+      단위 테스트로 고정해, 화이트리스트·계정 설정 변경 시 회귀를 잡는다.
+    """
+
+    # E2E 실측으로 확정한 계정별 조회/게시 허용 채널.
+    EXPECT = {
+        "admin": {"CEO브리핑", "인사총무팀", "인사총무-보고라인", "개발팀", "개발-보고라인"},
+        "ceo": {"CEO브리핑", "인사총무팀", "인사총무-보고라인", "개발팀", "개발-보고라인"},
+        "e1": {"개발팀", "개발-보고라인"},
+        "e2": {"인사총무팀", "인사총무-보고라인"},
+        "e3": {"개발팀", "개발-보고라인", "인사총무팀", "인사총무-보고라인"},
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.accts = D.ACCOUNTS  # {login_id: account dict}
+
+    def _ident(self, login_id):
+        a = self.accts[login_id]
+        return {"login_id": login_id, "role": a["role"],
+                "label": a.get("label", ""),
+                "staff_channels": a.get("staff_channels", [])}
+
+    def test_all_five_accounts_exist(self):
+        for uid in self.EXPECT:
+            self.assertIn(uid, self.accts, f"계정 {uid} 가 accounts_config 에 없음")
+
+    def test_channels_for_role_matches_matrix(self):
+        for uid, exp in self.EXPECT.items():
+            got = {c["name"] for c in D.channels_for_role(self._ident(uid))}
+            self.assertEqual(got, exp, f"[{uid}] 조회 채널 매트릭스 불일치: {got} != {exp}")
+
+    def test_post_channels_match_view_channels(self):
+        # 게시 가능 채널 == 조회 가능 채널(역할별 단일 기준).
+        for uid, exp in self.EXPECT.items():
+            got = D.post_channels_for_role(self._ident(uid))
+            self.assertEqual(got, exp, f"[{uid}] 게시 채널 매트릭스 불일치")
+
+    def test_staff_cannot_reach_other_department_channels(self):
+        # e1(개발)은 인사총무 채널을, e2(인사총무)는 개발 채널을 볼 수 없어야 한다.
+        e1 = D.post_channels_for_role(self._ident("e1"))
+        e2 = D.post_channels_for_role(self._ident("e2"))
+        self.assertNotIn("인사총무팀", e1)
+        self.assertNotIn("개발팀", e2)
+        # 비화이트리스트 채널(정책기획실)은 어떤 계정에도 노출되지 않는다.
+        for uid in self.EXPECT:
+            self.assertNotIn("정책기획실",
+                             D.post_channels_for_role(self._ident(uid)),
+                             f"[{uid}] 비화이트리스트 채널 노출")
+
+
+class _GateHandler:
+    """do_GET 인증 게이트만 단위 검증하기 위한 경량 Handler 스텁.
+
+    실제 소켓 없이 _identity 를 주입하고 _html/_json 응답을 (payload, code, headers)
+    로 가로채, 미인증 라우팅(302 리다이렉트 vs 401 vs 200 본문)을 직접 검증한다.
+    """
+
+    def __init__(self, ident, path):
+        self._ident_val = ident
+        self.path = path
+        self.last = None  # (payload, code, headers)
+
+    def _identity(self):
+        return self._ident_val
+
+    def _html(self, html, code=200, extra_headers=None):
+        self.last = (html, code, dict(extra_headers or []))
+        return self.last
+
+    def _json(self, obj, code=200):
+        self.last = (obj, code, {})
+        return self.last
+
+    # Vault/me/channels 등 인증 후 분기는 본 테스트 범위 밖이므로
+    # 게이트 통과 시 즉시 200 INDEX 로 끝나도록 _html(INDEX) 경로만 탄다.
+    do_GET = D.Handler.do_GET
+    _send_static = lambda self, *a, **k: ("static", 200, {})  # noqa: E731
+
+
+class AuthGateRedirectTest(unittest.TestCase):
+    """회귀: 미인증 요청의 인증 게이트.
+
+    Bug class(가드): 미인증 GET / 가 200 으로 대시보드 본문을 흘리면 인증 우회.
+      반드시 302 → /login 으로 리다이렉트되어야 하고, 미인증 /api/* 는 401.
+      인증된 요청은 / 가 200 본문을 받는다. (launchd 미러가 구버전을 들고
+      있을 때 게이트가 사라지는 운영 사고 클래스를 코드 레벨에서 고정.)
+    """
+
+    CEO = {"role": "ceo", "login_id": "ceo", "label": "CEO",
+           "staff_channels": []}
+
+    def _run(self, ident, path):
+        h = _GateHandler(ident, path)
+        h.do_GET()
+        return h.last
+
+    def test_unauth_root_redirects_to_login(self):
+        payload, code, headers = self._run(None, "/")
+        self.assertEqual(code, 302, "미인증 GET / 가 302 가 아님(본문 유출 위험)")
+        self.assertEqual(headers.get("Location"), "/login")
+
+    def test_unauth_api_returns_401(self):
+        for p in ("/api/me", "/api/channels", "/api/roles", "/api/history"):
+            payload, code, _ = self._run(None, p)
+            self.assertEqual(code, 401, f"미인증 {p} 가 401 이 아님")
+
+    def test_unauth_login_page_served(self):
+        payload, code, _ = self._run(None, "/login")
+        self.assertEqual(code, 200)
+        self.assertEqual(payload, D.LOGIN_HTML)
+
+    def test_auth_root_serves_index(self):
+        payload, code, _ = self._run(self.CEO, "/")
+        self.assertEqual(code, 200)
+        self.assertEqual(payload, D.INDEX_HTML)
+
+    def test_auth_login_redirects_home(self):
+        # 이미 로그인한 사용자가 /login 가면 / 로 돌려보낸다.
+        payload, code, headers = self._run(self.CEO, "/login")
+        self.assertEqual(code, 302)
+        self.assertEqual(headers.get("Location"), "/")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
