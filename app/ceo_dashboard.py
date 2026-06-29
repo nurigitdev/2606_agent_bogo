@@ -1243,6 +1243,127 @@ _CSS = """
   .cmdk-empty { color:var(--ink-muted); font-size:var(--fz-14); padding:var(--gap-5); text-align:center; }
 
   .scrim { display:none; }
+
+  /* ══ 보고 워크플로(reports view) — 평탄 report 리스트 + 컨트롤바 + 처리 풋바 ══
+     ChatGPT 웹 적용: 행에 상태점·제목·요약·팀배지·작성자·상대시간·NEW 노출,
+     호버 액션바(승인·핀·후속·복사), 안읽음은 색 아닌 굵기로도 구분(WCAG AA). */
+  .rep-stat { display:flex; gap:var(--gap-4); flex-wrap:wrap; font-size:var(--fz-14);
+    color:var(--ink-muted); letter-spacing:-0.2px; margin-top:var(--gap-1); }
+  .rep-stat b { color:var(--ink); font-weight:600; }
+  .rep-bar { display:flex; gap:var(--gap-2); flex-wrap:wrap; align-items:center;
+    margin-bottom:var(--gap-5); }
+  .rep-search { flex:1 1 220px; min-width:180px; display:flex; align-items:center; gap:var(--gap-2);
+    background:var(--canvas); border:1px solid var(--hairline-soft); border-radius:var(--r-md);
+    padding:0 var(--gap-3); min-height:40px; transition:border-color var(--motion); }
+  .rep-search:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .rep-search input { flex:1; border:none; background:transparent; font-size:var(--fz-14);
+    letter-spacing:-0.2px; padding:9px 0; color:var(--ink); }
+  .rep-search input:focus { outline:none; }
+  .rep-search .icn { color:var(--ink-faint); }
+  .rep-seg { display:flex; gap:0; background:var(--parchment); border:1px solid var(--hairline);
+    border-radius:var(--r-md); padding:2px; }
+  .rep-seg button { background:transparent; border:none; border-radius:var(--r-sm);
+    font-size:var(--fz-13); font-weight:500; color:var(--ink-muted); letter-spacing:-0.2px;
+    padding:6px 12px; min-height:32px; cursor:pointer; transition:background var(--motion), color var(--motion); }
+  .rep-seg button.on { background:var(--canvas); color:var(--ink); font-weight:600; box-shadow:var(--shadow-1); }
+  .rep-chip { background:var(--canvas); border:1px solid var(--hairline-soft); border-radius:var(--r-pill);
+    font-size:var(--fz-13); font-weight:500; color:var(--ink-soft); letter-spacing:-0.2px;
+    padding:6px 13px; min-height:34px; cursor:pointer; transition:all var(--motion); }
+  .rep-chip.on { background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent); font-weight:600; }
+  .rep-sort { background:var(--canvas); border:1px solid var(--hairline-soft); border-radius:var(--r-md);
+    font-size:var(--fz-13); color:var(--ink-soft); padding:7px var(--gap-3); min-height:38px; cursor:pointer; }
+  .rep-sort:focus { outline:none; border-color:var(--accent); }
+
+  .rep-sec { font-size:11px; font-weight:600; letter-spacing:.5px; text-transform:uppercase;
+    color:var(--ink-faint); margin:var(--gap-5) 0 var(--gap-2); }
+  .rep-sec:first-of-type { margin-top:0; }
+  .rep-row { display:flex; align-items:flex-start; gap:var(--gap-3); width:100%; position:relative;
+    background:var(--canvas); border:1px solid var(--hairline); border-radius:var(--r-md);
+    padding:12px var(--gap-4); margin-bottom:var(--gap-2); cursor:pointer; text-align:left;
+    transition:border-color var(--motion), box-shadow var(--motion); }
+  .rep-row:hover { border-color:var(--accent-line); box-shadow:var(--shadow-1); }
+  .rep-row:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .rep-row.unread .rep-title { font-weight:700; }
+  .rep-dot { width:8px; height:8px; border-radius:50%; margin-top:6px; flex:0 0 auto; }
+  .rep-dot.st-new { background:var(--accent); }
+  .rep-dot.st-prog { background:#e0a008; }
+  .rep-dot.st-done { background:var(--ink-faint); }
+  .rep-main { flex:1 1 auto; min-width:0; }
+  .rep-title { font-size:var(--fz-14); font-weight:600; color:var(--ink); line-height:1.4;
+    -webkit-line-clamp:1; display:-webkit-box; -webkit-box-orient:vertical; overflow:hidden; }
+  .rep-snip { font-size:var(--fz-13); color:var(--ink-muted); line-height:1.5; margin-top:2px;
+    -webkit-line-clamp:1; display:-webkit-box; -webkit-box-orient:vertical; overflow:hidden; }
+  .rep-meta { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:6px; }
+  .rep-teambadge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:var(--r-pill);
+    background:var(--parchment); border:1px solid var(--hairline); color:var(--ink-soft); }
+  .rep-who { font-size:var(--fz-13); color:var(--ink-muted); letter-spacing:-0.1px; }
+  .rep-new { font-size:10px; font-weight:700; color:var(--on-dark); background:var(--accent);
+    border-radius:var(--r-pill); padding:1px 7px; letter-spacing:.3px; }
+  .rep-pinmark { color:var(--accent); font-size:12px; }
+  .rep-actions { display:flex; gap:2px; margin-left:auto; flex:0 0 auto; opacity:0;
+    transition:opacity var(--motion); }
+  .rep-row:hover .rep-actions, .rep-row:focus-within .rep-actions { opacity:1; }
+  .rep-iconbtn { width:32px; height:32px; min-height:32px; padding:0; display:flex; align-items:center;
+    justify-content:center; background:transparent; border:1px solid transparent; border-radius:var(--r-sm);
+    color:var(--ink-muted); cursor:pointer; transition:background var(--motion), color var(--motion); }
+  .rep-iconbtn:hover { background:var(--accent-soft); color:var(--accent); }
+  .rep-iconbtn.on { color:var(--accent); }
+
+  /* 패널: 보고 전문 문서형(680px 가독폭) + CEO 코멘트 우측 버블 */
+  .rep-doc { max-width:680px; }
+  .rep-doc .rep-docmeta { display:flex; gap:var(--gap-2); flex-wrap:wrap; align-items:center;
+    margin-bottom:var(--gap-4); }
+  .rep-doc .body { font-size:var(--fz-16); line-height:1.6; color:var(--ink-soft);
+    white-space:pre-wrap; word-break:break-word; }
+  .rep-statusline { display:flex; align-items:center; gap:var(--gap-2); margin-bottom:var(--gap-4);
+    font-size:var(--fz-13); color:var(--ink-muted); }
+  .rep-statuspill { font-size:11px; font-weight:600; padding:3px 10px; border-radius:var(--r-pill);
+    border:1px solid var(--hairline); }
+  .rep-statuspill.st-new { color:var(--accent); border-color:var(--accent-line); background:var(--accent-soft); }
+  .rep-statuspill.st-prog { color:#946700; border-color:rgba(224,160,8,.4); background:rgba(224,160,8,.1); }
+  .rep-statuspill.st-done { color:var(--ink-muted); background:var(--parchment); }
+  .rep-cmt { display:flex; justify-content:flex-end; margin:var(--gap-3) 0; }
+  .rep-cmt .bubble { max-width:86%; background:var(--accent); color:var(--on-dark);
+    border-radius:var(--r-lg); border-bottom-right-radius:var(--r-sm); padding:var(--gap-3) var(--gap-4);
+    font-size:var(--fz-14); line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .rep-cmt .bubble .b-meta { font-size:11px; opacity:.75; margin-top:4px; }
+  .rep-panel-foot { flex:0 0 auto; border-top:1px solid var(--hairline);
+    padding:var(--gap-4) var(--gap-6); display:flex; gap:var(--gap-2); flex-wrap:wrap; }
+  .rep-btn { font-size:var(--fz-14); font-weight:600; letter-spacing:-0.2px; border-radius:var(--r-md);
+    padding:9px var(--gap-4); min-height:40px; cursor:pointer; border:1px solid var(--hairline-soft);
+    background:var(--canvas); color:var(--ink-soft); transition:all var(--motion); }
+  .rep-btn:hover { border-color:var(--accent-line); color:var(--ink); }
+  .rep-btn.approve { background:var(--accent); color:var(--on-dark); border-color:var(--accent); }
+  .rep-btn.approve:hover { filter:brightness(1.06); }
+  .rep-btn.reject { background:transparent; color:#b3261e; border:1px solid rgba(179,38,30,.4); }
+  .rep-btn.reject:hover { background:rgba(179,38,30,.06); }
+
+  /* 빈 상태 3종 가이드 */
+  .rep-empty { text-align:center; padding:var(--gap-8) var(--gap-4); color:var(--ink-muted); }
+  .rep-empty .re-ico { width:44px; height:44px; margin:0 auto var(--gap-4); color:var(--ink-faint);
+    display:flex; align-items:center; justify-content:center; background:var(--parchment);
+    border-radius:50%; }
+  .rep-empty .re-ico .icn { width:22px; height:22px; }
+  .rep-empty .re-t { font-size:var(--fz-16); font-weight:600; color:var(--ink); margin-bottom:6px; }
+  .rep-empty .re-d { font-size:var(--fz-14); line-height:1.5; margin-bottom:var(--gap-4); }
+  .rep-empty .rep-btn { display:inline-flex; align-items:center; }
+
+  /* 반려 사유 모달 */
+  .rep-modal-back { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; z-index:90;
+    align-items:center; justify-content:center; padding:var(--gap-4); }
+  .rep-modal-back.show { display:flex; }
+  .rep-modal { background:var(--canvas); border-radius:var(--r-lg); box-shadow:var(--shadow-2);
+    width:100%; max-width:440px; padding:var(--gap-6); }
+  .rep-modal h3 { font-size:var(--fz-16); font-weight:700; margin:0 0 var(--gap-3); color:var(--ink); }
+  .rep-modal textarea { width:100%; min-height:90px; border:1px solid var(--hairline-soft);
+    border-radius:var(--r-md); padding:var(--gap-3); font-size:var(--fz-14); resize:vertical;
+    font-family:inherit; letter-spacing:-0.2px; }
+  .rep-modal textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .rep-modal .rep-modal-err { color:#b3261e; font-size:var(--fz-13); min-height:18px; margin-top:6px; }
+  .rep-modal .rep-modal-foot { display:flex; gap:var(--gap-2); justify-content:flex-end; margin-top:var(--gap-3); }
+  @media (prefers-reduced-motion:reduce){ .rep-actions { transition:none; } }
+  @media (hover:none){ .rep-actions { opacity:1; } }
+
   @media (max-width:768px){
     .ws { position:relative; }
     .nav { position:absolute; z-index:50; top:0; left:0; box-shadow:var(--shadow-2); }
@@ -1396,6 +1517,7 @@ def build_index_html():
     <button class="ph-close" id="panelClose" title="닫기" aria-label="닫기"><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button>
   </div>
   <div class="panel-body" id="panelBody"></div>
+  <div class="rep-panel-foot" id="panelFoot" style="display:none"></div>
 </aside>
 
 <!-- ⌘K 커맨드 팔레트 -->
@@ -1403,6 +1525,19 @@ def build_index_html():
   <div class="cmdk" role="dialog" aria-modal="true">
     <input id="cmdkInput" type="text" placeholder="질문 검색 · 에이전트 이동 · 보고 열기…" autocomplete="off">
     <div class="cmdk-list" id="cmdkList"></div>
+  </div>
+</div>
+
+<!-- 반려 사유 모달 -->
+<div class="rep-modal-back" id="repModalBack">
+  <div class="rep-modal" role="dialog" aria-modal="true" aria-labelledby="repRejectTitle">
+    <h3 id="repRejectTitle">반려 사유</h3>
+    <textarea id="repRejectReason" placeholder="반려 사유를 입력하세요(필수)"></textarea>
+    <div class="rep-modal-err" id="repRejectErr"></div>
+    <div class="rep-modal-foot">
+      <button class="rep-btn" id="repRejectCancel">취소</button>
+      <button class="rep-btn reject" id="repRejectConfirm">반려 확정</button>
+    </div>
   </div>
 </div>
 
@@ -1466,36 +1601,100 @@ function briefingChannel(){
 // 게시 가능한 첫 채널(staff 기본 전송 채널 보정용)
 function firstPostChannel(){ return (channels[0] && channels[0].name) || defaultPost || null; }
 
-// ── 신규 보고 판정(localStorage lastSeen vs /api/history 최신 ts) ─────────────
-function lastSeenKey(){ return 'bogoSeen:'+((me&&me.login_id)||'anon'); }
-function loadLastSeen(){ try{ return JSON.parse(localStorage.getItem(lastSeenKey())||'{}')||{}; }catch(e){ return {}; } }
-function saveLastSeen(o){ try{ localStorage.setItem(lastSeenKey(), JSON.stringify(o)); }catch(e){} }
-function markChannelSeen(name, ts){
-  const s=loadLastSeen(); s[name]=Math.max(s[name]||0, ts||Date.now()); saveLastSeen(s);
+// ══ 보고 워크플로 도메인 모델 ════════════════════════════════════════════════
+// 서버 {author,text,ts}를 report 단위로 승격(채널×메시지 평탄화). report.id=channel#ts.
+// 워크플로 상태(read·pinned·status·decision·comment)는 localStorage bogoFlow:<login_id>.
+let reports=[];             // 평탄화된 report 객체 캐시(메모리)
+let repFilter={ q:'', status:'all', teams:new Set(), sort:'unhandled' };
+let repLoading=false;
+
+function reportId(channel, ts){ return channel+'#'+ts; }
+function repTitle(text){
+  const first=(text||'').trim().split(/\\n/)[0].trim();
+  return first.slice(0,80)||'(제목 없음)';
 }
-// 채널 최신 ts 조회(없으면 0). /api/history?channel=&n=1
-async function latestTs(name){
-  try{ const d=await api('/api/history?channel='+encodeURIComponent(name)+'&n=1');
-    const it=d.items&&d.items[0]; return it&&it.ts?it.ts:0; }catch(e){ return 0; }
+function repSnippet(text){
+  const t=(text||'').replace(/\\s+/g,' ').trim();
+  return t.slice(0,140);
 }
-// 채널에 신규 보고가 있는지(최신 ts > lastSeen)
-async function channelHasNew(name){
-  const seen=loadLastSeen(); const ts=await latestTs(name);
-  return { hasNew: ts>(seen[name]||0), ts };
+function relTime(ms){
+  if(!ms) return '';
+  const diff=Date.now()-ms, m=Math.floor(diff/60000);
+  if(m<1) return '방금 전';
+  if(m<60) return m+'분 전';
+  const h=Math.floor(m/60); if(h<24) return h+'시간 전';
+  const d=Math.floor(h/24); if(d<7) return d+'일 전';
+  return fmtTime(ms);
 }
-// 보고 신규 배지 갱신: 팀채널 + CEO브리핑 중 신규 있는 채널 수
-async function refreshReportBadge(){
-  const names=new Set();
-  channels.forEach(c=>names.add(c.name));
-  const b=briefingChannel(); if(b) names.add(b.name);
-  let cnt=0;
-  const seen=loadLastSeen();
-  for(const n of names){
-    const ts=await latestTs(n);
-    if(ts>(seen[n]||0)) cnt++;
+
+// ── bogoFlow store(영속): { [reportId]: {read,pinned,status,decision,comment} } ──
+function flowKey(){ return 'bogoFlow:'+((me&&me.login_id)||'anon'); }
+function loadFlow(){ try{ return JSON.parse(localStorage.getItem(flowKey())||'{}')||{}; }catch(e){ return {}; } }
+function saveFlow(o){ try{ localStorage.setItem(flowKey(), JSON.stringify(o)); }catch(e){} }
+function flowOf(id){
+  const f=loadFlow(); const v=f[id]||{};
+  return { read:!!v.read, pinned:!!v.pinned,
+    status:v.status||(v.read?'in_progress':'new'),
+    decision:v.decision||null, comment:v.comment||null };
+}
+function setFlow(id, patch){
+  const f=loadFlow(); f[id]=Object.assign({}, f[id]||{}, patch); saveFlow(f);
+}
+function markReportRead(id){
+  const cur=flowOf(id);
+  if(!cur.read){ setFlow(id, {read:true, status:cur.status==='new'?'in_progress':cur.status}); }
+}
+
+// staff 권한 경계(C3 근본 차단): staff는 자기 team_label 소속 채널의 report만,
+// briefing(CEO 기밀) kind는 무조건 제외. channels[0] 가정 금지.
+function staffTeamLabels(){
+  // 서버가 staff에게 내려준 channels의 team_label 집합(= 자기 부서)
+  const s=new Set();
+  channels.forEach(c=>{ if(c.kind!=='briefing' && c.team_label) s.add(c.team_label); });
+  return s;
+}
+function visibleChannels(){
+  if(me&&me.role==='staff'){
+    const mine=staffTeamLabels();
+    return channels.filter(c=>c.kind!=='briefing' && mine.has(c.team_label));
   }
-  setBadge('cntReports', cnt, true);
-  // 보고 뷰가 떠 있으면 칩/카드 신규 상태도 동기화
+  return channels.slice();
+}
+
+// 모든 가시 채널에서 메시지를 가져와 report 단위로 평탄화한다.
+async function loadReports(){
+  const chs=visibleChannels();
+  const out=[];
+  await Promise.all(chs.map(async c=>{
+    try{
+      const d=await api('/api/history?channel='+encodeURIComponent(c.name)+'&n=20');
+      (d.items||[]).forEach(m=>{
+        if(!m || !m.text) return;
+        out.push({ id:reportId(c.name, m.ts), channel:c.name, kind:c.kind,
+          team_label:c.team_label||(c.kind==='briefing'?'CEO':'기타'),
+          author:m.author||'', text:m.text, ts:m.ts||0,
+          title:repTitle(m.text), snippet:repSnippet(m.text) });
+      });
+    }catch(e){ /* 403/네트워크 등은 조용히 건너뛴다(권한 밖 채널 보호) */ }
+  }));
+  reports=out;
+  return out;
+}
+
+// 미처리(new+in_progress) report 수 — 정렬·통계용
+function unhandledCount(){
+  return reports.filter(r=>{ const s=flowOf(r.id).status; return s==='new'||s==='in_progress'; }).length;
+}
+function newCount(){ return reports.filter(r=>flowOf(r.id).status==='new').length; }
+// 안읽음 report 수 — nav 배지용(M1: report.id 단위, 패널 1개 열람=배지 1감소)
+function unreadCount(){ return reports.filter(r=>!flowOf(r.id).read).length; }
+
+// 보고 배지 갱신: 안읽음 report 수(report.id 단위 — 채널 일괄 읽음 금지)
+async function refreshReportBadge(){
+  if(repLoading) return;
+  repLoading=true;
+  try{ await loadReports(); }finally{ repLoading=false; }
+  setBadge('cntReports', unreadCount(), true);
   if(view==='reports') renderReportsView();
 }
 
@@ -1530,6 +1729,8 @@ function setView(v){
   const stage=document.querySelector('.stage');
   const emptyChat = (v==='chat') && !(activeSession&&activeSession.msgs&&activeSession.msgs.length);
   stage.classList.toggle('is-empty', emptyChat);
+  // M3: 보고 뷰는 입력창(.dock) 비노출 — 채팅 입력 dock이 보고 목록을 가리지 않게 한다.
+  const dock=document.getElementById('dock'); if(dock) dock.style.display=(v==='chat')?'':'none';
   document.getElementById('stageScroll').scrollTop=0;
   if(v==='chat') renderChat();
   else if(v==='history') renderHistoryView();
@@ -1544,6 +1745,13 @@ const ICN={
   users:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>',
   history:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg>',
   squarePen:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg>',
+  check:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>',
+  pin:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path></svg>',
+  reply:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 17 4 12 9 7"></polyline><path d="M20 18v-2a4 4 0 0 0-4-4H4"></path></svg>',
+  copy:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>',
+  inbox:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>',
+  filter:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>',
+  search:'<svg class="icn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>',
 };
 function renderChat(){
   const body=document.getElementById('stageBody');
@@ -1582,71 +1790,227 @@ function renderHistoryView(){
     el.addEventListener('click',()=>openSession(el.dataset.sid)));
 }
 
-// ── 보고 뷰: 팀 한 줄 카드 → 클릭 시 우측 패널에 원문 ────────────────────────
-function renderReportsView(){
-  const body=document.getElementById('stageBody');
-  // staff: 팀카드 목록 대신 자기 부서 보고 원문을 메인 무대에 바로 렌더(우측 패널 아님)
-  if(me&&me.role==='staff'){ renderStaffReport(body); return; }
-  const seen=loadLastSeen();
-  const b=briefingChannel();
-  let h='<div class="col"><div class="view-head"><h2>보고</h2>'
-    +'<p>부서를 선택하면 우측 패널에서 최근 보고 원문을 봅니다.</p></div>';
-  if(!teamGroups.length){ h+='<div class="list-empty">표시할 부서가 없습니다.</div></div>'; body.innerHTML=h; return; }
-  // CEO브리핑 전용 카드(pinned) — 팀카드와 분리해 최상단 고정
-  if(b){
-    h+='<button class="row-card pinned" data-pin="1">'
-      +'<span class="rc-dot on"></span>'
-      +'<span class="rc-title">CEO브리핑 (박민철)</span>'
-      +'<span class="rc-sub">'+esc(b.name)+'</span>'
-      +'<span class="rc-badge" data-newbadge-pin="1" style="display:none">NEW</span>'
-      +'<span class="rc-chev">'+ICN.chevronRight+'</span></button>';
-  }
-  // 팀 카드(브리핑 채널이 속한 그룹은 위 핀 카드로 대체하되 그룹 자체는 유지)
-  h+=teamGroups.map((g,i)=>'<button class="row-card" data-tg="'+i+'">'
-    +'<span class="rc-dot on"></span>'
-    +'<span class="rc-title">'+esc(g.label)+'</span>'
-    +'<span class="rc-sub">'+g.channels.map(c=>esc(c.name)).join(' · ')+'</span>'
-    +'<span class="rc-badge" data-newbadge-group="'+i+'" style="display:none">NEW</span>'
-    +'<span class="rc-chev">'+ICN.chevronRight+'</span></button>').join('')+'</div>';
-  body.innerHTML=h;
-  const pin=body.querySelector('.row-card.pinned');
-  if(pin && b) pin.addEventListener('click',()=>openReportPanel({label:'CEO브리핑 (박민철)',channels:[b]}));
-  body.querySelectorAll('.row-card[data-tg]').forEach(el=>
-    el.addEventListener('click',()=>openReportPanel(teamGroups[+el.dataset.tg])));
-  // 신규 NEW 배지(비동기): 핀 카드 + 각 팀그룹
-  if(b){ latestTs(b.name).then(ts=>{ if(ts>(seen[b.name]||0)){ const e=body.querySelector('[data-newbadge-pin="1"]'); if(e) e.style.display=''; } }); }
-  teamGroups.forEach((g,i)=>{
-    (async()=>{
-      let neu=false;
-      for(const c of g.channels){ const ts=await latestTs(c.name); if(ts>(seen[c.name]||0)){ neu=true; break; } }
-      if(neu){ const e=body.querySelector('[data-newbadge-group="'+i+'"]'); if(e) e.style.display=''; }
-    })();
+// ══ 보고 뷰(단일 화면): 평탄 report 리스트 + 컨트롤바 + 시간 섹션 + 처리 풋바 ══
+// staff·ceo 동일 화면(staff는 visibleChannels()가 자기 부서로 한정 — C3 근본 차단).
+const STATUS_KO={new:'신규', in_progress:'진행', done:'완료'};
+const STATUS_CLASS={new:'st-new', in_progress:'st-prog', done:'st-done'};
+
+// 시간 섹션 그룹(오늘/어제/지난 7일/이전)
+function timeSection(ts){
+  const now=new Date(); const d=new Date(ts);
+  const day=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime();
+  const diff=Math.round((day(now)-day(d))/86400000);
+  if(diff<=0) return {key:'today', label:'오늘'};
+  if(diff===1) return {key:'yest', label:'어제'};
+  if(diff<=7) return {key:'week', label:'지난 7일'};
+  return {key:'old', label:'이전'};
+}
+
+// 필터·정렬 적용된 report 목록
+function filteredReports(){
+  const q=(repFilter.q||'').trim().toLowerCase();
+  return reports.filter(r=>{
+    const fl=flowOf(r.id);
+    if(repFilter.status!=='all' && fl.status!==repFilter.status) return false;
+    if(repFilter.teams.size && !repFilter.teams.has(r.team_label)) return false;
+    if(q){
+      const hay=(r.title+' '+r.text+' '+r.author).toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort((a,b)=>{
+    if(repFilter.sort==='unhandled'){
+      const rank=r=>{ const s=flowOf(r.id).status; return (s==='new'||s==='in_progress')?0:1; };
+      const ra=rank(a), rb=rank(b); if(ra!==rb) return ra-rb;
+    }
+    return b.ts-a.ts;  // ts desc
   });
 }
-// staff: 자기 부서 보고 원문을 메인 무대에 직접 렌더(우측 패널 아님)
-function renderStaffReport(body){
-  const mine=channels[0]||null;
+
+function teamLabelsAll(){
+  const s=[]; const seen=new Set();
+  reports.forEach(r=>{ if(!seen.has(r.team_label)){ seen.add(r.team_label); s.push(r.team_label); } });
+  return s;
+}
+
+function repRowHtml(r){
+  const fl=flowOf(r.id);
+  const unread=!fl.read;
+  const dotCls=STATUS_CLASS[fl.status]||'st-new';
+  const newBadge=(fl.status==='new')?'<span class="rep-new">NEW</span>':'';
+  const pinMark=fl.pinned?'<span class="rep-pinmark" title="고정됨">'+ICN.pin+'</span>':'';
+  return '<button class="rep-row'+(unread?' unread':'')+'" data-rid="'+esc(r.id)+'">'
+    +'<span class="rep-dot '+dotCls+'" aria-hidden="true"></span>'
+    +'<span class="rep-main">'
+      +'<span class="rep-title">'+esc(r.title)+'</span>'
+      +'<span class="rep-snip">'+esc(r.snippet)+'</span>'
+      +'<span class="rep-meta">'
+        +'<span class="rep-teambadge">'+esc(r.team_label)+'</span>'
+        +'<span class="rep-who">'+esc(r.author||'-')+' · '+esc(relTime(r.ts))+'</span>'
+        +newBadge+pinMark
+      +'</span>'
+    +'</span>'
+    +'<span class="rep-actions">'
+      +'<span class="rep-iconbtn'+(fl.status==='done'?' on':'')+'" role="button" tabindex="0" data-act="approve" title="승인" aria-label="승인">'+ICN.check+'</span>'
+      +'<span class="rep-iconbtn'+(fl.pinned?' on':'')+'" role="button" tabindex="0" data-act="pin" title="고정" aria-label="고정">'+ICN.pin+'</span>'
+      +'<span class="rep-iconbtn" role="button" tabindex="0" data-act="followup" title="후속 지시" aria-label="후속 지시">'+ICN.reply+'</span>'
+      +'<span class="rep-iconbtn" role="button" tabindex="0" data-act="copy" title="복사" aria-label="복사">'+ICN.copy+'</span>'
+    +'</span></button>';
+}
+
+function emptyStateHtml(kind){
+  if(kind==='filter'){
+    return '<div class="rep-empty"><div class="re-ico">'+ICN.filter+'</div>'
+      +'<div class="re-t">조건에 맞는 보고가 없습니다</div>'
+      +'<div class="re-d">검색어·상태·팀 필터를 조정해 보세요.</div>'
+      +'<button class="rep-btn rep-clearfilter">필터 초기화</button></div>';
+  }
+  if(kind==='done'){
+    return '<div class="rep-empty"><div class="re-ico">'+ICN.check+'</div>'
+      +'<div class="re-t">오늘 보고를 전부 확인했습니다 ✓</div>'
+      +'<div class="re-d">미처리 보고가 없습니다. 새 지시를 보내면 여기로 모입니다.</div>'
+      +(me&&me.role!=='staff'?'<button class="rep-btn rep-newinstr">새 지시 보내기</button>':'')+'</div>';
+  }
+  // 0건
+  return '<div class="rep-empty"><div class="re-ico">'+ICN.inbox+'</div>'
+    +'<div class="re-t">아직 들어온 보고가 없습니다</div>'
+    +'<div class="re-d">'+(me&&me.role==='staff'?'담당 채널에 보고가 올라오면 여기로 모입니다.':'팀에 작업을 지시하면 여기로 모입니다.')+'</div>'
+    +(me&&me.role!=='staff'?'<button class="rep-btn rep-newinstr">새 지시 보내기</button>':'')+'</div>';
+}
+
+function renderReportsView(){
+  const body=document.getElementById('stageBody');
+  // 미처리/신규/오늘 통계
+  const todayN=reports.filter(r=>timeSection(r.ts).key==='today').length;
   let h='<div class="col"><div class="view-head"><h2>보고</h2>'
-    +'<p>'+(mine?esc(mine.name)+' 채널의 최근 보고입니다.':'표시할 채널이 없습니다.')+'</p></div>';
-  if(!mine){ h+='<div class="list-empty">표시할 채널이 없습니다.</div></div>'; body.innerHTML=h; return; }
-  h+='<div id="staffReport"><div class="list-empty">불러오는 중…</div></div></div>';
+    +'<div class="rep-stat"><span>신규 <b>'+newCount()+'</b></span>'
+    +'<span>진행 <b>'+reports.filter(r=>flowOf(r.id).status==='in_progress').length+'</b></span>'
+    +'<span>오늘 <b>'+todayN+'</b>건</span></div></div>';
+
+  // 컨트롤바: 검색 + 상태필터 + 팀칩(다중) + 정렬
+  const labels=teamLabelsAll();
+  h+='<div class="rep-bar">'
+    +'<label class="rep-search"><span class="icn-wrap" aria-hidden="true">'+ICN.search+'</span>'
+      +'<input id="repSearch" type="search" placeholder="제목·본문·작성자 검색" value="'+esc(repFilter.q)+'" aria-label="보고 검색"></label>'
+    +'<div class="rep-seg" role="group" aria-label="상태 필터">'
+      +['all','new','in_progress','done'].map(s=>'<button data-st="'+s+'"'+(repFilter.status===s?' class="on"':'')+'>'
+        +(s==='all'?'전체':STATUS_KO[s])+'</button>').join('')
+    +'</div>';
+  labels.forEach(l=>{ h+='<button class="rep-chip'+(repFilter.teams.has(l)?' on':'')+'" data-team="'+esc(l)+'">'+esc(l)+'</button>'; });
+  h+='<select class="rep-sort" id="repSort" aria-label="정렬">'
+    +'<option value="unhandled"'+(repFilter.sort==='unhandled'?' selected':'')+'>미처리 우선</option>'
+    +'<option value="latest"'+(repFilter.sort==='latest'?' selected':'')+'>최신순</option>'
+    +'</select></div>';
+
+  // 본문: 핀 섹션 → 시간 섹션
+  const list=filteredReports();
+  if(!reports.length){
+    h+=emptyStateHtml('empty')+'</div>'; body.innerHTML=h; bindReportsView(); return;
+  }
+  if(!list.length){
+    // 필터 결과 0. 미처리(new+in_progress)가 0건이면 '완료' 격려, 아니면 '필터0'.
+    // (전체/신규/진행 필터에서 처리할 게 없으면 완료 화면, 완료 필터/검색·팀칩 0매칭은 필터0.)
+    const handledAll=unhandledCount()===0 && repFilter.q==='' && !repFilter.teams.size
+      && (repFilter.status==='all'||repFilter.status==='new'||repFilter.status==='in_progress');
+    h+=emptyStateHtml(handledAll?'done':'filter')+'</div>'; body.innerHTML=h; bindReportsView(); return;
+  }
+  const pinned=list.filter(r=>flowOf(r.id).pinned);
+  const rest=list.filter(r=>!flowOf(r.id).pinned);
+  if(pinned.length){
+    h+='<div class="rep-sec">📌 고정</div>'+pinned.map(repRowHtml).join('');
+  }
+  // 시간 섹션(rest) — list가 이미 정렬됨, 섹션 헤더만 삽입
+  let curSec=null;
+  rest.forEach(r=>{
+    const sec=timeSection(r.ts);
+    if(sec.key!==curSec){ h+='<div class="rep-sec">'+esc(sec.label)+'</div>'; curSec=sec.key; }
+    h+=repRowHtml(r);
+  });
+  h+='</div>';
   body.innerHTML=h;
-  const load=async()=>{
-    let html='';
-    try{
-      const d=await api('/api/history?channel='+encodeURIComponent(mine.name)+'&n=20');
-      if(!d.items.length){ html='<div class="list-empty">아직 보고가 없습니다.</div>'; }
-      else html=d.items.map(m=>'<div class="panel-msg"><span class="who">'+esc(m.author)
-        +'</span><span class="when">'+fmtTime(m.ts)+'</span><div class="body">'+esc(m.text)
-        +'</div></div>').join('');
-      // 본 것으로 처리(lastSeen 갱신)
-      const top=d.items&&d.items[0]; if(top&&top.ts) markChannelSeen(mine.name, top.ts);
-    }catch(e){ html='<div class="list-empty">로드 실패: '+esc(e.message)+'</div>'; }
-    const box=document.getElementById('staffReport'); if(box) box.innerHTML=html;
-  };
-  load();
-  if(panelTimer){ clearInterval(panelTimer); }
-  panelTimer=setInterval(()=>{ if(view==='reports') load(); }, POLL_MS);
+  bindReportsView();
+}
+
+function bindReportsView(){
+  const body=document.getElementById('stageBody');
+  // 컨트롤바
+  const se=document.getElementById('repSearch');
+  if(se) se.addEventListener('input',e=>{ repFilter.q=e.target.value;
+    const at=document.activeElement; renderReportsView();
+    const ns=document.getElementById('repSearch'); if(ns){ ns.focus(); ns.setSelectionRange(ns.value.length,ns.value.length); } });
+  body.querySelectorAll('.rep-seg button').forEach(b=>b.addEventListener('click',()=>{ repFilter.status=b.dataset.st; renderReportsView(); }));
+  body.querySelectorAll('.rep-chip').forEach(b=>b.addEventListener('click',()=>{
+    const l=b.dataset.team; if(repFilter.teams.has(l)) repFilter.teams.delete(l); else repFilter.teams.add(l); renderReportsView(); }));
+  const so=document.getElementById('repSort'); if(so) so.addEventListener('change',e=>{ repFilter.sort=e.target.value; renderReportsView(); });
+  const cf=body.querySelector('.rep-clearfilter'); if(cf) cf.addEventListener('click',()=>{ repFilter={q:'',status:'all',teams:new Set(),sort:repFilter.sort}; renderReportsView(); });
+  const ni=body.querySelector('.rep-newinstr'); if(ni) ni.addEventListener('click',()=>{ startNewChat(); });
+  // 행: 클릭=패널 + read, 액션바
+  body.querySelectorAll('.rep-row').forEach(el=>{
+    const rid=el.dataset.rid;
+    el.addEventListener('click',e=>{
+      const act=e.target.closest('[data-act]');
+      if(act){ e.stopPropagation(); handleRepAction(act.dataset.act, rid); return; }
+      openReportPanel(rid);
+    });
+    el.querySelectorAll('[data-act]').forEach(a=>a.addEventListener('keydown',e=>{
+      if(e.key==='Enter'||e.key===' '){ e.preventDefault(); e.stopPropagation(); handleRepAction(a.dataset.act, rid); } }));
+  });
+}
+
+function repById(id){ return reports.find(r=>r.id===id)||null; }
+
+// 행 호버 액션바 핸들러
+function handleRepAction(act, rid){
+  const r=repById(rid); if(!r) return;
+  if(act==='approve'){ approveReport(rid); }
+  else if(act==='pin'){ togglePin(rid); }
+  else if(act==='followup'){ followUp(rid); }
+  else if(act==='copy'){
+    navigator.clipboard.writeText(r.text).then(()=>toast('보고 본문을 복사했습니다')).catch(()=>toast('복사 실패')); }
+}
+
+// ── 워크플로 핸들러 ──────────────────────────────────────────────────────────
+function approveReport(rid){
+  setFlow(rid, {decision:'approved', status:'done', read:true});
+  toast('승인했습니다 ✓'); syncAfterFlow(rid);
+}
+function completeReport(rid){
+  setFlow(rid, {status:'done', read:true}); toast('완료 처리했습니다'); syncAfterFlow(rid);
+}
+function togglePin(rid){
+  const cur=flowOf(rid); setFlow(rid, {pinned:!cur.pinned});
+  toast(!cur.pinned?'상단에 고정했습니다':'고정을 해제했습니다'); syncAfterFlow(rid);
+}
+function addComment(rid, text){
+  if(!text||!text.trim()) return;
+  setFlow(rid, {comment:{text:text.trim(), ts:Date.now()}, read:true}); syncAfterFlow(rid);
+}
+function rejectReport(rid, reason){
+  setFlow(rid, {decision:'rejected', status:'done', read:true, comment:{text:'[반려] '+reason, ts:Date.now()}});
+  toast('반려 처리했습니다'); syncAfterFlow(rid);
+}
+function followUp(rid){
+  const r=repById(rid); if(!r) return;
+  // 후속 지시: 해당 팀 채널 프리필 + 인용 → 채팅 composer로 이동(/api/post 재사용)
+  if(me&&me.role==='staff'){ toast('후속 지시는 CEO 전용입니다'); return; }
+  setFlow(rid, {status:'in_progress', read:true});
+  startNewChat();
+  if(activeSession) activeSession.channel=r.channel;
+  const ta=document.getElementById('msg');
+  if(ta){
+    const quote=r.text.split(/\\n/).slice(0,3).map(l=>'> '+l).join('\\n');
+    ta.value='['+r.team_label+' 보고 후속 지시]\\n'+quote+'\\n\\n';
+    autoGrow(ta); refreshSendState(); ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  toast(r.channel+' 후속 지시를 작성하세요');
+  syncAfterFlow(rid);
+}
+// flow 변경 후 화면·배지 낙관적 동기화(재fetch 없이)
+function syncAfterFlow(rid){
+  setBadge('cntReports', unreadCount(), true);
+  if(view==='reports') renderReportsView();
+  if(panelOpenRid===rid) renderReportPanelBody(rid);
 }
 
 // ── 에이전트 현황 뷰: 한 줄 카드 → 클릭 시 패널 상세 ─────────────────────────
@@ -1657,7 +2021,7 @@ function renderRosterView(){
     +'<p>불러오는 중…</p></div></div>';
   loadRoster().then(()=>{
     let h='<div class="col"><div class="view-head"><h2>에이전트 현황</h2>'
-      +'<p>에이전트를 선택하면 우측 패널에서 상세를 봅니다.</p></div>';
+      +'<p>에이전트를 선택하면 상세 정보를 봅니다.</p></div>';
     h+=roster.map((r,i)=>'<button class="row-card" data-ag="'+i+'">'
       +'<span class="rc-dot'+(r.bot_active?' on':'')+'"></span>'
       +'<span class="rc-title">'+esc(r.name)+'</span>'
@@ -1680,40 +2044,95 @@ function openPanel(title, bodyHtml){
   if(panelTimer){ clearInterval(panelTimer); panelTimer=null; }
   document.getElementById('panelTitle').textContent=title;
   document.getElementById('panelBody').innerHTML=bodyHtml;
+  // 비보고 패널은 풋바 숨김(보고 패널이 별도로 표시)
+  const foot=document.getElementById('panelFoot'); if(foot){ foot.style.display='none'; foot.innerHTML=''; }
   document.getElementById('panel').classList.add('show');
   document.getElementById('panel').setAttribute('aria-hidden','false');
   document.getElementById('panelScrim').classList.add('show');
 }
 function closePanel(){
   if(panelTimer){ clearInterval(panelTimer); panelTimer=null; }
+  panelOpenRid=null;
   document.getElementById('panel').classList.remove('show');
   document.getElementById('panel').setAttribute('aria-hidden','true');
   document.getElementById('panelScrim').classList.remove('show');
+  const foot=document.getElementById('panelFoot'); if(foot){ foot.style.display='none'; foot.innerHTML=''; }
 }
-function openReportPanel(group){
-  openPanel(group.label+' 보고',
-    '<div class="panel-meta">'+group.channels.map(c=>'<span class="pm-tag">'+esc(c.name)
-      +' · '+kindLabel(c.kind)+'</span>').join('')+'</div><div id="panelReport">'
-    +'<div class="list-empty">불러오는 중…</div></div>');
-  const load=async()=>{
-    let html='';
-    for(const c of group.channels){
-      html+='<div class="panel-section-t">'+esc(c.name)+'</div>';
-      try{
-        const d=await api('/api/history?channel='+encodeURIComponent(c.name)+'&n=10');
-        if(!d.items.length){ html+='<div class="list-empty">메시지 없음</div>'; continue; }
-        html+=d.items.map(m=>'<div class="panel-msg"><span class="who">'+esc(m.author)
-          +'</span><span class="when">'+fmtTime(m.ts)+'</span><div class="body">'+esc(m.text)
-          +'</div></div>').join('');
-        // 패널을 열어 본 채널은 lastSeen 갱신 → 배지 해제
-        const top=d.items[0]; if(top&&top.ts) markChannelSeen(c.name, top.ts);
-      }catch(e){ html+='<div class="list-empty">로드 실패: '+esc(e.message)+'</div>'; }
-    }
-    const box=document.getElementById('panelReport'); if(box) box.innerHTML=html;
-    // 배지 동기화(보고 뱃지·뷰 갱신)
-    refreshReportBadge();
+let panelOpenRid=null;
+// 단일 보고 문서형 패널(680px) + 처리 풋바(승인/반려/코멘트/후속/완료)
+function openReportPanel(rid){
+  const r=repById(rid); if(!r) return;
+  panelOpenRid=rid;
+  markReportRead(rid);                 // 자동 read + 그 행 NEW만 제거
+  openPanel(r.team_label+' 보고', '');
+  renderReportPanelBody(rid);
+  // 목록·배지 즉시 동기화(읽음 1건 = 배지 1감소)
+  setBadge('cntReports', unreadCount(), true);
+  if(view==='reports') renderReportsView();
+}
+function renderReportPanelBody(rid){
+  const r=repById(rid); if(!r) return;
+  const fl=flowOf(rid);
+  const stCls=STATUS_CLASS[fl.status]||'st-new';
+  let html='<div class="rep-doc">'
+    +'<div class="rep-statusline">'
+      +'<span class="rep-statuspill '+stCls+'">'+(STATUS_KO[fl.status]||'신규')+'</span>'
+      +(fl.decision==='approved'?'<span class="rep-statuspill st-done">승인됨 ✓</span>':'')
+      +(fl.decision==='rejected'?'<span class="rep-statuspill" style="color:#b3261e">반려됨</span>':'')
+      +(fl.pinned?'<span class="rep-statuspill st-new">📌 고정</span>':'')
+    +'</div>'
+    +'<div class="rep-docmeta">'
+      +'<span class="pm-tag">'+esc(r.channel)+' · '+kindLabel(r.kind)+'</span>'
+      +'<span class="pm-tag">'+esc(r.author||'-')+'</span>'
+      +'<span class="pm-tag">'+esc(fmtTime(r.ts))+'</span>'
+    +'</div>'
+    +'<div class="body">'+esc(r.text)+'</div>';
+  // CEO 코멘트(우측 버블)
+  if(fl.comment){
+    html+='<div class="rep-cmt"><div class="bubble">'+esc(fl.comment.text)
+      +'<div class="b-meta">CEO · '+esc(fmtTime(fl.comment.ts))+'</div></div></div>';
+  }
+  html+='</div>';
+  document.getElementById('panelBody').innerHTML=html;
+  // 처리 풋바(staff는 읽기 전용 — 승인/반려/후속 비노출)
+  const foot=document.getElementById('panelFoot');
+  if(me&&me.role==='staff'){ foot.style.display='none'; foot.innerHTML=''; return; }
+  foot.style.display='';
+  foot.innerHTML='<button class="rep-btn approve" data-pact="approve">승인</button>'
+    +'<button class="rep-btn reject" data-pact="reject">반려</button>'
+    +'<button class="rep-btn" data-pact="comment">코멘트</button>'
+    +'<button class="rep-btn" data-pact="followup">후속 지시</button>'
+    +'<button class="rep-btn" data-pact="done">완료 처리</button>';
+  foot.querySelectorAll('[data-pact]').forEach(b=>b.addEventListener('click',()=>{
+    const a=b.dataset.pact;
+    if(a==='approve') approveReport(rid);
+    else if(a==='reject') openRejectModal(rid);
+    else if(a==='comment') openCommentPrompt(rid);
+    else if(a==='followup'){ closePanel(); followUp(rid); }
+    else if(a==='done') completeReport(rid);
+  }));
+}
+// 코멘트: 로컬 메모(패널에 CEO 우측 버블로 표시)
+function openCommentPrompt(rid){
+  const txt=prompt('CEO 코멘트(이 보고에 대한 메모):');
+  if(txt!==null && txt.trim()){ addComment(rid, txt); }
+}
+// 반려 사유 모달(빈 사유 차단)
+function openRejectModal(rid){
+  const back=document.getElementById('repModalBack');
+  document.getElementById('repRejectReason').value='';
+  document.getElementById('repRejectErr').textContent='';
+  back.classList.add('show');
+  const ta=document.getElementById('repRejectReason'); ta.focus();
+  const confirm=document.getElementById('repRejectConfirm');
+  const cancel=document.getElementById('repRejectCancel');
+  const close=()=>{ back.classList.remove('show'); confirm.onclick=null; cancel.onclick=null; };
+  confirm.onclick=()=>{
+    const reason=ta.value.trim();
+    if(!reason){ document.getElementById('repRejectErr').textContent='반려 사유를 입력하세요.'; return; }
+    rejectReport(rid, reason); close();
   };
-  load(); panelTimer=setInterval(load, POLL_MS);
+  cancel.onclick=close;
 }
 function openAgentPanel(r){
   openPanel(r.name,
@@ -1820,9 +2239,14 @@ function cmdkSources(){
   const items=[];
   items.push({cat:'이동',ico:ICN.squarePen,txt:'새 작업',kind:'',act:startNewChat});
   items.push({cat:'이동',ico:ICN.fileText,txt:'보고 열기',kind:'',act:()=>setView('reports')});
+  // 미처리만 보기(신규 필터 단축)
+  items.push({cat:'이동',ico:ICN.filter,txt:'미처리 보고만 보기',kind:'신규',
+    act:()=>{ repFilter.status='new'; setView('reports'); }});
   if(me.role!=='staff') items.push({cat:'이동',ico:ICN.users,txt:'에이전트 현황',kind:'',act:()=>setView('roster')});
-  teamGroups.forEach(g=>items.push({cat:'보고',ico:ICN.fileText,txt:g.label+' 보고',kind:'보고',
-    act:()=>{ setView('reports'); openReportPanel(g); }}));
+  // 개별 보고 검색(제목/작성자/팀)
+  reports.slice().sort((a,b)=>b.ts-a.ts).slice(0,60).forEach(r=>items.push({
+    cat:'보고',ico:ICN.fileText,txt:r.title,kind:r.team_label+' · '+(r.author||''),
+    act:()=>{ setView('reports'); openReportPanel(r.id); }}));
   roster.forEach(r=>items.push({cat:'에이전트',ico:ICN.users,txt:r.name,kind:r.role,
     act:()=>{ if(me.role!=='staff'){ setView('roster'); openAgentPanel(r); } }}));
   sessions.forEach(s=>items.push({cat:'과거 질문',ico:ICN.history,txt:s.title||'대화',kind:fmtTime(s.ts),
@@ -1910,8 +2334,8 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
     if(fp){ defaultPost=fp; if(activeSession&&(!activeSession.channel||/브리핑/.test(activeSession.channel))) activeSession.channel=fp; }
   }
   refreshStats();
-  refreshReportBadge();
-  setInterval(refreshReportBadge, POLL_MS);
+  await refreshReportBadge().catch(()=>{});  // 진입 전 report 평탄화 1회(빈 깜빡임 방지)
+  setInterval(()=>{ refreshReportBadge().catch(()=>{}); }, POLL_MS);
   if(me.role!=='staff'){ loadRoster().catch(()=>{}); }
 
   // 이벤트 바인딩

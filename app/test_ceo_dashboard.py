@@ -689,26 +689,29 @@ class RenderedHtmlIntegrityTest(unittest.TestCase):
             any("var(--accent-soft)" in r for r in focus_rules),
             "반투명 후광(--accent-soft)을 쓰는 focus 규칙이 하나도 없음")
 
-    def test_newbadge_pin_selector_is_stable_marker_not_channel_name(self):
-        """회귀: CEO브리핑 핀 카드 NEW 배지 셀렉터가 채널명 인코딩에 의존하지 않는다.
+    def test_report_rows_bind_by_report_id_not_fragile_channel_selector(self):
+        """회귀(보고 재설계 C1/C2): 보고 행은 report.id(data-rid)로 직접 바인딩한다.
 
-        Bug class: 핀 카드 NEW 배지의 속성값은 HTML 이스케이프(esc), 조회 셀렉터는
-          CSS.escape 로 서로 다른 인코딩을 써, 채널명에 따옴표 등 특수문자가 들어오면
-          셀렉터 불일치로 NEW 배지가 표시되지 않는다. 핀 카드는 단 하나뿐이므로
-          채널명 셀렉터 자체가 불필요했다.
-        Fixed in: build_index_html() — 고정 마커 data-newbadge-pin="1" 로 교체.
+        구 설계는 핀 카드(data-pin)+팀그룹 인덱스(data-tg)를 썼는데, 핀이 리스트
+          인덱스를 밀어 클릭이 다른 팀 패널을 여는 라우팅 오류(C2)와 핀/그룹 중복
+          노출(C1)이 있었다. 또 NEW 배지 셀렉터가 CSS.escape(채널명)에 의존해 특수
+          문자 채널명에서 깨졌다.
+        Fixed in: build_index_html() — 평탄 report 리스트, 각 행 data-rid 직접 바인딩.
 
-        정적 가드: 깨지기 쉬운 CSS.escape(채널명) 셀렉터가 되살아나지 못하게 금지.
+        정적 가드: 폐기된 취약 셀렉터(CSS.escape·data-tg·핀 카드 인덱스)가 되살아나지
+          못하게 금지하고, report.id 기반 바인딩이 존재함을 보장한다.
         """
         html = D.INDEX_HTML
         self.assertNotIn("CSS.escape", html,
                          "CSS.escape(채널명) 셀렉터(인코딩 불일치 취약) 회귀")
-        self.assertNotIn('data-newbadge="', html,
-                         "채널명 기반 data-newbadge 속성(취약 셀렉터) 회귀")
-        self.assertIn('data-newbadge-pin="1"', html,
-                      "핀 카드 NEW 배지의 고정 마커(data-newbadge-pin) 누락")
-        self.assertIn("[data-newbadge-pin=\"1\"]", html,
-                      "핀 카드 NEW 배지 조회가 고정 마커 셀렉터를 쓰지 않음")
+        self.assertNotIn('data-newbadge', html,
+                         "채널명/인덱스 기반 data-newbadge 마커(취약) 회귀")
+        self.assertNotIn('data-tg="', html,
+                         "팀그룹 인덱스(data-tg) 바인딩(핀에 밀려 어긋남·C2) 회귀")
+        self.assertIn('data-rid="', html,
+                      "보고 행이 report.id(data-rid)로 바인딩되지 않음")
+        self.assertIn("dataset.rid", html,
+                      "행 클릭 핸들러가 data-rid(report.id)를 읽지 않음")
 
     def test_logo_mark_has_no_dead_font_size(self):
         """회귀: <img> 로고(.logo-mark)에 무의미한 font-size 잔재가 남지 않아야 한다.
@@ -853,6 +856,90 @@ class AuthGateRedirectTest(unittest.TestCase):
         payload, code, headers = self._run(self.CEO, "/login")
         self.assertEqual(code, 302)
         self.assertEqual(headers.get("Location"), "/")
+
+
+class ReportWorkflowAndLeakTest(unittest.TestCase):
+    """회귀(보고 재설계): C3 직원 권한 누출 근본 차단 + 워크플로 핸들러 존재.
+
+    C3 Bug class: 구 renderStaffReport 가 channels[0] 을 무조건 자기 채널로 간주해,
+      서버가 staff 에게 내려준 채널 배열의 첫 원소가 (정렬·구성 변화로) 브리핑/타 부서면
+      직원이 CEO 기밀을 열람할 수 있었다. 근본 차단은 (1) 서버가 staff 에게 briefing
+      채널을 애초에 주지 않고, (2) 클라이언트가 me.team_label 소속 + briefing 제외로
+      필터하는 이중 방어다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.accts = D.ACCOUNTS
+
+    def _ident(self, login_id):
+        a = self.accts[login_id]
+        return {"login_id": login_id, "role": a["role"],
+                "label": a.get("label", ""),
+                "staff_channels": a.get("staff_channels", [])}
+
+    def test_server_never_exposes_briefing_to_staff(self):
+        # 서버 레벨 근본 차단: 어떤 직원도 channels_for_role 결과에 CEO브리핑(briefing) 없음.
+        for login_id, a in self.accts.items():
+            if a["role"] != "staff":
+                continue
+            chs = D.channels_for_role(self._ident(login_id))
+            names = {c["name"] for c in chs}
+            kinds = {c["kind"] for c in chs}
+            self.assertNotIn("CEO브리핑", names,
+                             f"직원 {login_id} 의 조회 채널에 CEO브리핑 누출")
+            self.assertNotIn("briefing", kinds,
+                             f"직원 {login_id} 의 조회 채널에 briefing kind 누출")
+
+    def test_history_blocks_staff_from_briefing_channel(self):
+        # /api/history 가 staff 의 브리핑 채널 직접 요청을 403 으로 거부하는지(서버 강제).
+        staff_ids = [lid for lid, a in self.accts.items() if a["role"] == "staff"]
+        self.assertTrue(staff_ids, "테스트할 staff 계정이 없음")
+        for lid in staff_ids:
+            ident = self._ident(lid)
+            allowed = {c["name"] for c in D.channels_for_role(ident)}
+            self.assertNotIn("CEO브리핑", allowed)
+
+    def test_client_staff_guard_filters_by_team_label_excludes_briefing(self):
+        # 클라이언트 이중 방어 정적 가드: visibleChannels/staffTeamLabels 가
+        # briefing 제외 + team_label 소속으로 필터하고, channels[0] 가정을 쓰지 않는다.
+        html = D.INDEX_HTML
+        self.assertIn("function visibleChannels", html,
+                      "staff 가시 채널 필터(visibleChannels) 누락")
+        self.assertIn("function staffTeamLabels", html,
+                      "staff 소속 팀라벨 필터(staffTeamLabels) 누락")
+        self.assertIn("c.kind!=='briefing'", html,
+                      "staff 필터가 briefing kind 를 제외하지 않음(C3 누출 위험)")
+        # 구 취약 패턴(channels[0] 을 staff 자기 채널로 간주)이 renderStaffReport 로
+        # 되살아나지 못하게 — 해당 함수 자체가 제거됐는지 확인.
+        self.assertNotIn("function renderStaffReport", html,
+                         "channels[0] 가정 함수(renderStaffReport)가 잔존(C3 회귀)")
+
+    def test_workflow_handlers_present(self):
+        # C4: 처리 수단(승인/반려/코멘트/후속/완료/핀) + bogoFlow 영속 store 존재.
+        html = D.INDEX_HTML
+        for fn in ("function approveReport", "function rejectReport",
+                   "function completeReport", "function togglePin",
+                   "function addComment", "function followUp",
+                   "function flowOf", "function setFlow", "function loadReports"):
+            self.assertIn(fn, html, f"워크플로 핸들러 누락: {fn}")
+        self.assertIn("'bogoFlow:'", html,
+                      "워크플로 영속 store 키(bogoFlow:<login_id>) 누락")
+
+    def test_reports_view_hides_dock(self):
+        # M3: 보고 뷰에서 채팅 입력창(.dock)을 숨기는 로직이 setView 에 있어야 한다.
+        html = D.INDEX_HTML
+        self.assertIn("dock.style.display=(v==='chat')?'':'none'", html,
+                      "보고 뷰 .dock 숨김(M3) 로직 누락")
+
+    def test_read_is_report_id_scoped_not_channel(self):
+        # M1: 읽음 판정이 report.id 단위(markReportRead)여야 한다(채널 일괄 읽음 금지).
+        html = D.INDEX_HTML
+        self.assertIn("function markReportRead", html,
+                      "report.id 단위 읽음(markReportRead) 누락")
+        # 구 채널 단위 읽음(markChannelSeen)이 되살아나지 못하게.
+        self.assertNotIn("function markChannelSeen", html,
+                         "채널 단위 읽음(markChannelSeen) 회귀 — 패널 1개에 채널 일괄 읽음 위험")
 
 
 if __name__ == "__main__":
