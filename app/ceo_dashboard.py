@@ -1128,9 +1128,14 @@ _CSS = """
   .icn-18 { width:18px; height:18px; }
   /* ── 채팅 빈 상태: 입력창만(히어로·제안카드 전면 제거) ── */
   .chat-empty { height:100%; }
-  /* ── 채팅 2모드: 빈 상태 = 입력창이 메인 중앙(.dock은 DOM 유지·위치만 전환) ── */
-  .stage.is-empty .stage-scroll { display:flex; flex-direction:column; align-items:center; justify-content:center; }
-  /* 빈 상태/채팅 상태 모두 입력창은 화면 정중앙 유지(.dock base 규칙 그대로 사용) */
+  /* ── 채팅 2모드 ──
+     채팅 상태: .dock 은 normal flex flow 로 .stage-scroll 아래(화면 하단)에 고정.
+       → 메시지가 누적돼도 입력창이 대화 위에 떠서 가리지 않는다(absolute 센터링 회귀 제거).
+     빈 상태(is-empty): 메시지 0 → 입력창만 화면 정중앙.
+       빈 stage-scroll(콘텐츠 없음)을 flex:0 으로 접고, .dock 을 상하 auto margin 으로
+       세로 중앙에 띄운다(absolute/transform 없이 normal flow 안에서 센터링). */
+  .stage.is-empty .stage-scroll { flex:0 0 auto; }
+  .stage.is-empty .dock { margin-top:auto; margin-bottom:auto; }
   /* 첫 전송 FLIP 후 첫 버블 페이드인 */
   @keyframes bubbleIn { from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:none; } }
   .bubble-row.fresh { animation:bubbleIn 180ms cubic-bezier(.4,0,.2,1); }
@@ -1165,9 +1170,9 @@ _CSS = """
   .row-card .rc-chev { color:var(--ink-faint); font-size:15px; flex:0 0 auto; }
   .list-empty { color:var(--ink-muted); font-size:var(--fz-14); padding:var(--gap-6) 0; text-align:center; }
 
-  /* ── 통합 입력창: 화면 정중앙 배치(.stage 기준 absolute + transform 센터링) ── */
-  .dock { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-    width:100%; box-sizing:border-box; padding:0 var(--gap-6); background:transparent; z-index:5; }
+  /* ── 통합 입력창: normal flex flow 로 .stage 하단에 고정(채팅 누적 시에도 대화를 가리지 않음).
+     빈 상태에서만 .stage.is-empty .dock 규칙이 상하 auto margin 으로 세로 중앙 배치한다. ── */
+  .dock { flex:0 0 auto; padding:0 var(--gap-6) var(--gap-5); background:var(--canvas); }
   .dock-shell { max-width:var(--col-w); margin:0 auto; }
   .chat-box { display:flex; align-items:flex-end; gap:var(--gap-2); background:var(--canvas);
     border:1px solid var(--hairline-soft); border-radius:26px; padding:8px 8px 8px var(--gap-5);
