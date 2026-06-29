@@ -820,19 +820,6 @@ _CSS = """
     text-decoration:none; transition:transform .14s ease; }
   a.chip.nav-link:hover { text-decoration:none; }
   a.chip.nav-link:active { transform:scale(0.95); }
-  /* ── 지시 대상 팀 빠른 선택칩(.dock 입력창 위 1줄) ── */
-  .dock-chips { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 8px; }
-  .dock-chips:empty { display:none; }
-  .team-chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:500;
-    color:var(--ink-muted); background:transparent; border:1px solid var(--hairline);
-    border-radius:999px; padding:5px 12px; white-space:nowrap; cursor:pointer;
-    transition:background .14s ease, color .14s ease, border-color .14s ease; }
-  .team-chip:hover { background:rgba(0,0,0,.04); color:var(--ink); }
-  .team-chip.active { background:var(--accent-soft); color:var(--ink); border-color:var(--accent-line);
-    font-weight:600; }
-  .team-chip .tc-dot { width:6px; height:6px; border-radius:50%; background:var(--accent);
-    display:none; }
-  .team-chip.has-new .tc-dot { display:inline-block; }
   /* ── 보고 뷰: CEO브리핑 우선 고정 카드 ── */
   .row-card.pinned { border:1px solid var(--accent-line); background:var(--accent-soft); }
   .rc-badge { flex:0 0 auto; font-size:11px; font-weight:700; color:var(--on-dark);
@@ -1057,8 +1044,12 @@ _CSS = """
     display:flex; align-items:center; justify-content:center; background:transparent; border:none;
     border-radius:var(--r-sm); color:var(--ink-muted); cursor:pointer; transition:background var(--motion); }
   .nav-collapse:hover { background:rgba(0,0,0,.05); color:var(--ink-soft); }
-  /* 펴기 버튼(stage 좌상단, 접힘 시에만 노출) */
-  .nav-open { display:none; position:absolute; top:var(--gap-3); left:var(--gap-3); z-index:4; }
+  /* 펴기 버튼(stage 좌상단, 접힘 시에만 노출)
+     주의: .icon-btn{display:flex}가 소스 뒤에 정의돼 동일 특이도(0,1,0)에서
+     소스 순서로 .nav-open{display:none}을 이긴다(navOpen이 펼친 상태에도 노출되는 버그).
+     따라서 .stage 후손 셀렉터로 특이도를 (0,2,0)/(0,3,0)으로 올려 .icon-btn을 확실히 이기게 한다. */
+  .nav-open { position:absolute; top:var(--gap-3); left:var(--gap-3); z-index:4; }
+  .stage .nav-open { display:none; }
   .stage.nav-collapsed .nav-open { display:flex; }
   .nav-scroll { flex:1 1 auto; overflow-y:auto; padding:var(--gap-2) var(--gap-3) var(--gap-4); }
   .nav-foot { flex:0 0 auto; border-top:1px solid var(--hairline); padding:var(--gap-3) var(--gap-4); }
@@ -1140,8 +1131,6 @@ _CSS = """
   /* ── 채팅 2모드: 빈 상태 = 입력창이 메인 중앙(.dock은 DOM 유지·위치만 전환) ── */
   .stage.is-empty .stage-scroll { display:flex; flex-direction:column; align-items:center; justify-content:center; }
   /* 빈 상태/채팅 상태 모두 입력창은 화면 정중앙 유지(.dock base 규칙 그대로 사용) */
-  .chat-empty-greet { font-size:var(--fz-16); color:var(--ink-muted); text-align:center;
-    letter-spacing:-0.2px; margin-bottom:var(--gap-5); }
   /* 첫 전송 FLIP 후 첫 버블 페이드인 */
   @keyframes bubbleIn { from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:none; } }
   .bubble-row.fresh { animation:bubbleIn 180ms cubic-bezier(.4,0,.2,1); }
@@ -1385,7 +1374,6 @@ def build_index_html():
     <!-- 통합 입력창(채팅 뷰에서만 노출) -->
     <div class="dock" id="dock">
       <div class="dock-shell">
-        <div class="dock-chips" id="dockChips"></div>
         <div class="chat-box">
           <textarea id="msg" rows="1" placeholder="기억·지시·질문을 입력하세요."></textarea>
           <button class="send-btn" id="send" title="전송" aria-label="전송" disabled><svg class="icn icn-18" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg></button>
@@ -1432,19 +1420,6 @@ function fmtTime(ms){ if(!ms) return ""; const d=new Date(ms);
 function toast(t){ const el=document.getElementById('toast'); el.textContent=t;
   el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2600); }
 function kindLabel(k){ return k==='team'?'팀':k==='report'?'보고라인':'브리핑'; }
-// 칩 표시 라벨: kind 로 채널 역할을 구분한다(team_channel 과 report_channel 은
-// 같은 team_label 을 공유하므로 라벨만으로는 중복 표시됨 → kind 로 분기).
-// 같은 team_label 이 현재 목록에서 둘 이상이면 반드시 접미사로 구분하고,
-// 유일하면 접미사 없이 팀명만 보여 군더더기를 없앤다. briefing 은 항상 'CEO'.
-function chipLabel(c, list){
-  if(c.kind==='briefing') return c.team_label || 'CEO';
-  const base = c.team_label || c.name;
-  // 같은 team_label 을 쓰는 채널이 둘 이상인지(=team+report 동시 노출) 확인
-  const dupe = (list||[]).filter(x=>x.kind!=='briefing'
-    && (x.team_label||x.name)===base).length > 1;
-  if(!dupe) return base;
-  return c.kind==='report' ? base+' 보고' : base+' 팀';
-}
 
 async function api(path, opts){
   const r=await fetch(path,opts);
@@ -1551,7 +1526,6 @@ function setView(v){
   const emptyChat = (v==='chat') && !(activeSession&&activeSession.msgs&&activeSession.msgs.length);
   stage.classList.toggle('is-empty', emptyChat);
   document.getElementById('stageScroll').scrollTop=0;
-  renderDockChips();
   if(v==='chat') renderChat();
   else if(v==='history') renderHistoryView();
   else if(v==='reports') renderReportsView();
@@ -1571,9 +1545,9 @@ function renderChat(){
   const stage=document.querySelector('.stage');
   const msgs=(activeSession&&activeSession.msgs)||[];
   if(!msgs.length){
-    // 빈 상태 = 입력창이 메인 중앙. 입력창 위 한 줄 안내문만.
+    // 빈 상태 = 입력창이 메인 중앙. 안내문구·칩 없이 입력창만 노출.
     stage.classList.add('is-empty');
-    body.innerHTML='<div class="chat-empty-greet">오늘은 무엇을 처리할까요?</div>';
+    body.innerHTML='';
     return;
   }
   stage.classList.remove('is-empty');
@@ -1756,41 +1730,6 @@ function openSession(id){
   activeSession=s; setView('chat');
 }
 
-// ── 지시 대상 팀 빠른 선택칩(.dock textarea 위) ──────────────────────────────
-// 칩 = post 가능 채널(team_label 기준). 클릭 시 activeSession.channel 변경.
-// staff는 채널 1개이므로 칩 숨김(자동 선택만). 신규 보고가 있으면 칩에 점 표시.
-function renderDockChips(){
-  const box=document.getElementById('dockChips'); if(!box) return;
-  // staff: 칩 숨김(채널 1개·자동선택)
-  if(me&&me.role==='staff' || channels.length<=1){ box.innerHTML=''; return; }
-  if(!activeSession) newSession();
-  const cur=activeSession.channel||defaultPost;
-  const seen=loadLastSeen();
-  box.innerHTML=channels.map(c=>{
-    const active = c.name===cur ? ' active' : '';
-    const label = chipLabel(c, channels);
-    // title: 실제 채널명 + 역할(어느 채널로 전송되는지 모호함 제거)
-    const tip = c.name+' · '+kindLabel(c.kind);
-    return '<button type="button" class="team-chip'+active+'" data-ch="'+esc(c.name)
-      +'" data-new="'+esc(c.name)+'" title="'+esc(tip)+'">'
-      +'<span class="tc-dot"></span><span class="tc-label">'+esc(label)+'</span></button>';
-  }).join('');
-  box.querySelectorAll('.team-chip').forEach(el=>{
-    el.addEventListener('click',()=>{
-      if(!activeSession) newSession();
-      activeSession.channel=el.dataset.ch; saveSessions();
-      renderDockChips();
-    });
-  });
-  // 신규 보고 점 표시(비동기, 칩 렌더 후 채움)
-  channels.forEach(async c=>{
-    const ts=await latestTs(c.name);
-    if(ts>(seen[c.name]||0)){
-      const el=box.querySelector('.team-chip[data-new="'+CSS.escape(c.name)+'"]');
-      if(el) el.classList.add('has-new');
-    }
-  });
-}
 
 // ── 전송: 통합 입력창 → 기본 대상 채널로 /api/post ───────────────────────────
 async function doSend(){
@@ -1834,16 +1773,9 @@ function markFreshBubble(){
   const rows=document.querySelectorAll('#convCol .bubble-row');
   if(rows.length){ rows[rows.length-1].classList.add('fresh'); }
 }
-// 첫 전송 FLIP: dock을 빈상태→하단으로 부드럽게 이동, 안내문 페이드아웃, 첫 버블 페이드인
+// 첫 전송 FLIP: dock을 빈상태→하단으로 부드럽게 이동, 첫 버블 페이드인
 function flipFirstSend(first, dock, stage){
   const reduce = window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-  // 안내문 페이드아웃 후 제거
-  const greet=document.querySelector('.chat-empty-greet');
-  if(greet && !reduce){
-    greet.style.transition='opacity 140ms, transform 140ms';
-    greet.style.opacity='0'; greet.style.transform='translateY(-8px)';
-    setTimeout(()=>{ if(greet.parentNode) greet.remove(); },150);
-  }
   stage.classList.remove('is-empty');
   renderChat();           // 대화 레이아웃으로 전환(dock 하단 고정)
   markFreshBubble();      // 첫 버블 페이드인
@@ -1972,7 +1904,6 @@ const ROLE_KO={ceo:'CEO',staff:'직원',admin:'관리자'};
     const fp=firstPostChannel();
     if(fp){ defaultPost=fp; if(activeSession&&(!activeSession.channel||/브리핑/.test(activeSession.channel))) activeSession.channel=fp; }
   }
-  renderDockChips();
   refreshStats();
   refreshReportBadge();
   setInterval(refreshReportBadge, POLL_MS);
