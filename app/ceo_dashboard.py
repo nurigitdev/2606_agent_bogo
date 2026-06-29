@@ -787,13 +787,6 @@ _CSS = """
   }
   a { color:var(--blue); font-weight:400; text-decoration:none; }
   a:hover { text-decoration:underline; }
-  .promo-banner {
-    background:var(--nav-black); color:var(--on-dark);
-    height:44px; display:flex; align-items:center; justify-content:center;
-    font-size:12px; font-weight:400; letter-spacing:-0.12px;
-    padding:0 22px; text-align:center;
-  }
-  .promo-banner b { font-weight:600; }
   header {
     position:sticky; top:0; z-index:20;
     background:rgba(255,255,255,.82);
@@ -1277,7 +1270,6 @@ def build_login_html():
 <style>""" + _CSS + """</style>
 </head>
 <body>
-<div class="promo-banner">루프백 전용(127.0.0.1) · <b>외부에 노출되지 않습니다</b></div>
 <div class="login-wrap">
   <form class="login-card" id="loginForm" autocomplete="off">
     <img class="logo-mark" src="/static/logo.svg" alt="에이전트 BOGO" width="44" height="44">
@@ -1333,7 +1325,6 @@ def build_index_html():
 <style>""" + _CSS + """</style>
 </head>
 <body class="app-shell">
-<div class="promo-banner">루프백 전용(127.0.0.1) · <b>외부에 노출되지 않습니다</b></div>
 <div class="ws">
   <!-- 사이드바: 얇게, 그룹화, active 표시, 접힘 -->
   <nav class="nav" id="nav">
@@ -2052,7 +2043,6 @@ def build_vault_html():
 </style>
 </head>
 <body class="app-shell">
-<div class="promo-banner">루프백 전용(127.0.0.1) · <b>누적 기억(Vault/RAG)</b> · 외부에 노출되지 않습니다</div>
 <div class="ws">
   <!-- 사이드바: 대시보드와 동일한 구조, 기억 보관소 항목 active 표시 -->
   <nav class="nav" id="nav">
