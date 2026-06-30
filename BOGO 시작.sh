@@ -14,8 +14,32 @@ set -u
 
 # 자기 위치(심볼릭/공백/한글 경로 안전). BASH_SOURCE 기준 절대경로.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+SELF_PATH="$SELF_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
 REPO="$SELF_DIR/app"
 ONECLICK="$REPO/bogo_oneclick.sh"
+
+# ── 터미널 자동탐지 폴백 ────────────────────────────────────────────────
+# WHY  파일관리자 더블클릭은 TTY 없이 실행되는 경우가 많다(.desktop Terminal=true 가
+#   안 먹는 환경 포함). 그러면 로그가 안 보여 비개발자가 진행/실패를 판단 못 한다.
+#   stdout 이 터미널이 아니고(=GUI 더블클릭 추정) 재귀 가드가 없으면, 설치된 터미널
+#   에뮬레이터를 탐지해 그 안에서 자기 자신을 다시 띄운다(로그 가시성 확보).
+#   탐지 실패 시 로그파일로 폴백하고 위치를 안내한다. BOGO_IN_TERM 가드로 무한재귀 방지.
+if [ -z "${BOGO_IN_TERM:-}" ] && [ ! -t 1 ]; then
+  export BOGO_IN_TERM=1
+  for term in x-terminal-emulator gnome-terminal konsole xfce4-terminal mate-terminal tilix kitty alacritty xterm; do
+    if command -v "$term" >/dev/null 2>&1; then
+      case "$term" in
+        gnome-terminal|tilix) exec "$term" -- bash "$SELF_PATH" ;;
+        *)                    exec "$term" -e bash "$SELF_PATH" ;;
+      esac
+    fi
+  done
+  # 터미널 에뮬레이터를 못 찾음 → 로그파일로 폴백(거짓 무반응 방지).
+  LOGF="$SELF_DIR/BOGO_시작_log.txt"
+  printf '[BOGO] 터미널을 찾지 못해 로그를 파일로 남깁니다: %s\n' "$LOGF"
+  BOGO_IN_TERM=1 bash "$SELF_PATH" >"$LOGF" 2>&1
+  exit $?
+fi
 
 C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { printf "%s[BOGO]%s %s\n" "$C_INFO" "$C_RST" "$*"; }
@@ -38,7 +62,11 @@ if [ ! -f "$ONECLICK" ]; then
   fail "이 파일은 'app' 폴더가 있는 프로젝트 루트에 두어야 합니다."
   pause_exit 1
 fi
-chmod +x "$ONECLICK" 2>/dev/null || true
+# 실행권한 자기치유: git clone/폴더 복사 시 +x 비트가 사라져도 진입점·코어가 돌게.
+chmod +x "$ONECLICK" "$SELF_PATH" 2>/dev/null || true
+for s in "$REPO"/*.sh "$REPO"/service/*.sh; do
+  [ -f "$s" ] && chmod +x "$s" 2>/dev/null || true
+done
 
 bash "$ONECLICK" start
 rc=$?

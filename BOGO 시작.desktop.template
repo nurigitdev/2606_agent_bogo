@@ -1,13 +1,20 @@
 [Desktop Entry]
-# BOGO 시작 — Linux GUI 파일관리자/바탕화면용 런처(선택).
+# BOGO 시작 — Linux GUI 파일관리자/앱메뉴/바탕화면용 런처(권장 진입점).
 # .desktop 의 Exec 는 자기 위치를 자동 해석하지 못하므로, 절대경로를 한 번 넣어야 한다.
-# 자동 설치: 프로젝트 루트에서  ./app/install_desktop_launcher.sh  실행(아래 스크립트가
-# 이 템플릿의 __START_SH__ 를 실제 절대경로로 치환해 ~/.local/share/applications 에 설치).
-# 수동 설치: __START_SH__ 를 'BOGO 시작.sh' 의 절대경로로 바꾼 뒤 이 파일을 실행권한 부여.
+# 자동 설치(권장): 프로젝트 루트에서  ./app/install_desktop_launcher.sh  실행
+#   (아래 스크립트가 이 템플릿의 __START_SH__ 를 실제 절대경로로 치환해
+#    ~/.local/share/applications 에 설치 + 실행권한 + 신뢰 플래그까지 세팅한다).
+# 수동 설치: __START_SH__ 를 'BOGO 시작.sh' 의 절대경로로 바꾼 뒤 이 파일에 실행권한 부여.
+# 이 런처가 호출하는 'BOGO 시작.sh' 는 풀 코어(bogo_oneclick.sh start)로 수렴한다 —
+#   venv→reindex→infra→데이터 자동복원→봇/대시보드 상시가동 등록→대시보드 헬스체크.
 Type=Application
 Name=BOGO 시작
 Name[en]=BOGO Start
 Comment=BOGO 전 구성요소 기동 + 데이터 자동복원 (폴더 복사 후 1번 실행)
+Comment[en]=Start all BOGO components and auto-restore data (run once after copying the folder)
 Exec=bash "__START_SH__"
 Terminal=true
-Categories=Utility;
+Icon=utilities-terminal
+Categories=Utility;Network;
+Keywords=BOGO;Mattermost;봇;대시보드;
+StartupNotify=true
