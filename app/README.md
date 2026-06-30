@@ -179,20 +179,65 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 
 ## 다른 PC에서 시작 (mac / Windows / Linux 공통)
 
-어느 OS에서 `git clone` 하거나 폴더를 복사하든 **단일 부트스트랩 한 번 → 상시 가동**이 되도록 설계됐다.
-경로는 사용자명·설치 위치·한글 폴더명과 무관하게 동작한다(`/Users/<이름>` 같은 하드코딩 0건).
+어느 OS에서 `git clone` 하거나 폴더를 복사하든 **통신 백본(Mattermost) 기동 → 단일 부트스트랩 → 상시 가동**이
+되도록 설계됐다. 경로는 사용자명·설치 위치·한글 폴더명과 무관하게 동작한다(`/Users/<이름>` 같은 하드코딩 0건).
 
 ```bash
 git clone <repo-url>
 cd app
 ```
 
+### ⓪ 통신 백본(Mattermost + Postgres) 최초 기동 — 다른 PC에서 가장 먼저
+
+봇과 대시보드는 모두 `ws://127.0.0.1:8065` 의 **Mattermost** 에 붙는다. 따라서 봇을 띄우기 전에
+Mattermost·Postgres 컨테이너가 그 PC에 **존재**해야 한다. 저장소의 **`docker-compose.yml`** 이
+이 두 컨테이너(`bogo-pg`/`bogo-mm`)를 어느 PC에서든 동일한 이름·네트워크·포트로 생성한다.
+
+```bash
+# 전제: Docker 가 동작해야 한다.
+#   macOS  : Colima(권장)  brew install colima docker && colima start
+#            또는 Docker Desktop 실행
+#   Linux  : sudo apt install docker.io docker-compose-plugin && sudo systemctl enable --now docker
+#   Windows: Docker Desktop(WSL2 백엔드) 실행
+
+cd app
+docker compose up -d            # bogo-pg + bogo-mm 최초 생성·기동(멱등 — 이미 있으면 무변경)
+# MM 콜드 부팅은 수십 초 걸린다. 준비 확인:
+curl -fsS http://127.0.0.1:8065/api/v4/system/ping   # {"status":"OK"} 면 준비됨
+```
+
+> `infra_up.sh`(및 `bogo_ctl.sh restart`·`bogo_oneclick.sh`)는 컨테이너가 **없으면 이 compose 로 자동
+> 생성**하고, 이미 있으면 기동만 한다(데이터 보존). 즉 `./bogo_ctl.sh setup` 한 줄에도 통신 백본이 함께 선다.
+> 명시적으로 백본만 올리려면 위 `docker compose up -d` 를, 멱등 부트 체인(Colima→컨테이너→MM readiness)을
+> 한 번에 보장하려면 `./infra_up.sh` 를 쓴다.
+
+#### 최초 1회만 — Mattermost 관리자·봇·채널 셋업
+
+컨테이너는 빈 Mattermost 다. 봇이 동작하려면 **한 번** 관리자/봇/채널을 만들고 그 토큰·채널ID를 시크릿
+파일에 입력해야 한다(시크릿은 커밋되지 않으므로 PC마다 1회 필요).
+
+```text
+1) http://127.0.0.1:8065 접속 → 최초 System Admin 계정 생성 → 팀 1개 생성
+2) 봇 3개 생성(System Console → Integrations → Bot Accounts):
+   박민철·이다은·최지현 → 각 Access Token 발급
+   → nk_config.json / genz_config.json / gyaru_config.json 에 token·user id 입력
+3) 채널 생성(팀방·보고라인·CEO브리핑·정책기획실·학습방 등) → 각 채널 ID 를
+   channels.json 에 "이름":"ID" 로 입력(채널 ID 는 채널 메뉴 → "View Info" 또는 URL 에서 확인)
+4) 봇 3개를 위 채널들의 멤버로 가입
+5) OpenRouter 키를 .env(OPENROUTER_API_KEY) 또는 llm_config.json 에 입력
+```
+
+> 이미 운영 중이던 PC를 그대로 옮기는 경우엔 **named volume(`bogo-pg-data`/`bogo-mm-data`)** 에 계정·채널·
+> 메시지가 보존되므로 위 셋업을 반복할 필요가 없다. 볼륨까지 새로 시작하려면 `docker compose down -v`(데이터 전체 소거 — 주의).
+
 ### macOS / Linux
 
 ```bash
-./bogo_ctl.sh setup       # ① venv 휴대용 재생성 + 의존성 설치 + *.example→config 복사
-                            #   ② OS 감지해 상시 가동 등록 (mac=launchd / linux=systemd --user)
+./bogo_ctl.sh setup       # ① 통신 백본 보장(infra_up.sh — 컨테이너 없으면 compose 로 자동 생성)
+                            #   ② venv 휴대용 재생성 + 의존성 설치 + *.example→config 복사
+                            #   ③ OS 감지해 상시 가동 등록 (mac=launchd / linux=systemd --user)
 # setup 안내대로 .env·*_config.json·channels.json 에 실제 값 입력 → 재시작
+# (Mattermost 관리자·봇·채널 최초 셋업은 위 ⓪절 참고 — PC마다 1회)
 ./bogo_ctl.sh restart
 ```
 

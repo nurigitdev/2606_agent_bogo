@@ -25,9 +25,15 @@ ok()   { printf '\033[0;32m[infra:OK]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[infra:경고]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[0;31m[infra:오류]\033[0m %s\n' "$*" >&2; }
 
-# 컨테이너 이름(고정). compose 가 아니라 docker run 으로 만들어진 영속 컨테이너다.
+# 컨테이너 이름(고정). docker-compose.yml 이 이 이름으로 영속 컨테이너를 생성하며,
+# 이 스크립트는 같은 이름으로 inspect/start 한다(이름 = 두 파일 사이의 계약).
 PG_NAME="bogo-pg"
 MM_NAME="bogo-mm"
+
+# 최초 컨테이너 생성 정의(이식성). 다른 PC 처럼 컨테이너가 아예 없는 상태에서
+# 이 compose 로 bogo-pg/bogo-mm 를 한 번 만든다. 이 스크립트와 같은 디렉터리에 둔다.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="${BOGO_COMPOSE_FILE:-$HERE/docker-compose.yml}"
 
 # MM healthy 대기 한도(초). MM 콜드 부팅은 수십 초 걸릴 수 있다.
 MM_WAIT_TIMEOUT="${BOGO_MM_WAIT_TIMEOUT:-180}"
@@ -81,6 +87,41 @@ ensure_colima() {
 # ── 2. 컨테이너 보장 ──────────────────────────────────────────────────────
 container_state() { docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || echo "absent"; }
 
+# docker compose 호출자(신형 'docker compose' / 구형 'docker-compose' 자동 선택).
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose -f "$COMPOSE_FILE" "$@"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    docker-compose -f "$COMPOSE_FILE" "$@"
+  else
+    return 127
+  fi
+}
+
+# 컨테이너가 하나라도 없으면 compose 로 둘 다 최초 생성한다(멱등: 이미 있으면 무변경).
+# 다른 PC 이식성의 핵심 — 이 단계가 없으면 'absent' 에서 멈춰 MM 자체가 못 뜬다.
+COMPOSE_CREATED=0
+ensure_created_via_compose() {
+  [ "$COMPOSE_CREATED" = "1" ] && return 0   # 한 번만 시도
+  COMPOSE_CREATED=1
+  if [ ! -f "$COMPOSE_FILE" ]; then
+    err "컨테이너가 없고 compose 정의도 없습니다: $COMPOSE_FILE"
+    err "(docker-compose.yml 이 저장소에 포함돼야 다른 PC 에서 최초 생성이 가능합니다.)"
+    exit 1
+  fi
+  say "컨테이너 부재 감지 → docker-compose.yml 로 최초 생성/기동 (bogo-pg, bogo-mm)..."
+  if ! compose up -d; then
+    local rc=$?
+    if [ "$rc" = "127" ]; then
+      err "docker compose 를 찾지 못했습니다. Docker Desktop/Compose 플러그인 설치 필요."
+    else
+      err "compose up 실패(rc=$rc). 진단: docker compose -f \"$COMPOSE_FILE\" logs"
+    fi
+    exit 1
+  fi
+  ok "compose 로 컨테이너 생성/기동 완료."
+}
+
 ensure_container() {
   local name="$1"
   local st; st="$(container_state "$name")"
@@ -88,9 +129,18 @@ ensure_container() {
     running)
       ok "$name 이미 running — 건너뜀." ;;
     absent)
-      err "$name 컨테이너가 존재하지 않습니다. 최초 컨테이너 생성은 별도 절차 필요."
-      err "(이 스크립트는 기존 영속 컨테이너의 기동만 보장합니다.)"
-      exit 1 ;;
+      # 최초 생성 경로: compose 로 만든 뒤 상태를 재평가한다.
+      ensure_created_via_compose
+      st="$(container_state "$name")"
+      if [ "$st" = "absent" ]; then
+        err "$name 가 compose 생성 후에도 부재. 진단: docker compose -f \"$COMPOSE_FILE\" ps"
+        exit 1
+      fi
+      if [ "$st" != "running" ]; then
+        say "$name 상태=$st → docker start"
+        docker start "$name" >/dev/null
+      fi
+      ok "$name 준비(컨테이너 생성 경로)." ;;
     *)
       say "$name 상태=$st → docker start"
       docker start "$name" >/dev/null

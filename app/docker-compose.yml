@@ -1,0 +1,93 @@
+# BOGO 통신 백본 — Mattermost + Postgres 최초 컨테이너 생성 정의(이식성 핵심).
+#
+# WHY: infra_up.sh 는 기존 컨테이너의 "기동"만 보장한다. 다른 PC(=컨테이너가 아예
+#   없는 상태)에서는 만들 정의가 없으면 봇이 붙을 Mattermost 자체가 존재하지 않는다.
+#   이 compose 가 그 공백을 메운다 — git 추적되는 단일 소스로 어느 PC에서든 동일한
+#   bogo-pg / bogo-mm 컨테이너(이름·네트워크·포트·DataSource·재시작 정책)를 재현한다.
+#
+# 계약(infra_up.sh 와 1:1 일치, 깨지면 봇 연결 실패):
+#   - 컨테이너 이름 고정: bogo-pg / bogo-mm  (infra_up.sh 가 이 이름으로 inspect/start)
+#   - PG 네트워크 별칭 hermes-pg: MM 의 MM_SQLSETTINGS_DATASOURCE 가 hermes-pg 를 참조
+#     (레거시 리브랜딩 잔재). compose 가 처음부터 별칭을 부여하므로 infra_up.sh 의
+#     ensure_pg_legacy_alias 보정이 사실상 불필요해진다(보정은 안전망으로 유지).
+#   - MM 포트 8065 를 127.0.0.1 로만 바인딩(루프백 전용 — 봇은 ws://127.0.0.1:8065).
+#   - restart: unless-stopped — Colima/머신 재부팅 시 자동 부활(infra_up.sh 정책과 동일).
+#   - 데이터는 named volume 에 영속(컨테이너 재생성에도 채널·계정·메시지 보존).
+#
+# 사용:
+#   docker compose -f docker-compose.yml up -d        # 최초 생성 + 기동
+#   docker compose -f docker-compose.yml ps            # 상태
+#   docker compose -f docker-compose.yml down          # 중지·제거(볼륨은 보존)
+#   docker compose -f docker-compose.yml down -v       # 볼륨까지 삭제(데이터 전체 소거 — 주의)
+# infra_up.sh 가 컨테이너 부재를 감지하면 이 파일로 자동 생성한다(아래 ensure_container).
+#
+# Postgres 비밀번호는 로컬 루프백 전용 DB라 데모 기본값을 둔다. 외부에 노출하지 않는다.
+# 운영 강화가 필요하면 .env 의 BOGO_PG_PASSWORD 로 덮어쓴다(아래 ${...:-기본} 참조).
+
+services:
+  bogo-pg:
+    image: postgres:15-alpine
+    container_name: bogo-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${BOGO_PG_USER:-mmuser}
+      POSTGRES_PASSWORD: ${BOGO_PG_PASSWORD:-mmuser_password}
+      POSTGRES_DB: ${BOGO_PG_DB:-mattermost}
+    volumes:
+      - bogo-pg-data:/var/lib/postgresql/data
+    networks:
+      bogo-net:
+        # MM 의 DataSource 가 'hermes-pg' 호스트명을 참조하므로 별칭을 처음부터 부여.
+        # 컨테이너 이름 별칭(bogo-pg)은 docker 가 자동 유지한다.
+        aliases:
+          - hermes-pg
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BOGO_PG_USER:-mmuser} -d ${BOGO_PG_DB:-mattermost}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  bogo-mm:
+    image: mattermost/mattermost-team-edition:9.11
+    container_name: bogo-mm
+    restart: unless-stopped
+    depends_on:
+      bogo-pg:
+        condition: service_healthy
+    ports:
+      # 루프백 전용 — 외부(0.0.0.0) 노출 금지. 봇은 ws://127.0.0.1:8065 로 붙는다.
+      - "127.0.0.1:8065:8065"
+    environment:
+      # MM 의 DB 연결 — 호스트명 hermes-pg(=bogo-pg 별칭), 자격증명은 PG 와 일치.
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: "postgres://${BOGO_PG_USER:-mmuser}:${BOGO_PG_PASSWORD:-mmuser_password}@hermes-pg:5432/${BOGO_PG_DB:-mattermost}?sslmode=disable&connect_timeout=10"
+      MM_SERVICESETTINGS_SITEURL: "http://127.0.0.1:8065"
+      # 봇은 WebSocket/REST 로 붙는다 — 로컬 통신이라 보안설정은 기본값 유지.
+      MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
+    volumes:
+      - bogo-mm-config:/mattermost/config
+      - bogo-mm-data:/mattermost/data
+      - bogo-mm-logs:/mattermost/logs
+      - bogo-mm-plugins:/mattermost/plugins
+      - bogo-mm-client-plugins:/mattermost/client/plugins
+    networks:
+      - bogo-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8065/api/v4/system/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+networks:
+  bogo-net:
+    name: bogo-net
+    driver: bridge
+
+volumes:
+  bogo-pg-data:
+  bogo-mm-config:
+  bogo-mm-data:
+  bogo-mm-logs:
+  bogo-mm-plugins:
+  bogo-mm-client-plugins:
