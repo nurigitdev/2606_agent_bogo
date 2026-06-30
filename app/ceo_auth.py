@@ -146,7 +146,9 @@ class SessionStore:
         s = self._sessions.get(token)
         if not s:
             return None
-        if time.time() - s["created"] > self._ttl:
+        # >= 비교: ttl=0(즉시 만료) 의도가 같은 시각 틱에서도 항상 성립하도록 한다.
+        # (> 비교면 같은 부동소수 time() 값일 때 0.0 > 0 == False 로 만료가 새어 통과됨.)
+        if time.time() - s["created"] >= self._ttl:
             self._sessions.pop(token, None)
             return None
         return s["identity"]
