@@ -296,7 +296,20 @@ linux_install() {
   # 'dashboard' 인자를 받아 ceo_dashboard.py 를 exec 하며, BOGO_DASHBOARD_PORT 기본 8642.
   systemctl --user enable --now "bogo@dashboard.service"
   say "등록+기동: bogo@dashboard (127.0.0.1:$DASH_PORT)"
+  # 자동 데이터 백업 타이머 등록(봇 운영 중 폴더 안에 최신 백업 누적 → 무인 이전 완성).
+  linux_install_backup_timer
   say "Linux systemd 설치 완료. 로그:  journalctl --user -u bogo@orchestrator -f"
+}
+
+# systemd 사용자 타이머로 주기적 백업 등록(멱등). 서비스+타이머 유닛을 치환 생성 후 enable.
+linux_install_backup_timer() {
+  sed -e "s#__WORKDIR__#$REPO#g" -e "s#__RETAIN__#$BACKUP_RETAIN#g" \
+      "$TPL/bogo-backup.service.template" > "$sd_dir/bogo-backup.service"
+  sed -e "s#__INTERVAL_SEC__#$BACKUP_INTERVAL#g" \
+      "$TPL/bogo-backup.timer.template" > "$sd_dir/bogo-backup.timer"
+  systemctl --user daemon-reload
+  systemctl --user enable --now "bogo-backup.timer"
+  say "등록+기동: bogo-backup.timer (${BACKUP_INTERVAL}s 마다 자동 백업 → $REPO/migration)"
 }
 
 linux_uninstall() {
@@ -306,6 +319,10 @@ linux_uninstall() {
   done
   systemctl --user disable --now "bogo@dashboard.service" >/dev/null 2>&1 || true
   say "해제: bogo@dashboard"
+  # 자동 백업 타이머 해제(이미 떠낸 백업 산출물은 보존 — 데이터 이전용).
+  systemctl --user disable --now "bogo-backup.timer" >/dev/null 2>&1 || true
+  rm -f "$sd_dir/bogo-backup.timer" "$sd_dir/bogo-backup.service"
+  say "해제: bogo-backup.timer"
   rm -f "$sd_unit"
   systemctl --user daemon-reload || true
   say "systemd 등록 해제 완료."
@@ -319,6 +336,8 @@ linux_restart() {
   # 대시보드 인스턴스가 아직 enable 안 됐으면(구버전) 등록까지, 있으면 재시작.
   systemctl --user enable --now "bogo@dashboard.service" 2>/dev/null || true
   systemctl --user restart "bogo@dashboard.service" && say "재시작: bogo@dashboard"
+  # 자동 백업 타이머 (재)등록(멱등) — 구버전 환경에도 백업 타이머를 보장한다.
+  linux_install_backup_timer
 }
 
 linux_status() {
