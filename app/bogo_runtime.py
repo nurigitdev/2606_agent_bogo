@@ -415,7 +415,15 @@ def history(channel_id, n=12):
     return lines[-n:]
 
 
-def _validate(d):
+def _validate(d, sendable=None):
+    """행동 결정 dict 의 스키마·채널 정합 검증. 빈 문자열이면 통과, 아니면 위반 사유.
+
+    sendable: 주어지면(역할 송신 화이트리스트 set) target/ack 채널이 그 안에 드는지까지
+      검증한다(2차 방어선 — LLM 이 권한 밖 채널을 지정한 결정을 검증 단계에서 조기 거부).
+      None(기본·하위 호환)이면 전체 VALID_CHANNELS 존재만 본다. 진짜 격리 강제는 송신부
+      can_send 가 단일 게이트로 담당하며, 여기 sendable 검증은 그 위에 얹는 추가 방어다
+      (defense-in-depth — 한 겹이 빠져도 다른 겹이 막도록). 정상 라우팅(자기 SUBS 안의
+      채널)은 sendable 에 포함되므로 통과한다."""
     if not isinstance(d, dict):
         return "not-dict"
     if d.get("act") not in (True, False):
@@ -423,9 +431,13 @@ def _validate(d):
     tc = d.get("target_channel") or ""
     if tc and tc not in VALID_CHANNELS:
         return f"target:{tc}"
+    if tc and sendable is not None and tc not in sendable:
+        return f"target-forbidden:{tc}"
     ac = d.get("ack_channel") or ""
     if ac and ac not in VALID_CHANNELS:
         return f"ackch:{ac}"
+    if ac and sendable is not None and ac not in sendable:
+        return f"ackch-forbidden:{ac}"
     if (d.get("importance") or "") not in ("routine", "decision_needed", ""):
         return "importance"
     if (d.get("task_status") or "") not in ("open", "closed", ""):
