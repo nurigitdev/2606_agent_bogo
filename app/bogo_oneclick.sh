@@ -50,6 +50,12 @@ DASH_HEALTH_TIMEOUT="${BOGO_DASH_WAIT_TIMEOUT:-30}"
 MM_HOST="127.0.0.1"
 MM_PORT="8065"
 
+# 네트워크 자동 감지 결과(step_netdetect 가 채운다). 헬스체크가 멀티홈/단일망에서
+# 루프백이 아니라 실제 NIC IP 로 점검하도록, 감지된 대표 바인딩 호스트를 보관한다.
+# 기본은 루프백(감지 전·루프백 모드) — 기존 단일 PC 동작과 동일(회귀 0).
+DETECTED_MODE="loopback"
+DETECTED_HOST="127.0.0.1"
+
 C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_WARN=$'\033[0;33m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { printf '%s[oneclick]%s %s\n'    "$C_INFO" "$C_RST" "$*"; }
 ok()   { printf '%s[oneclick:OK]%s %s\n' "$C_OK"   "$C_RST" "$*"; }
@@ -130,6 +136,48 @@ step_reindex() {
 }
 
 # ════════════════════════════════════════════════════════════════════════
+# 2.5) 네트워크 자동 프로비저닝 (랜선만 꽂으면 NIC/사설 IP 자동 감지 → .env 주입)
+# ════════════════════════════════════════════════════════════════════════
+#  WHY  멀티홈 중앙 서버(NIC 3장으로 사내망 A/B/C 직결)를 쓰려면 운영자가 .env 에
+#    BOGO_MULTIHOME / MM_BIND_HOST / MM_SITE_URL / MM_ALLOW_CORS_FROM /
+#    BOGO_DASHBOARD_HOST 를 손으로 적어야 했다. 사람이 사설 IP 를 외워 적는 것은
+#    오타·누락의 상시 원천이다. 이 단계가 NIC 와 사설 IP 를 스스로 읽어 모드를
+#    판정하고 .env 의 '네트워크 키만' 멱등 주입한다(비밀·수동값은 비파괴).
+#  보안  공인(글로벌 라우팅) IP NIC 가 감지되면 멀티홈 0.0.0.0 자동활성을 중단하고
+#    경고만 낸다(net_autodetect 가 guard 모드로 판정 → 네트워크 키 무변경 = 루프백 유지).
+#    실패해도 봇 기동을 막지 않는다(기존 .env 값으로 계속 진행).
+step_netdetect() {
+  say "[2.5/5] 네트워크 자동 감지(NIC/사설 IP) → .env 자동 구성..."
+  if [ ! -f "$HERE/net_autodetect.py" ]; then
+    warn "net_autodetect.py 없음 → 네트워크 자동 구성 건너뜀(기존 .env 값 사용)."
+    return 0
+  fi
+  # .env 의 네트워크 키만 멱등 upsert. .env 없으면 .env.example 에서 시드 후 주입.
+  local summary rc
+  summary="$("$VENV_PY" "$HERE/net_autodetect.py" apply \
+    --env "$HERE/.env" --example "$HERE/.env.example" 2>>"$LOGS/netdetect.err.log")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "네트워크 자동 구성 실패(기존 .env 값으로 계속). 상세: logs/netdetect.err.log"
+    return 0
+  fi
+  # 사람이 읽는 1회 요약 출력(운영자가 어떤 망 구성으로 떴는지 한눈에).
+  printf '%s' "$summary" | while IFS= read -r line; do say "$line"; done
+
+  # 헬스체크가 멀티홈/단일망에서 루프백이 아니라 실제 NIC IP 로 점검하도록 모드·호스트 추출.
+  # (detect 를 한 번 더 호출 — apply 와 동일 함수라 결과 일치. JSON 에서 mode/대표 IP 파싱.)
+  local detect_json
+  detect_json="$("$VENV_PY" "$HERE/net_autodetect.py" detect 2>/dev/null)"
+  DETECTED_MODE="$(printf '%s' "$detect_json" | "$VENV_PY" -c \
+    'import sys,json; print(json.load(sys.stdin).get("mode","loopback"))' 2>/dev/null || echo loopback)"
+  # 헬스체크 대상 호스트: 멀티홈/단일망은 대표 NIC 사설 IP, 그 외는 루프백.
+  DETECTED_HOST="$(printf '%s' "$detect_json" | "$VENV_PY" -c \
+    'import sys,json; d=json.load(sys.stdin); rep=d.get("rep"); print(rep[1] if rep and d.get("mode") in ("multihome","lan") else "127.0.0.1")' \
+    2>/dev/null || echo 127.0.0.1)"
+  ok "네트워크 구성 완료(모드: $DETECTED_MODE, 헬스체크 호스트: $DETECTED_HOST)."
+}
+
+# ════════════════════════════════════════════════════════════════════════
 # 3) Mattermost 통신 백본
 # ════════════════════════════════════════════════════════════════════════
 step_infra() {
@@ -191,8 +239,20 @@ dashboard_running_pid() {
   return 1
 }
 
+# 헬스체크 대상 호스트 결정: 멀티홈/단일망에선 대시보드가 루프백이 아니라 감지된 NIC
+# IP(또는 0.0.0.0 바인딩의 대표 IP)에서 응답하므로, 127.0.0.1 만 보면 거짓 실패가 난다.
+# 0.0.0.0 바인딩은 루프백으로도 응답하지만, "직원이 실제 접속하는 NIC IP 가 살아있는가"를
+# 검증하려면 대표 NIC IP 로 점검하는 것이 정확하다. 직전 task 의 '127.0.0.1 만 보던 결함' 보정.
+dash_health_host() {
+  case "$DETECTED_MODE" in
+    multihome|lan) echo "$DETECTED_HOST" ;;
+    *) echo "$DASH_HOST" ;;   # loopback/guard = 루프백(기존 동작 유지, 회귀 0)
+  esac
+}
+
 step_dashboard() {
-  say "[5/5 후] CEO 대시보드 헬스체크 ($DASH_HOST:$DASH_PORT, 루프백 전용, launchd 소유)..."
+  local hhost; hhost="$(dash_health_host)"
+  say "[5/5 후] CEO 대시보드 헬스체크 ($hhost:$DASH_PORT, 모드:$DETECTED_MODE, launchd/systemd 소유)..."
 
   # 설계 변경(재발 방지): 대시보드는 더 이상 oneclick 의 nohup 단발 프로세스가 아니라
   # launchd(com.bogo.dashboard) / systemd(bogo@dashboard) 가 KeepAlive 로 상시 소유한다.
@@ -205,9 +265,9 @@ step_dashboard() {
 
   local waited=0
   while [ "$waited" -lt "$DASH_HEALTH_TIMEOUT" ]; do
-    if http_ok "http://$DASH_HOST:$DASH_PORT/login"; then
+    if http_ok "http://$hhost:$DASH_PORT/login"; then
       local pid; pid="$(pids_on_port "$DASH_PORT" | head -1)"
-      ok "대시보드 정상 (launchd 소유, PID ${pid:-?}) — http://$DASH_HOST:$DASH_PORT"
+      ok "대시보드 정상 (launchd/systemd 소유, PID ${pid:-?}) — http://$hhost:$DASH_PORT"
       return 0
     fi
     sleep 1; waited=$((waited + 1))
@@ -330,6 +390,9 @@ do_start() {
 
   step_venv     || { err "1단계(venv) 실패 — 중단."; return 1; }
   step_reindex                                   # 실패해도 진행(경고만)
+  # 네트워크 자동 감지 → .env 주입. 인프라(docker compose)·대시보드가 .env 를 읽기
+  # '전에' 실행해야 새 바인딩이 반영된다. 실패해도 기존 .env 로 계속(경고만).
+  step_netdetect                                 # 실패해도 진행(경고만)
   local infra_rc
   step_infra; infra_rc=$?
   if [ "$infra_rc" -eq 2 ]; then
@@ -349,10 +412,15 @@ do_start() {
   # launchd 가 올린 대시보드가 응답할 때까지 헬스체크(직접 기동 아님, 자동 부활 소유는 launchd).
   step_dashboard || { err "5단계(대시보드 헬스체크) 실패 — launchd 상태 확인 필요."; return 1; }
 
-  printf '\n%s════ 전 구성요소 활성화 완료 ════%s\n' "$C_OK" "$C_RST"
-  printf '  • CEO 대시보드 :  %shttp://%s:%s%s\n' "$C_OK" "$DASH_HOST" "$DASH_PORT" "$C_RST"
-  printf '  • Mattermost   :  %shttp://%s:%s%s\n' "$C_OK" "$MM_HOST" "$MM_PORT" "$C_RST"
-  printf '  • 에이전트 봇  :  %s개 상시가동(launchd/systemd)\n' "$(bots_loaded_count)"
+  local hhost; hhost="$(dash_health_host)"
+  printf '\n%s════ 전 구성요소 활성화 완료 (네트워크 모드: %s) ════%s\n' "$C_OK" "$DETECTED_MODE" "$C_RST"
+  printf '  • CEO 대시보드 :  %shttp://%s:%s%s\n' "$C_OK" "$hhost" "$DASH_PORT" "$C_RST"
+  printf '  • Mattermost   :  %shttp://%s:%s%s\n' "$C_OK" "$hhost" "$MM_PORT" "$C_RST"
+  if [ "$DETECTED_MODE" = "multihome" ]; then
+    printf '  • 멀티홈       :  각 망 직원은 자기 망 NIC IP:%s 로 브라우저 접속(클라이언트 0)\n' "$MM_PORT"
+    printf '                   접속 가능 주소는 위 [2.5/5] 요약의 각 NIC IP 참고\n'
+  fi
+  printf '  • 에이전트 봇  :  %s개 상시가동(launchd/systemd), 서버 로컬 127.0.0.1 로 MM 접속\n' "$(bots_loaded_count)"
   printf '  • 정지        :  ./bogo_oneclick.sh stop   (봇까지: stop --all)\n'
   printf '  • 상태        :  ./bogo_oneclick.sh status\n\n'
 }
