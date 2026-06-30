@@ -2,7 +2,7 @@
 # BOGO cross-platform bootstrap (macOS / Linux).
 #
 # WHAT: From a fresh git clone or copy on ANY machine, this single command
-#   (1) locates ANY available Python 3 interpreter (newest preferred; no hard version gate),
+#   (1) locates a Python interpreter (python3, falling back to python),
 #   (2) (re)creates a PORTABLE .venv (no absolute-path pin survives a move),
 #   (3) installs requirements.txt,
 #   (4) copies *.example -> real config files only when they are missing
@@ -22,47 +22,20 @@ cd "$HERE"
 say() { printf '\033[0;36m[bootstrap]\033[0m %s\n' "$*"; }
 err() { printf '\033[0;31m[bootstrap:오류]\033[0m %s\n' "$*" >&2; }
 
-# ── 1. Python 3 탐지 (버전 강제 없음) ──────────────────────────────────
-# 특정 버전을 강제하지 않는다. 시스템에서 발견되는 python3/python 중 가장 최신을 채택한다.
-# 권장 버전(3.12+)은 일부 의존성 wheel 가용성 때문이며, 미만이어도 거부하지 않고 경고만 출력한다.
-# 실패는 "Python 인터프리터를 전혀 못 찾았을 때"뿐이다.
-RECOMMENDED_MINOR=12   # recommended minimum minor for the 3.x line (advisory only)
-find_py() {
-  # newest-first candidate list; explicit-version names take precedence over generic.
-  local cands="python3.14 python3.13 python3.12 python3 python"
-  local best="" best_ver=""
-  for cand in $cands; do
-    if command -v "$cand" >/dev/null 2>&1; then
-      ver="$("$cand" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo "")"
-      [ -z "$ver" ] && continue
-      # accept ANY working Python interpreter; keep the highest version seen.
-      if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$best_ver" "$ver" | sort -V | tail -1)" = "$ver" ]; then
-        best="$cand"; best_ver="$ver"
-      fi
-    fi
-  done
-  [ -n "$best" ] && { echo "$best"; return 0; }
-  return 1
-}
-
-PY="$(find_py || true)"
+# ── 1. Python 인터프리터 탐지 ──────────────────────────────────────────
+# 버전을 파싱·비교·강제하지 않는다. python3 가 있으면 그걸, 없으면 python 을 쓴다.
+# 둘 다 없을 때만 설치 안내 후 종료한다.
+PY="$(command -v python3 || command -v python || true)"
 if [ -z "${PY:-}" ]; then
   err "Python 인터프리터를 찾지 못했습니다(python3/python 모두 없음)."
   case "$(uname -s)" in
-    Darwin) err "설치:  brew install python  (가능하면 3.12 이상 권장)" ;;
-    Linux)  err "설치(Debian/Ubuntu):  sudo apt install python3 python3-venv  (가능하면 3.12 이상 권장)" ;;
+    Darwin) err "설치:  brew install python" ;;
+    Linux)  err "설치(Debian/Ubuntu):  sudo apt install python3 python3-venv" ;;
   esac
   err "설치 후 이 스크립트를 다시 실행하세요."
   exit 1
 fi
-PY_VER="$("$PY" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo "?.?")"
-say "Python $PY_VER 사용: $("$PY" -c 'import sys;print(sys.executable)')"
-# advisory-only: warn (do NOT abort) when below the recommended 3.12 line.
-if "$PY" -c "import sys;sys.exit(0 if sys.version_info[:2] >= (3,$RECOMMENDED_MINOR) else 1)" 2>/dev/null; then
-  :
-else
-  err "경고: 권장 Python 3.$RECOMMENDED_MINOR+ 미만(현재 $PY_VER) — 일부 의존성 wheel 이 없을 수 있습니다. 계속 진행합니다."
-fi
+say "Python 사용: $PY"
 
 # ── 2. 휴대용 venv (재)생성 ────────────────────────────────────────────
 # 기존 .venv 가 다른 PC에서 복사돼 왔거나 절대경로가 핀되어 있으면 신뢰 불가 →

@@ -215,7 +215,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 
 - 가동 상태는 `Get-ScheduledTask -TaskName "BOGO_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.bogo` 등가).
 - PowerShell 7(`pwsh`)이 있으면 그것을, 없으면 Windows 기본 `powershell` 5.1 을 자동으로 사용한다.
-- 처음이라면 `python.org`에서 Python 3(권장 3.12+, 강제 아님 / 설치 시 "Add to PATH" 체크)을 설치한 뒤 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
+- 처음이라면 `python.org`에서 Python 3(설치 시 "Add to PATH" 체크)을 설치한 뒤 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
 
 ## 가장 쉬운 시작 — 더블클릭/아이콘 (Linux)
 
@@ -354,8 +354,8 @@ pwsh ./bogo_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Schedul
 pwsh ./bogo_ctl.ps1 restart
 ```
 
-> **Python 3 필요**(권장 3.12+, 강제하지 않음 — 발견되는 최신 인터프리터 자동 채택, 권장 미만이면 경고만 출력하고 진행). 인터프리터가 **전혀 없을 때만** 부트스트랩이 설치 안내 후 멈춘다.
-> mac: `brew install python`(권장 3.12+) · Ubuntu: `sudo apt install python3 python3-venv`(권장 3.12+)
+> **Python 3 필요**(버전 강제·체크 없음 — `python3`(없으면 `python`)을 찾아 그대로 venv 구성). 인터프리터가 **전혀 없을 때만** 부트스트랩이 설치 안내 후 멈춘다.
+> mac: `brew install python` · Ubuntu: `sudo apt install python3 python3-venv`
 > Windows: [python.org](https://www.python.org/downloads/) 최신 버전 (설치 시 "Add to PATH" 체크)
 
 ### 시크릿은 커밋되지 않는다 (부트스트랩이 복사)
@@ -411,7 +411,7 @@ Linux 로그: `journalctl --user -u bogo@orchestrator -f`. Windows: 작업 스�
 최종 운영 환경은 **NVIDIA DGX Spark**(DGX OS = Ubuntu 24.04, **ARM64/aarch64**, Python 3.12 이상)다.
 이 저장소는 ARM64에서 **추가 빌드 도구 없이 `pip install` 만으로** 동작한다 — 근거:
 
-- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처·파이썬 버전과 무관하게 설치된다(요구: Python ≥3.12, requirements.txt 참조).
+- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처·파이썬 버전과 무관하게 설치된다(requirements.txt 참조).
 - `websockets` 는 `manylinux_2_17_aarch64` + `cp312` 이상 휠을 제공해 ARM64 Python 3.12 이상에서 바로 설치된다.
 - 따라서 DGX Spark 에서도 컴파일러·헤더 없이 `bootstrap.sh` 가 venv 를 만들고 의존성을 그대로 받는다.
 

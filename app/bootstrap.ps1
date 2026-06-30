@@ -1,6 +1,6 @@
 # BOGO cross-platform bootstrap (Windows / PowerShell).
 #
-# From a fresh git clone or copy: locates ANY Python 3 (newest preferred; no hard version gate), (re)creates a PORTABLE .venv,
+# From a fresh git clone or copy: locates a Python interpreter (py / python / python3), (re)creates a PORTABLE .venv,
 # installs requirements.txt, copies *.example -> real config only when missing.
 # Idempotent + Hangul-path safe (paths resolved from script location, UTF-8).
 #
@@ -14,59 +14,28 @@ Set-Location $Here
 function Say($m) { Write-Host "[bootstrap] $m" -ForegroundColor Cyan }
 function Die($m) { Write-Host "[bootstrap:오류] $m" -ForegroundColor Red; exit 1 }
 
-# ── 1. Python 3 탐지 (버전 강제 없음) ────────────────────────────────
-# 특정 버전을 강제하지 않는다. 발견되는 python 중 가장 최신을 채택한다.
-# 권장 버전(3.12+)은 의존성 wheel 가용성 때문이며, 미만이어도 거부하지 않고 경고만 출력한다.
-$RecommendedMinor = 12   # recommended minimum minor for the 3.x line (advisory only)
-function Get-PyVer($exe, $verArgs) {
-  # returns "<major>.<minor>" for ANY working interpreter, else $null (no version gate)
-  $v = (& $exe @verArgs -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
-  if (-not $v) { return $null }
-  return $v
-}
-
+# ── 1. Python 인터프리터 탐지 ────────────────────────────────────────
+# 버전을 파싱·비교·강제하지 않는다. py / python / python3 중 먼저 발견되는 것을 채택한다.
+# 모두 없을 때만 설치 안내 후 종료한다.
 function Find-Py {
-  $best = $null      # array form of the chosen invocation (e.g. @("py","-3.13"))
-  $bestVer = $null   # "<major>.<minor>" string of the chosen interpreter
-
-  # 1) py launcher: newest-first explicit versions
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    foreach ($pv in @("-3.14", "-3.13", "-3.12")) {
-      $ver = Get-PyVer "py" @($pv)
-      if ($ver -and (-not $bestVer -or ([version]$ver -gt [version]$bestVer))) {
-        $best = @("py", $pv); $bestVer = $ver
-      }
-    }
-  }
-  # 2) python on PATH: newest-first explicit names then generic
-  foreach ($c in @("python3.14", "python3.13", "python3.12", "python3", "python")) {
-    if (Get-Command $c -ErrorAction SilentlyContinue) {
-      $ver = Get-PyVer $c @()
-      if ($ver -and (-not $bestVer -or ([version]$ver -gt [version]$bestVer))) {
-        $best = @($c); $bestVer = $ver
-      }
-    }
-  }
-  return $best
+  # py launcher first (Windows standard), then python / python3 on PATH.
+  if (Get-Command py -ErrorAction SilentlyContinue)      { return @("py") }
+  if (Get-Command python -ErrorAction SilentlyContinue)  { return @("python") }
+  if (Get-Command python3 -ErrorAction SilentlyContinue) { return @("python3") }
+  return $null
 }
 
 $Py = Find-Py
 if (-not $Py) {
-  Die "Python 인터프리터를 찾지 못했습니다(python/py 모두 없음). https://www.python.org/downloads/ 에서 설치(설치 시 'Add to PATH' 체크, 가능하면 3.12 이상 권장) 후 다시 실행하세요."
+  Die "Python 인터프리터를 찾지 못했습니다(python/py 모두 없음). https://www.python.org/downloads/ 에서 설치(설치 시 'Add to PATH' 체크) 후 다시 실행하세요."
 }
-$PyVerShown = (& $Py[0] @($Py[1..($Py.Length-1)]) -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
-Say "Python $PyVerShown 사용: $($Py -join ' ')"
-# advisory-only: warn (do NOT abort) when below the recommended 3.12 line.
-$verParts = $PyVerShown.Split('.')
-if ($verParts.Length -ge 2 -and -not ([int]$verParts[0] -gt 3 -or ([int]$verParts[0] -eq 3 -and [int]$verParts[1] -ge $RecommendedMinor))) {
-  Write-Host "[bootstrap:오류] 경고: 권장 Python 3.$RecommendedMinor+ 미만(현재 $PyVerShown) — 일부 의존성 wheel 이 없을 수 있습니다. 계속 진행합니다." -ForegroundColor Yellow
-}
+Say "Python 사용: $($Py -join ' ')"
 
 # ── 2. 휴대용 venv (재)생성 ──────────────────────────────────────────
 $Venv = Join-Path $Here ".venv"
 if (Test-Path $Venv) { Say "기존 .venv 제거 후 재생성"; Remove-Item -Recurse -Force $Venv }
 Say ".venv 생성 중..."
-& $Py[0] @($Py[1..($Py.Length-1)]) -m venv --copies $Venv
+& $Py[0] -m venv --copies $Venv
 
 $VenvPy = Join-Path $Venv "Scripts\python.exe"
 
