@@ -1,1 +1,1 @@
-{"api_key": "sk-or-v1-OPENROUTER_KEY_HERE", "model": "deepseek/deepseek-v4-flash", "fallback": "deepseek/deepseek-v4-flash:free", "base_url": "https://openrouter.ai/api/v1"}
+{"_comment": "LLM 호출 설정 기본값. .env 의 LLM_BACKEND/LLM_* 환경변수가 이 값을 덮어쓴다. openrouter 키는 .env(OPENROUTER_API_KEY)로 넣고 여기엔 두지 않는 것을 권장.", "api_key": "", "model": "deepseek/deepseek-v4-flash", "fallback": "deepseek/deepseek-v4-flash:free", "base_url": "https://openrouter.ai/api/v1", "local_base_url": "http://127.0.0.1:11434/v1", "local_model": "qwen2.5:7b-instruct", "local_fallback": "llama3.1:8b"}

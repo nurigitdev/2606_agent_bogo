@@ -23,6 +23,7 @@ import websockets
 
 import agent_schema as A
 import bogo_brain as B
+import mm_client as C          # LLM 백엔드(local/openrouter) 해석 단일 소스
 import vault_integration as V  # Vault RAG·영속 어댑터(graceful — 실패해도 기존 동작 보존)
 import vault_schema as VS      # 노트 태그 슬러그 등 스키마 유틸(채널명 안전화)
 
@@ -62,13 +63,15 @@ if _errs:
     raise SystemExit(3)
 
 CFG = json.load(open(os.path.join(HERE, f"{SPEC['config']}_config.json"), encoding="utf-8"))
-LLM = json.load(open(os.path.join(HERE, "llm_config.json"), encoding="utf-8"))
+# LLM 백엔드(local/openrouter) 해석은 mm_client 단일 소스에 위임 — .env LLM_BACKEND 스위치로
+# 로컬(Ollama 등 OpenAI 호환)·OpenRouter 를 고른다. local 이면 OpenRouter 키 없이 완전 동작.
+LLM = C.load_llm_config()
 TOKEN = CFG["bot_token"]
 BOT_ID = CFG["bot_id"]
-KEY = os.environ.get("OPENROUTER_API_KEY") or LLM.get("api_key", "")
+KEY = LLM["key"]
 MODEL = LLM["model"]
-FALLBACK = LLM.get("fallback", "openai/gpt-4o-mini")
-BASE_URL = LLM.get("base_url", "https://openrouter.ai/api/v1")
+FALLBACK = LLM["fallback"]
+BASE_URL = LLM["base_url"]
 # NOTE: localhost(=::1 우선 해석) 대신 127.0.0.1 강제.
 # colima ssh 포트포워드가 IPv4(*:8065)만 바인딩해 ::1 로는 Errno 61 refused 가 난다.
 MM = "http://127.0.0.1:8065/api/v4"
@@ -91,8 +94,16 @@ MEM_PATH = os.path.join(HERE, f"memory_{ROLE}.json")
 # 학습방인지 판별하는 데 쓴다.
 LEARN_CHANNEL = (LEARN_ROOM or {}).get("channel", "")
 
-if KEY:
+if KEY and LLM.get("backend") != "local":
     os.environ.setdefault("OPENROUTER_API_KEY", KEY)
+
+
+def _llm_headers():
+    """LLM 호출 헤더. 키가 있을 때만 Authorization 을 붙인다(로컬=키 없음에서 401 회피)."""
+    h = {"Content-Type": "application/json"}
+    if KEY:
+        h["Authorization"] = f"Bearer {KEY}"
+    return h
 
 BOT_ID_NAMES = {}
 for _r in ROLES.values():
@@ -148,7 +159,7 @@ def call_llm(messages, model, max_tokens=1500):
                "temperature": 0.4, "response_format": {"type": "json_object"}}
     req = urllib.request.Request(
         BASE_URL + "/chat/completions", data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+        headers=_llm_headers(),
         method="POST")
     r = json.loads(urllib.request.urlopen(req, timeout=60).read())
     return r["choices"][0]["message"]["content"]
@@ -167,7 +178,7 @@ def call_llm_msg(messages, model, tools=None, tool_choice=None, max_tokens=1500)
             payload["tool_choice"] = tool_choice
     req = urllib.request.Request(
         BASE_URL + "/chat/completions", data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+        headers=_llm_headers(),
         method="POST")
     r = json.loads(urllib.request.urlopen(req, timeout=60).read())
     return r["choices"][0]["message"]

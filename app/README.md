@@ -211,24 +211,49 @@ curl -fsS http://127.0.0.1:8065/api/v4/system/ping   # {"status":"OK"} 면 준�
 > 명시적으로 백본만 올리려면 위 `docker compose up -d` 를, 멱등 부트 체인(Colima→컨테이너→MM readiness)을
 > 한 번에 보장하려면 `./infra_up.sh` 를 쓴다.
 
-#### 최초 1회만 — Mattermost 관리자·봇·채널 셋업
+#### 관리자·봇·채널 셋업 — 이제 자동 (무인 프로비저닝)
 
-컨테이너는 빈 Mattermost 다. 봇이 동작하려면 **한 번** 관리자/봇/채널을 만들고 그 토큰·채널ID를 시크릿
-파일에 입력해야 한다(시크릿은 커밋되지 않으므로 PC마다 1회 필요).
+> **더 이상 손으로 만들 필요가 없다.** 통신 백본이 뜬 직후 `infra_up.sh` 가 `provision_mm.py` 를
+> 호출해, 컨테이너 안의 `mmctl` 로 아래를 **전부 멱등 생성·발급**한다. 관리자·팀·채널은
+> `mmctl --local`(로컬 소켓, 인증 불필요 — `docker-compose.yml` 의 `MM_SERVICESETTINGS_ENABLELOCALMODE=true`
+> 로 활성)로, 봇 계정·토큰은 `--local` 에서 막혀 있어(mattermost#36353) 그 관리자 자격으로 만든
+> 컨테이너 내부 인증 세션으로 발급한다(둘 다 127.0.0.1:8065 — 외부 노출 없음).
 
 ```text
-1) http://127.0.0.1:8065 접속 → 최초 System Admin 계정 생성 → 팀 1개 생성
-2) 봇 3개 생성(System Console → Integrations → Bot Accounts):
-   박민철·이다은·최지현 → 각 Access Token 발급
-   → nk_config.json / genz_config.json / gyaru_config.json 에 token·user id 입력
-3) 채널 생성(팀방·보고라인·CEO브리핑·정책기획실·학습방 등) → 각 채널 ID 를
-   channels.json 에 "이름":"ID" 로 입력(채널 ID 는 채널 메뉴 → "View Info" 또는 URL 에서 확인)
-4) 봇 3개를 위 채널들의 멤버로 가입
-5) OpenRouter 키를 .env(OPENROUTER_API_KEY) 또는 llm_config.json 에 입력
+provision_mm.py 가 자동으로 하는 일 (이미 있으면 skip, 재실행 안전):
+  1) 시스템 관리자 계정 생성        — 기본 admin / .env BOGO_ADMIN_* 로 덮어쓰기 가능
+  2) 팀 생성                          — 기본 슬러그 bogo / .env BOGO_TEAM_*
+  3) 봇 3개 생성(박민철·이다은·최지현) + 각 Access Token 발급
+     → nk_config.json / gyaru_config.json / genz_config.json 에 token·bot_id 자동 기록
+  4) 운영봇(박민철) system-admin 부여, 봇 3개를 팀에 가입
+  5) 채널 9종 생성(팀방·보고라인·CEO브리핑·정책기획실·학습방 3개)
+     → channels.json 에 "이름":"ID" 자동 기록 + 봇을 각 채널 멤버로 추가
 ```
 
+즉 **새 PC: `git pull` → 더블클릭 한 번** 이면 토큰·채널이 전부 자동 발급·기록되고 봇·대시보드가 뜬다.
+이미 토큰이 채워져 동작 중인 PC에서 다시 실행해도 실재 계정/채널을 재사용하고 유효 토큰은 보존한다(불필요 재발급·회귀 없음).
+수동 관리 환경에서 끄려면 `.env` 에 `BOGO_SKIP_PROVISION=1`.
+
 > 이미 운영 중이던 PC를 그대로 옮기는 경우엔 **named volume(`bogo-pg-data`/`bogo-mm-data`)** 에 계정·채널·
-> 메시지가 보존되므로 위 셋업을 반복할 필요가 없다. 볼륨까지 새로 시작하려면 `docker compose down -v`(데이터 전체 소거 — 주의).
+> 메시지가 보존되므로 프로비저닝이 기존 상태를 그대로 재사용한다. 볼륨까지 새로 시작하려면 `docker compose down -v`(데이터 전체 소거 — 주의).
+
+#### LLM 백엔드 — 클라우드(OpenRouter) 또는 로컬(키 불필요)
+
+`.env` 의 `LLM_BACKEND` 한 줄로 고른다. 호출 코드는 OpenAI 호환 `/chat/completions` 단일 경로라 두 백엔드가 동일하게 동작한다.
+
+| 모드 | `.env` | 필요한 것 |
+|------|--------|-----------|
+| 클라우드(기본) | `LLM_BACKEND=openrouter` | `OPENROUTER_API_KEY` 입력 |
+| 로컬 | `LLM_BACKEND=local` | **API 키 불필요.** Ollama 등 OpenAI 호환 서버만 실행 |
+
+로컬 모드 준비(예: Ollama):
+```bash
+# https://ollama.com 설치 후
+ollama pull qwen2.5:7b-instruct      # 기본 모델(.env OLLAMA_MODEL 로 변경 가능)
+ollama serve                          # 127.0.0.1:11434 (기본 base_url, OpenAI 호환 /v1)
+# .env 에 LLM_BACKEND=local 만 두면 끝 — OpenRouter 키 없이 완전 동작
+```
+다른 OpenAI 호환 로컬 서버(vLLM·LM Studio 등)는 `.env` 의 `LLM_BASE_URL`/`LLM_MODEL` 로 강제 지정한다.
 
 ### macOS / Linux
 
@@ -266,15 +291,17 @@ pwsh ./bogo_ctl.ps1 restart
 
 | 파일 | 내용 |
 |------|------|
-| `llm_config.json` | OpenRouter `api_key`, `model`(deepseek/deepseek-v4-flash), `base_url` |
-| `nk_config.json` | 박민철 봇 Mattermost 토큰·사용자 ID |
-| `genz_config.json` | 이다은 봇 Mattermost 토큰·사용자 ID |
-| `gyaru_config.json` | 최지현 봇 Mattermost 토큰·사용자 ID |
-| `channels.json` | 채널명 → 채널 ID 매핑 (Mattermost 관리자 패널에서 확인) |
+| `.env` | `LLM_BACKEND`(local/openrouter) 스위치, `OPENROUTER_API_KEY`(클라우드 시), `OLLAMA_*`(로컬 시), `BOGO_ADMIN_*`/`BOGO_TEAM_*`(프로비저닝, 전부 기본값) |
+| `llm_config.json` | LLM 기본값. openrouter(`model`/`base_url`)와 local(`local_model`/`local_base_url`) 모두. `.env` 가 우선 |
+| `nk_config.json` | 박민철 봇 Mattermost 토큰·ID — **프로비저닝이 자동 기록** |
+| `gyaru_config.json` | 이다은 봇 Mattermost 토큰·ID — **자동 기록** |
+| `genz_config.json` | 최지현 봇 Mattermost 토큰·ID — **자동 기록** |
+| `channels.json` | 채널명 → 채널 ID 매핑 — **프로비저닝이 자동 기록** |
 | `teams.json` | 선언적 팀·라우팅 데이터(팀방·보고라인·팀에이전트·상향대상) + `collab_rooms`(여러 에이전트 공동 작업방). 새 팀/협업방 추가는 여기 블록 1개로 |
+| `provision_mm.py` | 무인 프로비저닝(mmctl --local). 시크릿 아님, git 추적 |
 | `agents/_shared/common_rules.md` | 전 에이전트 공통 규칙(런타임이 상속 주입). 시크릿 아님, git 추적 |
 
-인증: OpenRouter 키(기존) 재사용. 신규 API 키 요구 없음.
+인증: **로컬 모드면 어떤 API 키도 불필요**(OAuth/로컬 기본). 클라우드 모드일 때만 OpenRouter 키를 `.env` 에 둔다. 봇 토큰은 프로비저닝이 자동 발급하므로 손입력 불필요.
 
 ---
 

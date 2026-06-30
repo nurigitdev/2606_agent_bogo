@@ -249,11 +249,46 @@ wait_mm_ready() {
   done
 }
 
+# ── 4. 무인 프로비저닝 (새 PC: 토큰·팀·채널 자동 발급) ───────────────────
+# WHY: 통신 백본(MM)만 떠 있고 (a)관리자/팀/봇 계정 (b)봇 Access Token
+#   (c)채널 ID 가 없으면 봇이 못 붙는다. 그 시크릿들은 git 제외라 폴더만 옮긴
+#   새 PC 에선 비어 있다. mmctl --local(컨테이너 로컬 소켓, 인증 불필요)로 전부
+#   멱등 생성·발급해 *_config.json / channels.json 에 기록한다.
+#   이미 토큰이 채워진 PC 에선 실재 검증 후 보존(불필요 재발급·회귀 없음).
+#   BOGO_SKIP_PROVISION=1 이면 건너뛴다(수동 관리 환경 탈출구).
+ensure_provisioned() {
+  if [ "${BOGO_SKIP_PROVISION:-0}" = "1" ]; then
+    say "BOGO_SKIP_PROVISION=1 → 무인 프로비저닝 건너뜀."
+    return 0
+  fi
+  local prov="$HERE/provision_mm.py"
+  if [ ! -f "$prov" ]; then
+    say "provision_mm.py 없음 → 프로비저닝 건너뜀(레거시 호환)."
+    return 0
+  fi
+  # venv 파이썬 우선(agent_schema import 필요). 없으면 시스템 python3 폴백.
+  local py="$HERE/.venv/bin/python"
+  [ -x "$py" ] || py="$(command -v python3 || true)"
+  if [ -z "$py" ]; then
+    warn "python 을 찾지 못해 프로비저닝을 건너뜁니다(봇 토큰이 비어 있으면 기동 실패 가능)."
+    return 0
+  fi
+  say "무인 프로비저닝 실행(토큰·팀·채널 멱등 발급)..."
+  if "$py" "$prov"; then
+    ok "프로비저닝 완료(또는 기존 자격증명 재사용)."
+  else
+    # 프로비저닝 실패는 치명. 토큰이 없으면 봇/대시보드가 못 뜬다 → 거짓완료 방지 위해 중단.
+    err "무인 프로비저닝 실패. 진단: docker exec $MM_NAME mmctl --local system version"
+    return 1
+  fi
+}
+
 main() {
-  say "통신 백본 부트 의존성 체인 시작 (Colima → 컨테이너 → MM readiness)."
+  say "통신 백본 부트 의존성 체인 시작 (Colima → 컨테이너 → MM readiness → 프로비저닝)."
   ensure_colima
   ensure_containers
   wait_mm_ready
+  ensure_provisioned
   ok "통신 백본 준비 완료. 봇 기동 가능."
 }
 

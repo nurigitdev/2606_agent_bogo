@@ -15,27 +15,80 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MM_BASE = "http://127.0.0.1:8065/api/v4"
 
 
+# ── LLM 백엔드 스위치(이식성 핵심) ────────────────────────────────────────
+# WHY: 기존엔 OpenRouter(클라우드) 전용이라 다른 PC 로 옮기면 OpenRouter 키를 반드시
+#   손으로 넣어야 동작했다. LLM_BACKEND=local 이면 OpenAI 호환 로컬 서버(Ollama 등)를
+#   기본 대상으로 잡아 키 없이도 완전 동작한다. 두 백엔드 모두 OpenAI 호환
+#   /chat/completions 규약을 따르므로 호출 코드는 단일 경로로 유지된다(회귀 0).
+#
+# .env 로 조정 가능한 변수(전부 합리적 기본값 제공):
+#   LLM_BACKEND        = local | openrouter   (기본 openrouter — 기존 동작 보존)
+#   LLM_BASE_URL       = OpenAI 호환 base_url 강제 지정(설정 시 최우선)
+#   LLM_MODEL          = 모델명 강제 지정
+#   LLM_FALLBACK_MODEL = 폴백 모델명 강제 지정
+#   OLLAMA_BASE_URL    = local 기본 base_url(기본 http://127.0.0.1:11434/v1)
+#   OLLAMA_MODEL       = local 기본 모델(기본 qwen2.5:7b-instruct)
+#   OPENROUTER_API_KEY = openrouter 백엔드일 때만 필요(local 이면 불필요).
+DEFAULT_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+DEFAULT_LOCAL_BASE = "http://127.0.0.1:11434/v1"   # Ollama OpenAI 호환 엔드포인트
+DEFAULT_LOCAL_MODEL = "qwen2.5:7b-instruct"        # 도구호출·JSON 안정적인 경량 로컬 기본
+DEFAULT_LOCAL_FALLBACK = "llama3.1:8b"
+
+
+def _backend():
+    """현재 LLM 백엔드 식별. 'local' 또는 'openrouter'(기본)."""
+    return (os.environ.get("LLM_BACKEND") or "openrouter").strip().lower()
+
+
 def load_llm_config():
-    cfg = json.load(open(os.path.join(HERE, "llm_config.json"), encoding="utf-8"))
-    key = os.environ.get("OPENROUTER_API_KEY") or cfg.get("api_key", "")
-    return {
-        "key": key,
-        "model": cfg["model"],
-        "fallback": cfg.get("fallback", "openai/gpt-4o-mini"),
-        "base_url": cfg.get("base_url", "https://openrouter.ai/api/v1"),
-    }
+    """LLM 호출 설정 해석. .env 의 LLM_BACKEND 로 local/openrouter 를 고르고,
+    각 변수는 env > llm_config.json > 백엔드별 기본값 순으로 결정한다(키 없는 local 안전)."""
+    cfg = {}
+    try:
+        cfg = json.load(open(os.path.join(HERE, "llm_config.json"), encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        cfg = {}
+    backend = _backend()
+    if backend == "local":
+        base_url = (os.environ.get("LLM_BASE_URL")
+                    or os.environ.get("OLLAMA_BASE_URL")
+                    or cfg.get("local_base_url")
+                    or DEFAULT_LOCAL_BASE)
+        model = (os.environ.get("LLM_MODEL")
+                 or os.environ.get("OLLAMA_MODEL")
+                 or cfg.get("local_model")
+                 or DEFAULT_LOCAL_MODEL)
+        fallback = (os.environ.get("LLM_FALLBACK_MODEL")
+                    or cfg.get("local_fallback")
+                    or DEFAULT_LOCAL_FALLBACK)
+        # 로컬 서버는 대개 인증을 무시한다. 키가 있으면 그대로 통과(프록시 대비), 없으면 빈 값.
+        key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENROUTER_API_KEY") or ""
+    else:
+        base_url = (os.environ.get("LLM_BASE_URL")
+                    or cfg.get("base_url")
+                    or DEFAULT_OPENROUTER_BASE)
+        model = os.environ.get("LLM_MODEL") or cfg.get("model", "deepseek/deepseek-v4-flash")
+        fallback = (os.environ.get("LLM_FALLBACK_MODEL")
+                    or cfg.get("fallback", "openai/gpt-4o-mini"))
+        key = os.environ.get("OPENROUTER_API_KEY") or cfg.get("api_key", "")
+    return {"backend": backend, "key": key, "model": model,
+            "fallback": fallback, "base_url": base_url}
 
 
 def call_llm(messages, model, key, base_url, max_tokens=1500, temperature=0.4, json_mode=True):
-    """OpenRouter chat completion. 반환=응답 본문 문자열."""
+    """OpenAI 호환 chat completion(OpenRouter·Ollama 공통). 반환=응답 본문 문자열."""
     payload = {"model": model, "messages": messages,
                "max_tokens": max_tokens, "temperature": temperature}
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
+    headers = {"Content-Type": "application/json"}
+    # 키가 있을 때만 Authorization 을 보낸다. 로컬(키 없음)에서 'Bearer '(빈 키) 헤더가
+    # 일부 서버에서 401 을 유발하는 것을 피한다.
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(
         base_url + "/chat/completions", data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        method="POST")
+        headers=headers, method="POST")
     r = json.loads(urllib.request.urlopen(req, timeout=120).read())
     return r["choices"][0]["message"]["content"]
 
