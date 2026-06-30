@@ -49,8 +49,33 @@ except Exception as _e:  # noqa: BLE001 — 어떤 import 실패든 대시보드
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# 루프백 전용. 외부(0.0.0.0)로 절대 바꾸지 말 것 — 인증 게이트 없는 로컬 대시보드다.
-HOST = "127.0.0.1"
+def _resolve_dashboard_host():
+    """대시보드 바인딩 호스트 결정(안전 기본 = 루프백, 무차별 노출은 거부).
+
+    대시보드는 ceo_auth 로그인(세션 쿠키) 인증 게이트 뒤에 있으므로, 층간 운영에서는
+    중앙 서버 PC 의 사내 IP 또는 Tailscale IP(100.x.x.x)에 바인딩해 대표/직원 노트북
+    브라우저가 LAN/사설 메시 너머로 붙을 수 있어야 한다.
+
+    보안 경계(불변):
+      - 기본값은 127.0.0.1(루프백) — 단일 PC 안전 기본.
+      - 0.0.0.0 / :: / * 같은 '모든 인터페이스' 무차별 바인딩은 인증 게이트가 있어도
+        공인 NIC 까지 여는 위험이 있어 거부하고 루프백으로 강등한다.
+        LAN/Tailscale 은 특정 사설 IP 를 명시적으로 지정해야 한다(와일드카드 금지).
+    """
+    h = (os.environ.get("BOGO_DASHBOARD_HOST") or "").strip()
+    if not h:
+        return "127.0.0.1"
+    if h in ("0.0.0.0", "::", "*"):
+        print("[dashboard] 경고: BOGO_DASHBOARD_HOST 와일드카드(%s) 거부 — "
+              "공개 노출 방지를 위해 127.0.0.1 로 강등. LAN/Tailscale 은 특정 "
+              "사설 IP 를 지정하세요." % h, flush=True)
+        return "127.0.0.1"
+    return h
+
+
+# 바인딩 호스트. 기본 루프백(안전). 층간 모드는 .env 의 BOGO_DASHBOARD_HOST 에 중앙 서버
+# 사내/Tailscale 사설 IP 를 명시(와일드카드 0.0.0.0 은 거부). 인증 게이트(ceo_auth) 필수.
+HOST = _resolve_dashboard_host()
 PORT = int(os.environ.get("BOGO_DASHBOARD_PORT", "8642"))
 
 # 게시에 쓸 봇: 박민철(nk). CEO브리핑·양 보고라인의 멤버이므로 읽기/쓰기가 가능하다.

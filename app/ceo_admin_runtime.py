@@ -417,7 +417,8 @@ async def run():
     # 재접속 루프(run_forever)가 동작하게 한다.
     # 기동 시 봇을 각 학습방 멤버로 보장(멱등) — 그래야 nk 봇 토큰으로 게시 가능.
     ensure_bot_membership()
-    async with websockets.connect("ws://127.0.0.1:8065/api/v4/websocket",
+    # WS 주소도 MM_HOST/MM_PORT 단일 진실원에서. 기본 ws://127.0.0.1:8065(같은 PC).
+    async with websockets.connect(C.mm_ws_url(),
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": CFG["bot_token"]}}))

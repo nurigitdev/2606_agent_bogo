@@ -10,10 +10,28 @@ ceo_dashboard 핵심 경로 테스트 (표준 unittest — 신규 의존성 0, �
 
 네트워크 호출은 mm 클라이언트 메서드를 스텁으로 교체해 차단한다.
 """
+import os
 import re
 import unittest
 
 import ceo_dashboard as D
+
+
+def _resolve_dashboard_host_with(value):
+    """BOGO_DASHBOARD_HOST=value 환경에서 _resolve_dashboard_host() 결과를 반환.
+
+    바인딩 호스트 결정 정책(기본 루프백·와일드카드 거부·사설 IP 허용)을 환경변수
+    조작으로 직접 검증하기 위한 헬퍼. 호출 후 원래 환경을 복원한다(부작용 0).
+    """
+    saved = os.environ.get("BOGO_DASHBOARD_HOST")
+    try:
+        os.environ["BOGO_DASHBOARD_HOST"] = value
+        return D._resolve_dashboard_host()
+    finally:
+        if saved is None:
+            os.environ.pop("BOGO_DASHBOARD_HOST", None)
+        else:
+            os.environ["BOGO_DASHBOARD_HOST"] = saved
 
 
 class FakeMM:
@@ -63,23 +81,45 @@ class WhitelistTest(unittest.TestCase):
 
 
 class BindTest(unittest.TestCase):
-    def test_loopback_only(self):
-        # 외부 노출 회귀 방지: 반드시 루프백.
-        self.assertEqual(D.HOST, "127.0.0.1")
-        self.assertNotEqual(D.HOST, "0.0.0.0")
+    def test_default_is_loopback(self):
+        # 안전 기본값: BOGO_DASHBOARD_HOST 미설정 시 루프백.
+        # (import 시점 기본 환경이므로 D.HOST 는 기본값 127.0.0.1 이어야 한다.)
+        if not (os.environ.get("BOGO_DASHBOARD_HOST") or "").strip():
+            self.assertEqual(D.HOST, "127.0.0.1")
+
+    def test_wildcard_bind_is_rejected(self):
+        # 보안 정책: 0.0.0.0 / :: / * 같은 무차별 바인딩은 인증 게이트가 있어도
+        # 공개 노출 위험이라 거부하고 루프백으로 강등한다(공개 노출 금지 의도 유지).
+        for bad in ("0.0.0.0", "::", "*"):
+            self.assertEqual(_resolve_dashboard_host_with(bad), "127.0.0.1",
+                             f"와일드카드 {bad} 가 거부되지 않음(공개 노출 위험)")
+
+    def test_lan_and_tailscale_ip_allowed_behind_auth(self):
+        # 합법적 내부망 바인딩 허용: 인증 게이트(ceo_auth) 뒤의 LAN/Tailscale 사설 IP 는
+        # 통과해야 한다(층간 모드). 무인증 공개(0.0.0.0)만 막고 특정 사설 IP 는 허용.
+        for good in ("100.101.102.103", "192.168.0.50", "10.0.0.42"):
+            self.assertEqual(_resolve_dashboard_host_with(good), good,
+                             f"사설/Tailscale IP {good} 바인딩이 거부됨(층간 모드 차단)")
+
+    def test_empty_env_defaults_to_loopback(self):
+        # 미설정/공백은 안전 기본값(루프백)으로 떨어진다.
+        for empty in ("", "   "):
+            self.assertEqual(_resolve_dashboard_host_with(empty), "127.0.0.1")
 
     def test_mattermost_base_uses_ipv4_literal_not_localhost(self):
-        """회귀: Mattermost REST 베이스는 127.0.0.1(IPv4 리터럴)이어야 한다.
+        """회귀: Mattermost REST 베이스는 기본값에서 127.0.0.1(IPv4 리터럴)이어야 한다.
 
         버그: 'localhost' 를 쓰면 macOS getaddrinfo 가 IPv6 ::1 을 먼저 반환하는데,
         colima ssh 포트포워드는 IPv4(*:8065)만 바인딩하므로 ::1:8065 연결이
         [Errno 61] Connection refused 로 실패한다. 그 결과 대시보드의 모든
         Mattermost 호출(history/post/bot_status)이 끊겨 "연결 안 됨"이 된다.
         ASCII 미러가 stale 해 이 수정이 누락되면 이 단언이 바로 잡아낸다.
+        (MM_HOST 미설정 = 기본 127.0.0.1. 환경변수로 실IP 지정 시는 별도 검증.)
         """
         import mm_client as C
-        self.assertIn("127.0.0.1", C.MM_BASE)
-        self.assertNotIn("localhost", C.MM_BASE)
+        if not (os.environ.get("MM_HOST") or "").strip():
+            self.assertIn("127.0.0.1", C.MM_BASE)
+            self.assertNotIn("localhost", C.MM_BASE)
         self.assertTrue(C.MM_BASE.endswith("/api/v4"))
 
 

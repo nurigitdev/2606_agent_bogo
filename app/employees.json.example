@@ -1,0 +1,20 @@
+{
+  "_comment": "일반 직원 Mattermost 계정 명단(층간 모드용). provision_mm.py 가 이 파일을 읽어 mmctl 로 멱등 생성하고, 각 직원을 소속 팀 채널의 멤버로 배치한다(이미 있으면 skip). 이 파일을 employees.json 으로 복사해 실제 직원으로 채운 뒤 provision_mm.py 를 실행한다. 비밀번호가 들어가는 실제 파일(employees.json)은 .gitignore 로 커밋 차단된다 — 이 .example 만 git 추적. 단일 PC 데모에서는 직원 계정이 불필요하므로 employees.json 을 두지 않으면 이 단계는 자동 skip 된다. username 은 영문/숫자/._- 만(Mattermost 규약), team_channels 는 channels.json 에 실재하는 한글 채널명이어야 한다(없는 채널은 경고 후 skip). password 는 직원에게 전달할 초기 비밀번호(첫 로그인 후 변경 권장).",
+
+  "employees": [
+    {
+      "username": "kim7f",
+      "display_name": "김민수",
+      "email": "kim7f@bogo.local",
+      "password": "Bogo-Staff-1111!",
+      "team_channels": ["개발팀", "개발-보고라인"]
+    },
+    {
+      "username": "lee6f",
+      "display_name": "이서연",
+      "email": "lee6f@bogo.local",
+      "password": "Bogo-Staff-1111!",
+      "team_channels": ["인사총무팀", "인사총무-보고라인"]
+    }
+  ]
+}

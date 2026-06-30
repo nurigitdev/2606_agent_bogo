@@ -10,9 +10,46 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# NOTE: localhost(=::1 우선 해석) 대신 127.0.0.1 강제.
-# colima ssh 포트포워드가 IPv4(*:8065)만 바인딩해 ::1 로는 Errno 61 refused 가 난다.
-MM_BASE = "http://127.0.0.1:8065/api/v4"
+
+
+# ── Mattermost 접속 주소(client-side) 단일 진실원 ────────────────────────────
+# WHY: 봇·대시보드·프로비저너가 Mattermost 서버에 "붙는" 호스트/포트를 한 곳에서
+#   결정한다. 기본은 127.0.0.1:8065(루프백 — 단일 PC 안전 기본값). 중앙 서버를 다른
+#   PC(층간)에 두면 그 PC의 사내 IP 또는 Tailscale IP(100.x.x.x)를 MM_HOST 로 지정해
+#   봇 두뇌가 LAN 너머 중앙 MM 에 붙게 한다. 포트는 MM_PORT 로 조정한다.
+#
+# NOTE: localhost(=::1 우선 해석) 대신 IPv4 리터럴/실IP 를 쓴다. macOS getaddrinfo 가
+#   'localhost' 를 ::1(IPv6) 로 먼저 풀면 colima ssh 포트포워드(IPv4 *:8065)에
+#   Errno 61 refused 가 난다. 그래서 기본값은 'localhost' 가 아닌 '127.0.0.1' 이다.
+#
+# .env 로 조정 가능한 변수(전부 안전 기본값 제공):
+#   MM_HOST  = Mattermost 서버 호스트(기본 127.0.0.1 — 같은 PC). 중앙 서버 PC 의
+#              사내 IP 또는 Tailscale IP 로 바꾸면 다른 PC 의 봇이 그 서버에 붙는다.
+#   MM_PORT  = Mattermost 포트(기본 8065).
+def mm_host():
+    """Mattermost 서버 호스트. 기본 127.0.0.1(루프백). 빈/공백이면 기본값으로 폴백."""
+    return (os.environ.get("MM_HOST") or "").strip() or "127.0.0.1"
+
+
+def mm_port():
+    """Mattermost 포트(문자열). 기본 8065. 숫자 아니면 기본값으로 폴백."""
+    p = (os.environ.get("MM_PORT") or "").strip()
+    return p if p.isdigit() else "8065"
+
+
+def mm_http_base():
+    """REST API 베이스 URL(예: http://127.0.0.1:8065/api/v4)."""
+    return f"http://{mm_host()}:{mm_port()}/api/v4"
+
+
+def mm_ws_url():
+    """WebSocket URL(예: ws://127.0.0.1:8065/api/v4/websocket)."""
+    return f"ws://{mm_host()}:{mm_port()}/api/v4/websocket"
+
+
+# 모듈 import 시점 1회 해석한 REST 베이스. 기존 호출부(MM_BASE)와 100% 호환되며,
+# 기본값은 종전과 동일한 127.0.0.1:8065 라 단일 PC 동작은 회귀하지 않는다.
+MM_BASE = mm_http_base()
 
 
 # ── LLM 백엔드 스위치(이식성 핵심) ────────────────────────────────────────

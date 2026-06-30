@@ -55,13 +55,21 @@ services:
       bogo-pg:
         condition: service_healthy
     ports:
-      # 루프백 전용 — 외부(0.0.0.0) 노출 금지. 봇은 ws://127.0.0.1:8065 로 붙는다.
-      - "127.0.0.1:8065:8065"
+      # 바인딩 호스트는 .env 의 MM_BIND_HOST 가 결정한다(기본 127.0.0.1 = 루프백 전용).
+      # 단일 PC 모드: 기본값(127.0.0.1)을 그대로 둔다 — 외부 노출 0.
+      # 층간(중앙 서버) 모드: 이 PC 의 사내 IP 또는 Tailscale IP(100.x.x.x)를 지정해
+      #   다른 PC 의 봇·데스크탑 앱이 붙게 한다. 0.0.0.0(모든 NIC) 금지 — 공인 인터페이스
+      #   까지 열려 사내 전용 경계가 깨진다. 반드시 특정 사설 IP 를 쓴다.
+      - "${MM_BIND_HOST:-127.0.0.1}:8065:8065"
     environment:
       # MM 의 DB 연결 — 호스트명 hermes-pg(=bogo-pg 별칭), 자격증명은 PG 와 일치.
       MM_SQLSETTINGS_DRIVERNAME: postgres
       MM_SQLSETTINGS_DATASOURCE: "postgres://${BOGO_PG_USER:-mmuser}:${BOGO_PG_PASSWORD:-mmuser_password}@hermes-pg:5432/${BOGO_PG_DB:-mattermost}?sslmode=disable&connect_timeout=10"
-      MM_SERVICESETTINGS_SITEURL: "http://127.0.0.1:8065"
+      # SITEURL 은 클라이언트(데스크탑 앱·브라우저)가 접속할 표준 주소. 기본 루프백이며,
+      # 층간 모드에선 .env 의 MM_SITE_URL 에 중앙 서버 IP 주소(예:
+      # http://100.x.x.x:8065 또는 http://192.168.x.x:8065)를 넣는다. MM_BIND_HOST 와
+      # 동일 IP:포트를 가리켜야 WebSocket·로그인 리다이렉트가 정상 동작한다.
+      MM_SERVICESETTINGS_SITEURL: "${MM_SITE_URL:-http://127.0.0.1:8065}"
       # 봇은 WebSocket/REST 로 붙는다 — 로컬 통신이라 보안설정은 기본값 유지.
       MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
     volumes:

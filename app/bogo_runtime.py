@@ -72,9 +72,11 @@ KEY = LLM["key"]
 MODEL = LLM["model"]
 FALLBACK = LLM["fallback"]
 BASE_URL = LLM["base_url"]
-# NOTE: localhost(=::1 우선 해석) 대신 127.0.0.1 강제.
-# colima ssh 포트포워드가 IPv4(*:8065)만 바인딩해 ::1 로는 Errno 61 refused 가 난다.
-MM = "http://127.0.0.1:8065/api/v4"
+# Mattermost REST 베이스. 접속 호스트/포트는 mm_client 단일 진실원(MM_HOST/MM_PORT)이
+# 결정한다 — 기본 127.0.0.1:8065(같은 PC), 중앙 서버를 다른 PC 에 두면 .env 의 MM_HOST 로
+# 그 PC 의 사내/Tailscale IP 를 지정한다.
+# NOTE: localhost(=::1 우선) 대신 IPv4 리터럴/실IP. ::1 은 colima 포트포워드(IPv4)에 refused.
+MM = C.mm_http_base()
 
 NAME = SPEC["name"]
 USERNAME = SPEC["username"]
@@ -776,7 +778,8 @@ async def run():
     # open_timeout: MM 부재 시 connect 가 무한 대기하지 않게 상한을 둔다.
     # ping_interval/ping_timeout: keepalive ping 으로 좀비 연결(반쯤 끊긴 소켓)을 감지해
     # 끊어준다 → run_forever 의 백오프 재접속 루프가 작동할 수 있게 한다.
-    async with websockets.connect("ws://127.0.0.1:8065/api/v4/websocket",
+    # WS 주소도 MM_HOST/MM_PORT 단일 진실원에서. 기본 ws://127.0.0.1:8065(같은 PC).
+    async with websockets.connect(C.mm_ws_url(),
                                   open_timeout=20, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({"seq": 1, "action": "authentication_challenge",
                                   "data": {"token": TOKEN}}))

@@ -13,6 +13,10 @@
 channels.json
 !channels.json.example
 
+# 일반 직원 명단(초기 비밀번호 평문 포함 — 시크릿). *.example 만 커밋 허용.
+employees.json
+!employees.json.example
+
 memory_*.json
 
 # ──────────────────────────────────────────────
@@ -30,6 +34,8 @@ app/migration/.bogo_restored
 .venv/
 venv/
 .venv_*/
+# QA 스크린샷·검증 산출물(로컬 전용 — git 추적 금지)
+artifacts/
 __pycache__/
 *.pyc
 .ruff_cache/

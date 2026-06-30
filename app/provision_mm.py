@@ -37,9 +37,13 @@ import urllib.error
 import urllib.request
 
 import agent_schema as A
+import mm_client as C
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MM_BASE = "http://127.0.0.1:8065/api/v4"
+# 토큰 유효성 확인(_token_valid)용 REST 베이스. 호스트/포트는 mm_client 단일 진실원
+# (MM_HOST/MM_PORT)에서 — 기본 127.0.0.1:8065. mmctl 자체는 컨테이너 내부 --local
+# 소켓으로 돌아 이 주소와 무관하다(아래 mmctl 래퍼 참조).
+MM_BASE = C.mm_http_base()
 MM_CONTAINER = os.environ.get("BOGO_MM_CONTAINER", "bogo-mm")
 
 # 운영(시스템관리자) 봇 = 오케스트레이터 config. 대시보드도 이 봇 토큰을 쓴다.
@@ -323,6 +327,68 @@ def _channel_by_slug(slug):
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 일반 직원 계정 프로비저닝(층간 모드 — 직원이 자기 팀 채널에 보고를 올리는 흐름)
+#   employees.json 명단을 읽어 mmctl --local 로 멱등 생성하고, 각 직원을 소속 팀
+#   채널 멤버로 배치한다. 파일이 없으면(단일 PC 데모) 조용히 skip 한다.
+#   비밀번호는 인자로만 전달하고 표준출력에 절대 노출하지 않는다.
+# ════════════════════════════════════════════════════════════════════════
+def ensure_employees():
+    """employees.json 의 직원 계정 생성(멱등) + 소속 팀 채널 멤버 배치.
+
+    멱등 규칙(provision 전반과 동일): Mattermost 실재 상태가 진실원. 이미 있으면 생성
+    skip, 팀/채널 가입은 mmctl 이 이미 멤버여도 무해하므로 매 실행 보장한다.
+    team_channels 는 channels.json 의 한글 채널명 → CHANNEL_SLUG 로 슬러그 변환한다.
+    channels.json/CHANNEL_SLUG 에 없는 채널은 경고 후 skip(라우팅 정합 보호).
+    """
+    emp_path = os.path.join(HERE, "employees.json")
+    data = _read_json(emp_path)
+    employees = data.get("employees", []) if isinstance(data, dict) else []
+    if not employees:
+        say("employees.json 없음/비어있음 — 직원 계정 프로비저닝 skip(단일 PC 데모는 정상).")
+        return
+
+    existing = mmctl_json("user", "list") or []
+
+    for emp in employees:
+        if not isinstance(emp, dict):
+            continue
+        username = (emp.get("username") or "").strip()
+        if not username:
+            say("직원 항목에 username 누락 — skip.")
+            continue
+        email = (emp.get("email") or f"{username}@{BOT_EMAIL_DOMAIN}").strip()
+        display = (emp.get("display_name") or username).strip()
+        password = emp.get("password") or ""
+
+        # 1) 계정 생성(멱등). 이미 있으면 skip(비밀번호 재설정하지 않음 — 운영자 변경 보존).
+        if _exists(existing, "username", username):
+            say(f"직원 '{username}' 이미 존재 — 생성 skip.")
+        else:
+            if not password:
+                say(f"직원 '{username}' 신규 생성 실패 — password 누락(employees.json 확인).")
+                continue
+            # --nickname 으로 표시 이름 지정(대시보드/멘션에서 사람 이름으로 보이게).
+            mmctl("user", "create", "--email", email, "--username", username,
+                  "--password", password, "--nickname", display, check=True)
+            say(f"직원 '{username}'({display}) 생성 완료.")
+
+        # 2) 팀 가입(멱등). 채널에 들어가려면 먼저 팀 멤버여야 한다.
+        mmctl("team", "users", "add", TEAM_NAME, username, check=False)
+
+        # 3) 소속 팀 채널 멤버 배치(멱등). 한글 채널명 → 슬러그.
+        for ch_display in emp.get("team_channels", []):
+            slug = CHANNEL_SLUG.get(ch_display)
+            if not slug:
+                say(f"직원 '{username}': 미정의 채널 '{ch_display}' — skip(CHANNEL_SLUG 정합 확인).")
+                continue
+            mmctl("channel", "users", "add",
+                  f"{TEAM_NAME}:{slug}", username, check=False)
+        say(f"직원 '{username}' 팀·채널 멤버십 보장 완료.")
+
+    say(f"직원 계정 {len(employees)}명 프로비저닝 완료(멱등).")
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 토큰 유효성(REST 로 1회 확인) + JSON 파일 IO
 # ════════════════════════════════════════════════════════════════════════
 def _token_valid(token):
@@ -364,6 +430,8 @@ def main():
             bot_usernames.append(username)
         add_bots_to_team(bot_usernames)
         ensure_channels(bot_usernames)
+        # 층간 모드: 일반 직원 계정 + 소속 팀 채널 배치(employees.json 있을 때만).
+        ensure_employees()
     except RuntimeError as e:
         say(f"실패: {e}")
         return 1
