@@ -174,6 +174,82 @@ class EmployeeProvisionTest(unittest.TestCase):
         self.assertEqual(ch_adds, [], "미정의 채널이 멤버 배치로 새어나감")
 
 
+class MultihomeBindModeTest(unittest.TestCase):
+    """멀티홈(다중 NIC 직결) 모드 게이트 — 공인 NIC 부재 전제에서만 0.0.0.0 허용.
+
+    멀티홈 서버는 한 대에 NIC 3장을 꽂아 물리 분리된 사내 사설망 A/B/C 에 직결한다.
+    Mattermost(Go http.Server)·대시보드(http.server) 모두 단일 listen 소켓이라
+    IP 별 다중 바인딩이 불가하므로, 3개 NIC 를 동시에 받으려면 0.0.0.0 이 불가피하다.
+    이는 '공인 NIC 부재(공인 IP 0)' 전제에서만 안전하다(사내 3개 사설망에만 노출).
+    """
+
+    def test_multihome_flag_truthy_values(self):
+        import ceo_dashboard as D
+        for v in ("1", "true", "TRUE", "yes", "on", " 1 "):
+            with _with_env(BOGO_MULTIHOME=v):
+                self.assertTrue(D._multihome_enabled(),
+                                f"BOGO_MULTIHOME={v!r} 가 멀티홈으로 인식되지 않음")
+
+    def test_multihome_flag_falsy_values(self):
+        import ceo_dashboard as D
+        for v in (None, "", "0", "false", "no", "off", "  "):
+            with _with_env(BOGO_MULTIHOME=v):
+                self.assertFalse(D._multihome_enabled(),
+                                 f"BOGO_MULTIHOME={v!r} 가 멀티홈으로 잘못 인식됨")
+
+
+class ComposeMultihomeContractTest(unittest.TestCase):
+    """docker-compose.yml 의 멀티홈 환경변수 계약 — 바인딩·SiteURL·CORS 외부화 검증.
+
+    멀티홈 SiteURL 멀티액세스 해법(Mattermost 9.x): SiteURL 은 1개(주 망 A IP)이고,
+    나머지 2개 망(B/C) 오리진은 AllowCorsFrom 에 공백 구분으로 등록해 웹소켓
+    CheckOrigin·CORS 차단을 푼다. 이 계약이 compose 에 실제로 배선됐는지 검증한다.
+    """
+
+    def setUp(self):
+        import provision_mm as P
+        self.text = open(os.path.join(P.HERE, "docker-compose.yml"),
+                         encoding="utf-8").read()
+
+    def test_bind_host_externalized_with_loopback_default(self):
+        # MM_BIND_HOST 가 외부화되되 기본값은 127.0.0.1(루프백 안전 기본 — 회귀 0).
+        self.assertIn("${MM_BIND_HOST:-127.0.0.1}:8065:8065", self.text)
+
+    def test_siteurl_externalized_with_loopback_default(self):
+        # SiteURL 외부화 + 안전 기본값(단일 PC 회귀 방지).
+        self.assertIn('MM_SERVICESETTINGS_SITEURL: "${MM_SITE_URL:-http://127.0.0.1:8065}"',
+                      self.text)
+
+    def test_allow_cors_from_is_wired_for_multi_origin(self):
+        # 멀티홈 다중 오리진 해법: AllowCorsFrom 이 MM_ALLOW_CORS_FROM 으로 외부화됨.
+        self.assertIn("MM_SERVICESETTINGS_ALLOWCORSFROM:", self.text)
+        self.assertIn("${MM_ALLOW_CORS_FROM:-}", self.text)
+
+    def test_allow_cors_default_empty_no_regression(self):
+        # 기본값은 빈 값 → 단일 IP 모드는 SiteURL 오리진만 허용(다중 오리진 미개방 = 회귀 0).
+        self.assertIn('MM_SERVICESETTINGS_ALLOWCORSFROM: "${MM_ALLOW_CORS_FROM:-}"',
+                      self.text)
+
+
+class EnvExampleMultihomeContractTest(unittest.TestCase):
+    """.env.example 가 멀티홈 활성화 변수(BOGO_MULTIHOME·MM_ALLOW_CORS_FROM)를
+    안내하는지 — 운영자가 멀티홈을 켤 진입점이 문서화돼 있는가."""
+
+    def setUp(self):
+        import provision_mm as P
+        self.text = open(os.path.join(P.HERE, ".env.example"),
+                         encoding="utf-8").read()
+
+    def test_documents_multihome_switch(self):
+        self.assertIn("BOGO_MULTIHOME", self.text)
+        self.assertIn("MM_ALLOW_CORS_FROM", self.text)
+
+    def test_documents_zero_bind_only_under_multihome(self):
+        # 0.0.0.0 바인딩을 멀티홈 모드와 묶어 안내(무분별 와일드카드 권장이 아님).
+        self.assertIn("MM_BIND_HOST=0.0.0.0", self.text)
+        self.assertIn("BOGO_MULTIHOME=1", self.text)
+
+
 class EmployeeExampleIntegrityTest(unittest.TestCase):
     """employees.json.example 의 team_channels 가 channels.json 실재 채널과 정합한가."""
 

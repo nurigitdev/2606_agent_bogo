@@ -49,32 +49,63 @@ except Exception as _e:  # noqa: BLE001 — 어떤 import 실패든 대시보드
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+def _multihome_enabled():
+    """멀티홈(다중 NIC 직결) 모드 여부. BOGO_MULTIHOME=1/true/yes/on 일 때만 True.
+
+    멀티홈 서버는 공인 인터넷 향 NIC 가 없고(공인 IP 0), 물리적으로 분리된 사내
+    사설망 3개(A/B/C)에 각각 NIC 로 직결된다. 이 환경에서만 0.0.0.0(모든 인터페이스)
+    바인딩이 '3개 사내 사설망에만' 노출되므로 안전하다. 기본값(미설정)은 False —
+    단일 PC·LAN·Tailscale 모드의 와일드카드 거부 정책을 그대로 유지한다.
+    """
+    v = (os.environ.get("BOGO_MULTIHOME") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _resolve_dashboard_host():
-    """대시보드 바인딩 호스트 결정(안전 기본 = 루프백, 무차별 노출은 거부).
+    """대시보드 바인딩 호스트 결정(안전 기본 = 루프백, 무차별 노출은 모드별로 통제).
 
     대시보드는 ceo_auth 로그인(세션 쿠키) 인증 게이트 뒤에 있으므로, 층간 운영에서는
     중앙 서버 PC 의 사내 IP 또는 Tailscale IP(100.x.x.x)에 바인딩해 대표/직원 노트북
     브라우저가 LAN/사설 메시 너머로 붙을 수 있어야 한다.
 
-    보안 경계(불변):
+    보안 경계(모드별):
       - 기본값은 127.0.0.1(루프백) — 단일 PC 안전 기본.
-      - 0.0.0.0 / :: / * 같은 '모든 인터페이스' 무차별 바인딩은 인증 게이트가 있어도
-        공인 NIC 까지 여는 위험이 있어 거부하고 루프백으로 강등한다.
+      - [기본·LAN·Tailscale 모드] 0.0.0.0 / :: / * 같은 '모든 인터페이스' 무차별
+        바인딩은 공인 NIC 까지 여는 위험이 있어 거부하고 루프백으로 강등한다.
         LAN/Tailscale 은 특정 사설 IP 를 명시적으로 지정해야 한다(와일드카드 금지).
+      - [멀티홈 모드: BOGO_MULTIHOME=1] 서버에 공인 NIC 가 없고 사내 사설망 3개에만
+        NIC 로 직결되므로, 단일 listen 소켓으로 3개 NIC IP 를 동시에 받으려면
+        0.0.0.0 바인딩이 불가피하다. 이 모드에서만 0.0.0.0 / :: 를 허용한다.
+        단 인터넷 향 노출은 (1) 공인 NIC 부재 + (2) 방화벽 인터넷 차단(이중 가드)으로
+        막고, 인증 게이트(ceo_auth)가 무인증 공개를 차단한다.
+        '*' 는 어떤 모드에서도 유효 바인딩 주소가 아니므로 항상 거부한다.
     """
     h = (os.environ.get("BOGO_DASHBOARD_HOST") or "").strip()
     if not h:
         return "127.0.0.1"
-    if h in ("0.0.0.0", "::", "*"):
+    if h in ("0.0.0.0", "::"):
+        if _multihome_enabled():
+            # 멀티홈: 공인 NIC 부재 → 3개 사내 사설망에만 노출(방화벽 이중 가드 전제).
+            print("[dashboard] 멀티홈 모드(BOGO_MULTIHOME=1): %s 바인딩 허용 — "
+                  "공인 NIC 부재 전제(사내 3개 사설망 전용). 인터넷 향 차단은 "
+                  "방화벽으로 이중 가드하세요." % h, flush=True)
+            return h
         print("[dashboard] 경고: BOGO_DASHBOARD_HOST 와일드카드(%s) 거부 — "
               "공개 노출 방지를 위해 127.0.0.1 로 강등. LAN/Tailscale 은 특정 "
-              "사설 IP 를 지정하세요." % h, flush=True)
+              "사설 IP 를, 다중 NIC 직결은 BOGO_MULTIHOME=1 을 쓰세요." % h, flush=True)
+        return "127.0.0.1"
+    if h == "*":
+        # '*' 는 listen 주소로 유효하지 않다 — 어떤 모드에서도 거부.
+        print("[dashboard] 경고: BOGO_DASHBOARD_HOST='*' 는 유효 바인딩 주소가 "
+              "아닙니다 — 127.0.0.1 로 강등.", flush=True)
         return "127.0.0.1"
     return h
 
 
-# 바인딩 호스트. 기본 루프백(안전). 층간 모드는 .env 의 BOGO_DASHBOARD_HOST 에 중앙 서버
-# 사내/Tailscale 사설 IP 를 명시(와일드카드 0.0.0.0 은 거부). 인증 게이트(ceo_auth) 필수.
+# 바인딩 호스트. 기본 루프백(안전). 층간 LAN/Tailscale 모드는 .env 의
+# BOGO_DASHBOARD_HOST 에 특정 사설 IP 를, 멀티홈(다중 NIC 직결) 모드는
+# BOGO_MULTIHOME=1 + BOGO_DASHBOARD_HOST=0.0.0.0 으로 3개 사내 NIC 동시 수신.
+# 어느 경우든 인증 게이트(ceo_auth) 뒤에 있다.
 HOST = _resolve_dashboard_host()
 PORT = int(os.environ.get("BOGO_DASHBOARD_PORT", "8642"))
 

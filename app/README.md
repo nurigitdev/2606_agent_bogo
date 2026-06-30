@@ -27,12 +27,12 @@
 
 | 구분 | 단일 PC 모드 (기본) | 중앙 서버(층간) 모드 |
 |------|--------------------|---------------------|
-| 언제 | 데모·소규모, 한 대에서 직원·봇·대표 전부 | 7층 직원 PC ↔ 10층 대표 PC 등 **여러 PC** 가 한 서버 공유 |
-| 네트워크 | `127.0.0.1` 루프백 전용 — 외부 노출 0 | 사내 LAN 또는 Tailscale 사설 메시(`100.x`/`192.168.x`/`10.x`) |
-| 환경변수 | 아무것도 설정 안 함(기본값) | 중앙 서버에서 `MM_BIND_HOST`·`MM_SITE_URL`·`BOGO_DASHBOARD_HOST` 지정, 각 PC 에서 `MM_HOST` 지정 |
-| 직원 계정 | 불필요(없으면 자동 skip) | `employees.json` 으로 발급 후 직원 PC 로그인 |
+| 언제 | 데모·소규모, 한 대에서 직원·봇·대표 전부 | 여러 망/PC(6·7·10층 등)가 한 중앙 서버 공유 |
+| 네트워크 | `127.0.0.1` 루프백 전용 — 외부 노출 0 | **멀티홈(NIC 3장 직결, 권장)** 또는 LAN/Tailscale 사설 메시(`100.x`/`192.168.x`/`10.x`) |
+| 환경변수 | 아무것도 설정 안 함(기본값) | 멀티홈: `BOGO_MULTIHOME=1`+`MM_BIND_HOST=0.0.0.0`+`MM_SITE_URL`+`MM_ALLOW_CORS_FROM`+`BOGO_DASHBOARD_HOST=0.0.0.0` / 단일 IP: `MM_BIND_HOST`·`MM_SITE_URL`·`BOGO_DASHBOARD_HOST` 에 사설 IP, 각 PC 에서 `MM_HOST` |
+| 직원 계정 | 불필요(없으면 자동 skip) | `employees.json` 으로 발급 후 직원 로그인 |
 
-흐름(층간): `7층 직원 PC(보고 업로드)` → `중앙 서버(Mattermost + 팀봇/CEO봇)` → `10층 대표 PC(CEO 대시보드 브라우저)`.
+흐름(멀티홈, 권장): `A/B/C 망 직원 브라우저(자기 망 NIC IP)` → `중앙 서버 1대(NIC 3장 + Mattermost + 팀봇/CEO봇 헤르메스 두뇌)` → `대표 브라우저(CEO 대시보드)`.
 
 ### 새로 추가된 환경변수 (전부 `.env.example`에 주석 포함)
 
@@ -42,12 +42,16 @@
 | `MM_PORT` | Mattermost 포트 | 모든 PC | `8065` |
 | `MM_BIND_HOST` | Mattermost 컨테이너가 **받는** 포트 바인딩 호스트(`docker-compose`) | 중앙 서버만 | `127.0.0.1` |
 | `MM_SITE_URL` | 클라이언트(데스크탑 앱·브라우저) 접속 표준 주소 — WebSocket·로그인 리다이렉트 기준 | 중앙 서버만 | `http://127.0.0.1:8065` |
-| `BOGO_DASHBOARD_HOST` | CEO 대시보드 웹앱 바인딩 호스트(와일드카드는 거부·루프백 강등) | 중앙 서버만 | `127.0.0.1` |
+| `MM_ALLOW_CORS_FROM` | 추가 접속 오리진(멀티홈에서 B/C 망 IP — 공백 구분) — 웹소켓 CheckOrigin·CORS 허용 | 중앙 서버(멀티홈)만 | 빈 값 |
+| `BOGO_MULTIHOME` | 멀티홈 모드 스위치(`1`이면 `0.0.0.0` 바인딩 허용 — 공인 NIC 부재 전제) | 중앙 서버(멀티홈)만 | 미설정(off) |
+| `BOGO_DASHBOARD_HOST` | CEO 대시보드 웹앱 바인딩 호스트(멀티홈 외에는 와일드카드 거부·루프백 강등) | 중앙 서버만 | `127.0.0.1` |
 | `BOGO_DASHBOARD_PORT` | CEO 대시보드 포트 | 중앙 서버만 | `8642` |
 
-> 보안 불변: 와일드카드(`0.0.0.0`/`::`/`*`)는 공인 NIC 까지 열려 사내 경계가 깨지므로 금지한다. `MM_BIND_HOST` 는 특정 사설 IP 만 쓰고, `BOGO_DASHBOARD_HOST` 에 와일드카드를 넣으면 코드가 자동으로 `127.0.0.1` 로 강등한다. 공인 인터넷 노출은 어떤 경우에도 금지.
+> 보안 불변: 와일드카드(`0.0.0.0`/`::`)는 기본·LAN·Tailscale 모드에서 공인 NIC 까지 열릴 위험이라 거부되고 자동으로 `127.0.0.1` 로 강등된다. **예외 — 멀티홈 모드(`BOGO_MULTIHOME=1`)** 는 서버에 공인 NIC 가 없고(공인 IP 0) 사내 사설망 3개에만 NIC 직결된 환경이라, 3개 NIC 를 단일 listen 소켓으로 동시에 받기 위해 `0.0.0.0` 을 허용한다(인터넷 향 차단은 공인 NIC 부재 + 방화벽 이중 가드). `*` 는 어떤 모드에서도 거부. 공인 인터넷 노출은 어떤 경우에도 금지.
 >
-> **층간 배선 전체 절차(Tailscale 설치 → 중앙 서버/직원/대표 PC 설정 → 직원 계정 발급 → 연결 점검)는 [`DEPLOY_NETWORK.md`](DEPLOY_NETWORK.md) 참고.**
+> SiteURL 멀티액세스: Mattermost 9.x 는 SiteURL 1개만 갖는다. 멀티홈에서는 주 망(A) IP 를 `MM_SITE_URL` 로, 나머지 2개 망(B/C) IP 오리진을 `MM_ALLOW_CORS_FROM` 에 공백 구분으로 등록해 3개 망 동시 접속의 웹소켓·CORS 차단을 푼다. 봇은 서버 로컬 `127.0.0.1` 로 붙어 SiteURL/CORS 영향이 없다.
+>
+> **층간 배선 전체 절차(멀티홈 NIC 배선/SiteURL/방화벽, 또는 Tailscale/LAN → 직원 계정 발급 → 연결 점검)는 [`DEPLOY_NETWORK.md`](DEPLOY_NETWORK.md) 참고.**
 
 ---
 
@@ -170,8 +174,10 @@ CEO가 Mattermost 채널을 일일이 오가지 않고 **브라우저 한 곳**(
 # 포트 변경
 BOGO_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 # 접속(단일 PC): http://127.0.0.1:8642   (기본 — 루프백 전용, 외부 노출 0)
-# 층간 모드(대표 PC 가 다른 PC): 중앙 서버에서 BOGO_DASHBOARD_HOST 에 사설 IP 지정
+# 층간 단일 IP 모드: 중앙 서버에서 BOGO_DASHBOARD_HOST 에 사설 IP 지정
 #   → 대표 노트북 브라우저로 http://<중앙서버 사설IP>:8642 접속 (DEPLOY_NETWORK.md 참고)
+# 멀티홈 모드(권장): BOGO_MULTIHOME=1 + BOGO_DASHBOARD_HOST=0.0.0.0 으로 3개 NIC 동시 수신
+#   → 각 망 대표/직원이 자기 망 NIC IP:8642 로 접속 (DEPLOY_NETWORK.md 1절 참고)
 ```
 
 게시용 봇 토큰은 박민철(`nk_config.json`)을 재사용한다(CEO브리핑·양 보고라인 멤버라 읽기/쓰기 권한 보유). 토큰이 비어 있거나 플레이스홀더면 기동을 거부한다. 테스트: `.venv/bin/python -m unittest test_ceo_dashboard`.

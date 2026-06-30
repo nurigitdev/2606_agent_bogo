@@ -57,19 +57,36 @@ services:
     ports:
       # 바인딩 호스트는 .env 의 MM_BIND_HOST 가 결정한다(기본 127.0.0.1 = 루프백 전용).
       # 단일 PC 모드: 기본값(127.0.0.1)을 그대로 둔다 — 외부 노출 0.
-      # 층간(중앙 서버) 모드: 이 PC 의 사내 IP 또는 Tailscale IP(100.x.x.x)를 지정해
-      #   다른 PC 의 봇·데스크탑 앱이 붙게 한다. 0.0.0.0(모든 NIC) 금지 — 공인 인터페이스
-      #   까지 열려 사내 전용 경계가 깨진다. 반드시 특정 사설 IP 를 쓴다.
+      # 층간(중앙 서버) LAN/Tailscale 모드: 이 PC 의 사내 IP 또는 Tailscale IP(100.x)를
+      #   지정해 다른 PC 의 봇·데스크탑 앱이 붙게 한다. 이 모드에선 특정 사설 IP 1개만 쓴다.
+      # 멀티홈(다중 NIC 직결) 모드: 한 서버에 NIC 3장을 꽂아 물리 분리된 사내 사설망
+      #   A/B/C 에 각각 직결한다. Mattermost(Go http.Server)는 단일 listen 소켓이라
+      #   IP 별 다중 바인딩을 못 한다 → 3개 NIC 를 동시에 받으려면 0.0.0.0 이 불가피.
+      #   이는 '공인 NIC 부재(공인 IP 0)' 전제에서만 안전하다 — 0.0.0.0 이 사내 3개
+      #   사설망에만 노출된다. 인터넷 향 차단은 방화벽으로 이중 가드한다.
+      #   활성화: .env 에 MM_BIND_HOST=0.0.0.0 (+ BOGO_MULTIHOME=1 로 의도 명시).
       - "${MM_BIND_HOST:-127.0.0.1}:8065:8065"
     environment:
       # MM 의 DB 연결 — 호스트명 hermes-pg(=bogo-pg 별칭), 자격증명은 PG 와 일치.
       MM_SQLSETTINGS_DRIVERNAME: postgres
       MM_SQLSETTINGS_DATASOURCE: "postgres://${BOGO_PG_USER:-mmuser}:${BOGO_PG_PASSWORD:-mmuser_password}@hermes-pg:5432/${BOGO_PG_DB:-mattermost}?sslmode=disable&connect_timeout=10"
       # SITEURL 은 클라이언트(데스크탑 앱·브라우저)가 접속할 표준 주소. 기본 루프백이며,
-      # 층간 모드에선 .env 의 MM_SITE_URL 에 중앙 서버 IP 주소(예:
-      # http://100.x.x.x:8065 또는 http://192.168.x.x:8065)를 넣는다. MM_BIND_HOST 와
-      # 동일 IP:포트를 가리켜야 WebSocket·로그인 리다이렉트가 정상 동작한다.
+      # 층간 단일 IP 모드에선 .env 의 MM_SITE_URL 에 중앙 서버 IP 주소(예:
+      # http://100.x.x.x:8065 또는 http://192.168.x.x:8065)를 넣는다.
+      #
+      # [멀티홈 SiteURL 멀티액세스 해결] Mattermost 9.x 는 SiteURL 을 1개만 갖는데,
+      # A/B/C 3개 망에서 서로 다른 NIC IP 로 접속하면 다른 IP 의 WebSocket 오리진이
+      # Upgrader.CheckOrigin 에서 차단되어 실시간 기능이 깨진다. 공식 해법은
+      # AllowCorsFrom 에 추가 오리진을 공백 구분으로 등록하는 것이다(Mattermost KB:
+      # "Real-Time Features Not Working When Connecting From Multiple Origins").
+      #   → SiteURL 에는 주 망(A: 10/9/8층) IP 를, MM_ALLOW_CORS_FROM 에는 나머지
+      #     2개 망(B: 7층, C: 6층) IP 의 http://IP:8065 오리진을 공백 구분으로 넣는다.
+      #   예) MM_SITE_URL=http://10.0.0.10:8065
+      #       MM_ALLOW_CORS_FROM="http://172.16.0.10:8065 http://192.168.50.10:8065"
       MM_SERVICESETTINGS_SITEURL: "${MM_SITE_URL:-http://127.0.0.1:8065}"
+      # 멀티홈 다중 오리진 허용(웹소켓 CheckOrigin·CORS). 기본 빈 값 → 단일 IP 모드는
+      # SiteURL 오리진만 허용(회귀 0). 멀티홈에서만 B/C 망 오리진을 공백 구분으로 채운다.
+      MM_SERVICESETTINGS_ALLOWCORSFROM: "${MM_ALLOW_CORS_FROM:-}"
       # 봇은 WebSocket/REST 로 붙는다 — 로컬 통신이라 보안설정은 기본값 유지.
       MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
     volumes:

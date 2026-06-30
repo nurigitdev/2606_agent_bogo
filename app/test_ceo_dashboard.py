@@ -17,21 +17,32 @@ import unittest
 import ceo_dashboard as D
 
 
-def _resolve_dashboard_host_with(value):
-    """BOGO_DASHBOARD_HOST=value 환경에서 _resolve_dashboard_host() 결과를 반환.
+def _resolve_dashboard_host_with(value, multihome=None):
+    """BOGO_DASHBOARD_HOST=value (선택적으로 BOGO_MULTIHOME) 환경에서
+    _resolve_dashboard_host() 결과를 반환.
 
-    바인딩 호스트 결정 정책(기본 루프백·와일드카드 거부·사설 IP 허용)을 환경변수
-    조작으로 직접 검증하기 위한 헬퍼. 호출 후 원래 환경을 복원한다(부작용 0).
+    바인딩 호스트 결정 정책(기본 루프백·와일드카드 거부·사설 IP 허용·멀티홈 0.0.0.0
+    허용)을 환경변수 조작으로 직접 검증하기 위한 헬퍼. 호출 후 원래 환경을 복원한다.
+    multihome=None 이면 BOGO_MULTIHOME 를 제거(기본 모드), True/False 면 명시.
     """
-    saved = os.environ.get("BOGO_DASHBOARD_HOST")
+    saved_host = os.environ.get("BOGO_DASHBOARD_HOST")
+    saved_mh = os.environ.get("BOGO_MULTIHOME")
     try:
         os.environ["BOGO_DASHBOARD_HOST"] = value
+        if multihome is None:
+            os.environ.pop("BOGO_MULTIHOME", None)
+        else:
+            os.environ["BOGO_MULTIHOME"] = "1" if multihome else "0"
         return D._resolve_dashboard_host()
     finally:
-        if saved is None:
+        if saved_host is None:
             os.environ.pop("BOGO_DASHBOARD_HOST", None)
         else:
-            os.environ["BOGO_DASHBOARD_HOST"] = saved
+            os.environ["BOGO_DASHBOARD_HOST"] = saved_host
+        if saved_mh is None:
+            os.environ.pop("BOGO_MULTIHOME", None)
+        else:
+            os.environ["BOGO_MULTIHOME"] = saved_mh
 
 
 class FakeMM:
@@ -105,6 +116,35 @@ class BindTest(unittest.TestCase):
         # 미설정/공백은 안전 기본값(루프백)으로 떨어진다.
         for empty in ("", "   "):
             self.assertEqual(_resolve_dashboard_host_with(empty), "127.0.0.1")
+
+    def test_multihome_allows_wildcard_for_3nic_simultaneous_bind(self):
+        # 멀티홈 모드(BOGO_MULTIHOME=1): 서버에 공인 NIC 가 없고 사내 사설망 3개에만
+        # NIC 직결된 환경에서 단일 listen 소켓으로 3개 NIC IP 를 동시에 받으려면
+        # 0.0.0.0 / :: 바인딩이 불가피하다 → 이 모드에서만 허용한다.
+        for good in ("0.0.0.0", "::"):
+            self.assertEqual(
+                _resolve_dashboard_host_with(good, multihome=True), good,
+                f"멀티홈 모드에서 {good} 가 허용되지 않음(3개 NIC 동시 수신 불가)")
+
+    def test_multihome_off_still_rejects_wildcard(self):
+        # 멀티홈 미설정/비활성에서는 와일드카드 거부 정책이 그대로 유지된다(회귀 0).
+        for bad in ("0.0.0.0", "::"):
+            self.assertEqual(_resolve_dashboard_host_with(bad, multihome=None),
+                             "127.0.0.1", f"멀티홈 OFF 에서 {bad} 가 새어나감")
+            self.assertEqual(_resolve_dashboard_host_with(bad, multihome=False),
+                             "127.0.0.1",
+                             f"BOGO_MULTIHOME=0 에서 {bad} 가 새어나감")
+
+    def test_star_is_always_rejected_even_in_multihome(self):
+        # '*' 는 유효한 listen 주소가 아니므로 멀티홈 모드에서도 항상 거부한다.
+        self.assertEqual(_resolve_dashboard_host_with("*", multihome=True),
+                         "127.0.0.1", "'*' 가 멀티홈 모드에서 거부되지 않음")
+
+    def test_multihome_does_not_widen_specific_private_ip(self):
+        # 멀티홈 플래그가 켜져도 특정 사설 IP 는 그대로 그 IP 로만 바인딩(불필요한 확대 없음).
+        self.assertEqual(
+            _resolve_dashboard_host_with("10.0.0.10", multihome=True),
+            "10.0.0.10")
 
     def test_mattermost_base_uses_ipv4_literal_not_localhost(self):
         """회귀: Mattermost REST 베이스는 기본값에서 127.0.0.1(IPv4 리터럴)이어야 한다.
