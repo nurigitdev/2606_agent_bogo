@@ -1,6 +1,6 @@
 # BOGO cross-platform bootstrap (Windows / PowerShell).
 #
-# From a fresh git clone or copy: locates Python >= 3.12 (newest preferred), (re)creates a PORTABLE .venv,
+# From a fresh git clone or copy: locates ANY Python 3 (newest preferred; no hard version gate), (re)creates a PORTABLE .venv,
 # installs requirements.txt, copies *.example -> real config only when missing.
 # Idempotent + Hangul-path safe (paths resolved from script location, UTF-8).
 #
@@ -14,15 +14,15 @@ Set-Location $Here
 function Say($m) { Write-Host "[bootstrap] $m" -ForegroundColor Cyan }
 function Die($m) { Write-Host "[bootstrap:오류] $m" -ForegroundColor Red; exit 1 }
 
-# ── 1. Python >=3.12 탐지 ────────────────────────────────────────────
-# 3.12 이상이면 채택하되 후보 중 가장 최신 버전을 우선 선택한다(3.12 미만만 거부).
-function Test-PyOk($exe, $verArgs) {
-  # returns "<major>.<minor>" if >= 3.12 else $null
+# ── 1. Python 3 탐지 (버전 강제 없음) ────────────────────────────────
+# 특정 버전을 강제하지 않는다. 발견되는 python 중 가장 최신을 채택한다.
+# 권장 버전(3.12+)은 의존성 wheel 가용성 때문이며, 미만이어도 거부하지 않고 경고만 출력한다.
+$RecommendedMinor = 12   # recommended minimum minor for the 3.x line (advisory only)
+function Get-PyVer($exe, $verArgs) {
+  # returns "<major>.<minor>" for ANY working interpreter, else $null (no version gate)
   $v = (& $exe @verArgs -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
   if (-not $v) { return $null }
-  $parts = $v.Split('.')
-  if ([int]$parts[0] -gt 3 -or ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 12)) { return $v }
-  return $null
+  return $v
 }
 
 function Find-Py {
@@ -32,7 +32,7 @@ function Find-Py {
   # 1) py launcher: newest-first explicit versions
   if (Get-Command py -ErrorAction SilentlyContinue) {
     foreach ($pv in @("-3.14", "-3.13", "-3.12")) {
-      $ver = Test-PyOk "py" @($pv)
+      $ver = Get-PyVer "py" @($pv)
       if ($ver -and (-not $bestVer -or ([version]$ver -gt [version]$bestVer))) {
         $best = @("py", $pv); $bestVer = $ver
       }
@@ -41,7 +41,7 @@ function Find-Py {
   # 2) python on PATH: newest-first explicit names then generic
   foreach ($c in @("python3.14", "python3.13", "python3.12", "python3", "python")) {
     if (Get-Command $c -ErrorAction SilentlyContinue) {
-      $ver = Test-PyOk $c @()
+      $ver = Get-PyVer $c @()
       if ($ver -and (-not $bestVer -or ([version]$ver -gt [version]$bestVer))) {
         $best = @($c); $bestVer = $ver
       }
@@ -52,10 +52,15 @@ function Find-Py {
 
 $Py = Find-Py
 if (-not $Py) {
-  Die "Python 3.12 이상을 찾지 못했습니다. https://www.python.org/downloads/ 에서 최신 버전 설치(설치 시 'Add to PATH' 체크) 후 다시 실행하세요."
+  Die "Python 인터프리터를 찾지 못했습니다(python/py 모두 없음). https://www.python.org/downloads/ 에서 설치(설치 시 'Add to PATH' 체크, 가능하면 3.12 이상 권장) 후 다시 실행하세요."
 }
 $PyVerShown = (& $Py[0] @($Py[1..($Py.Length-1)]) -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
 Say "Python $PyVerShown 사용: $($Py -join ' ')"
+# advisory-only: warn (do NOT abort) when below the recommended 3.12 line.
+$verParts = $PyVerShown.Split('.')
+if ($verParts.Length -ge 2 -and -not ([int]$verParts[0] -gt 3 -or ([int]$verParts[0] -eq 3 -and [int]$verParts[1] -ge $RecommendedMinor))) {
+  Write-Host "[bootstrap:오류] 경고: 권장 Python 3.$RecommendedMinor+ 미만(현재 $PyVerShown) — 일부 의존성 wheel 이 없을 수 있습니다. 계속 진행합니다." -ForegroundColor Yellow
+}
 
 # ── 2. 휴대용 venv (재)생성 ──────────────────────────────────────────
 $Venv = Join-Path $Here ".venv"

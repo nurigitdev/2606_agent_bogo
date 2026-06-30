@@ -215,7 +215,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 
 - 가동 상태는 `Get-ScheduledTask -TaskName "BOGO_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.bogo` 등가).
 - PowerShell 7(`pwsh`)이 있으면 그것을, 없으면 Windows 기본 `powershell` 5.1 을 자동으로 사용한다.
-- 처음이라면 `python.org`에서 Python 3.12 이상(설치 시 "Add to PATH" 체크)을 설치한 뒤 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
+- 처음이라면 `python.org`에서 Python 3(권장 3.12+, 강제 아님 / 설치 시 "Add to PATH" 체크)을 설치한 뒤 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
 
 ## 가장 쉬운 시작 — 더블클릭/아이콘 (Linux)
 
@@ -354,8 +354,8 @@ pwsh ./bogo_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Schedul
 pwsh ./bogo_ctl.ps1 restart
 ```
 
-> **Python 3.12 이상 필수**(하한 3.12, 가능하면 최신 버전 자동 선택). 없으면 부트스트랩이 설치 안내 후 멈춘다.
-> mac: `brew install python@3.12`(또는 그 이상) · Ubuntu: `sudo apt install python3.12 python3.12-venv`(또는 그 이상)
+> **Python 3 필요**(권장 3.12+, 강제하지 않음 — 발견되는 최신 인터프리터 자동 채택, 권장 미만이면 경고만 출력하고 진행). 인터프리터가 **전혀 없을 때만** 부트스트랩이 설치 안내 후 멈춘다.
+> mac: `brew install python`(권장 3.12+) · Ubuntu: `sudo apt install python3 python3-venv`(권장 3.12+)
 > Windows: [python.org](https://www.python.org/downloads/) 최신 버전 (설치 시 "Add to PATH" 체크)
 
 ### 시크릿은 커밋되지 않는다 (부트스트랩이 복사)

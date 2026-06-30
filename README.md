@@ -104,7 +104,7 @@ cd app
 
 Windows(PowerShell): `pwsh ./bogo_ctl.ps1 setup` → `pwsh ./bogo_ctl.ps1 restart`
 
-> **Python 3.12 이상 필수**(하한 3.12, 가능하면 최신 버전 자동 선택). Docker가 동작해야 통신 백본이 선다
+> **Python 3 필요**(권장 3.12+, 강제하지 않음 — 발견되는 최신 인터프리터 자동 채택, 권장 미만이면 경고만 출력하고 진행). Docker가 동작해야 통신 백본이 선다
 > (macOS는 Colima 또는 Docker Desktop, Linux는 `docker.io`+compose, Windows는 Docker Desktop).
 > 통신 백본만 직접 올리려면 `cd app && docker compose up -d`.
 
@@ -176,7 +176,7 @@ agent-bogo/
 
 ## 기술 스택
 
-- **언어 / 런타임** — Python 3.12 이상 (ARM64 포함, 추가 빌드 도구 없이 `pip install` 동작)
+- **언어 / 런타임** — Python 3 (권장 3.12+, 강제 아님; ARM64 포함, 추가 빌드 도구 없이 `pip install` 동작)
 - **두뇌** — Nous Research `hermes-agent==0.17.0` (AIAgent 런타임), 모델은 OpenRouter DeepSeek V4 Flash(기본) 또는 로컬 Ollama 등 OpenAI 호환 서버
 - **메시징** — Mattermost (WebSocket 수신 + REST 게시), `websockets>=15.0`
 - **인프라** — Docker / Docker Compose (Mattermost + Postgres), 멀티홈 NIC 직결

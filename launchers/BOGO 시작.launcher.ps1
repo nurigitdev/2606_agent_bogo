@@ -86,7 +86,7 @@ if ($RegisteredCount -ge 1) {
   } else {
     Write-Host ""
     Fail "설치 중 문제가 발생했습니다. 위 로그를 확인하세요."
-    Say "흔한 원인: Python 3.12 이상 미설치 → https://www.python.org/downloads/ 에서 최신 버전"
+    Say "흔한 원인: Python 3 미설치 → https://www.python.org/downloads/ 에서 설치(권장 3.12+, 강제 아님)"
     Say "           설치(설치 시 'Add to PATH' 체크) 후 다시 더블클릭"
     Stop-With 1
   }
