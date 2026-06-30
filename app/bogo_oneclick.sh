@@ -245,8 +245,24 @@ dashboard_service_stop() {
   esac
 }
 
+# 정상 종료 시 1회 백업(클린 셧다운 스냅샷). 주기 백업과 별개로, 사용자가 의도적으로
+# 내리기 직전의 최신 상태를 폴더 안에 남긴다. PG 는 이 시점까지 살아 있으므로 백업 유효.
+# best-effort: 백업이 실패해도 정지 자체는 진행한다(정지를 막지 않음).
+stop_backup_snapshot() {
+  local backup="$HERE/migration/bogo_backup.sh"
+  [ -f "$backup" ] || return 0
+  say "정상 종료 전 데이터 스냅샷 백업(폴더 안 최신본 갱신)..."
+  if BOGO_BACKUP_RETAIN="${BOGO_BACKUP_RETAIN:-3}" bash "$backup" --quiet --out "$HERE/migration" >/dev/null 2>&1; then
+    ok "종료 전 백업 완료 → migration/bogo_backup_latest.tar.gz"
+  else
+    warn "종료 전 백업 건너뜀(Docker 미기동 등) — 직전 주기 백업이 폴더에 남아 있음."
+  fi
+}
+
 do_stop() {
   local all="${1:-}"
+  # 정지 직전 1회 스냅샷(클린 셧다운 백업) — Docker 가 떠 있을 때만 유효, 실패해도 진행.
+  stop_backup_snapshot
   say "대시보드 정지(launchd/systemd 등록 해제 → KeepAlive 부활 차단)..."
   dashboard_service_stop
   local stopped=0
