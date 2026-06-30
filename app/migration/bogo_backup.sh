@@ -184,18 +184,25 @@ JSON
   [ "$QUIET" -eq 1 ] || say "이 파일(또는 폴더 전체)을 새 PC 로 옮긴 뒤, 새 PC 에서 'BOGO 시작'을 더블클릭하면 자동 복원됩니다."
 }
 
-# 타임스탬프 백업본을 최신순 정렬해 RETAIN 개 초과분을 삭제한다(_latest 는 제외).
+# 타임스탬프 백업본을 이름순(=시간순, stamp 가 YYYYMMDD-HHMMSS 라 사전식=시간식)으로
+# 정렬해 RETAIN 개 초과분(가장 오래된 것)을 삭제한다. _latest 포인터는 glob 에 안 걸린다.
 rotate_backups() {
   [ "$RETAIN" -ge 1 ] 2>/dev/null || RETAIN=3
-  # ls -t 로 mtime 최신순. _latest 포인터는 glob 패턴에 안 걸린다(bogo_backup_<stamp> 만 매칭).
-  local kept=0 f
-  # shellcheck disable=SC2012  # 파일명에 개행 없음(우리가 stamp 로만 생성) → ls 안전.
-  for f in $(ls -t "$OUT_DIR"/bogo_backup_[0-9]*.tar.gz 2>/dev/null); do
-    kept=$((kept + 1))
-    if [ "$kept" -gt "$RETAIN" ]; then
-      rm -f "$f" 2>/dev/null && say "오래된 백업 정리: $(basename "$f")"
-    fi
+  # glob 으로 안전 수집(ls 파싱 회피). 매칭 없으면 nullglob 가 없는 환경 대비해 실재 검사.
+  local files=() f
+  for f in "$OUT_DIR"/bogo_backup_[0-9]*.tar.gz; do
+    [ -f "$f" ] && files+=("$f")
   done
+  local total="${#files[@]}"
+  [ "$total" -gt "$RETAIN" ] || return 0
+  # 파일명은 stamp 로만 구성 → 사전식 정렬 결과의 앞쪽이 가장 오래된 것. sort 로 정렬.
+  local sorted; sorted="$(printf '%s\n' "${files[@]}" | sort)"
+  local remove=$((total - RETAIN)) i=0
+  while IFS= read -r f; do
+    [ "$i" -ge "$remove" ] && break
+    rm -f "$f" 2>/dev/null && say "오래된 백업 정리: $(basename "$f")"
+    i=$((i + 1))
+  done <<< "$sorted"
 }
 
 main "$@"
