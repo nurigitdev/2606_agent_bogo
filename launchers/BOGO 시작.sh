@@ -15,7 +15,7 @@ set -u
 # 자기 위치(심볼릭/공백/한글 경로 안전). BASH_SOURCE 기준 절대경로.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 SELF_PATH="$SELF_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
-REPO="$SELF_DIR/app"
+REPO="$SELF_DIR/../app"
 ONECLICK="$REPO/bogo_oneclick.sh"
 
 # ── 터미널 자동탐지 폴백 ────────────────────────────────────────────────

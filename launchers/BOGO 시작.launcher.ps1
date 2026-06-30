@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 
 # ── 0. 자기 위치 기준으로 app/ 디렉터리 고정 (한글·공백 경로 안전) ──
 $SelfDir = $PSScriptRoot
-$Repo    = Join-Path $SelfDir "app"
+$Repo    = [System.IO.Path]::GetFullPath((Join-Path $SelfDir "..\app"))
 $Ctl     = Join-Path $Repo "bogo_ctl.ps1"
 
 function Say($m)  { Write-Host "[BOGO] $m" -ForegroundColor Cyan }

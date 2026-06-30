@@ -15,7 +15,7 @@
 set -u
 
 SELF_DIR="${0:A:h}"
-BACKUP="$SELF_DIR/app/migration/bogo_backup.sh"
+BACKUP="$SELF_DIR/../app/migration/bogo_backup.sh"
 
 C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { printf "%s[BOGO]%s %s\n" "$C_INFO" "$C_RST" "$*"; }
@@ -48,7 +48,7 @@ rc=$?
 print -r -- ""
 if [[ $rc -eq 0 ]]; then
   ok "백업 완료. 'agent-bogo' 폴더 전체를 새 PC 로 옮긴 뒤 'BOGO 시작'을 더블클릭하세요."
-  say "백업본 위치:  app/migration/bogo_backup_latest.tar.gz"
+  say "백업본 위치:  ../app/migration/bogo_backup_latest.tar.gz"
 else
   fail "백업 중 문제가 발생했습니다. 위 로그를 확인하세요."
   say "흔한 원인: Docker/Colima 미기동 → 터미널에서 'colima start' 후 다시 시도."

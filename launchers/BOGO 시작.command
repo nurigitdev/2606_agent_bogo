@@ -12,7 +12,7 @@
 set -u
 
 SELF_DIR="${0:A:h}"
-REPO="$SELF_DIR/app"
+REPO="$SELF_DIR/../app"
 ONECLICK="$REPO/bogo_oneclick.sh"
 
 C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
