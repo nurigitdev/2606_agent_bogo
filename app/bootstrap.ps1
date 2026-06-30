@@ -61,11 +61,11 @@ if (-not (Test-Path (Join-Path $Here ".env"))) {
   $ee = Join-Path $Here ".env.example"
   if (Test-Path $ee) { Copy-Item $ee (Join-Path $Here ".env"); Say "생성: .env (← .env.example)" }
 }
-Copy-IfMissing "llm_config.json.example"   "llm_config.json"
-Copy-IfMissing "nk_config.json.example"    "nk_config.json"
-Copy-IfMissing "genz_config.json.example"  "genz_config.json"
-Copy-IfMissing "gyaru_config.json.example" "gyaru_config.json"
-Copy-IfMissing "channels.json.example"     "channels.json"
+Copy-IfMissing "config\llm_config.json.example"   "llm_config.json"
+Copy-IfMissing "config\nk_config.json.example"    "nk_config.json"
+Copy-IfMissing "config\genz_config.json.example"  "genz_config.json"
+Copy-IfMissing "config\gyaru_config.json.example" "gyaru_config.json"
+Copy-IfMissing "config\channels.json.example"     "channels.json"
 
 Say "부트스트랩 완료."
 Say "다음 단계:"

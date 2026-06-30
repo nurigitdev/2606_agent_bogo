@@ -255,7 +255,7 @@ class EmployeeExampleIntegrityTest(unittest.TestCase):
 
     def test_example_channels_exist_in_channels_json(self):
         import provision_mm as P
-        ex_path = os.path.join(P.HERE, "employees.json.example")
+        ex_path = os.path.join(P.HERE, "config", "employees.json.example")
         self.assertTrue(os.path.isfile(ex_path), "employees.json.example 누락")
         with open(ex_path, encoding="utf-8") as f:
             ex = json.load(f)

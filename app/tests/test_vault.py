@@ -196,7 +196,7 @@ def test_rag_incremental_and_purge(vault):
 
 # ── 조직 동기화 ───────────────────────────────────────────────────────────────
 def test_org_sync_creates_dirs_and_moc(vault):
-    tj = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams.json")
+    tj = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "teams.json")
     res = O.sync_org(tj)
     assert res["team_dirs"] >= 2
     assert os.path.exists(res["moc"])

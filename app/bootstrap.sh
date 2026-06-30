@@ -82,11 +82,11 @@ if [ ! -f "$HERE/.env" ]; then
   fi
 fi
 
-copy_if_missing "llm_config.json.example"   "llm_config.json"
-copy_if_missing "nk_config.json.example"    "nk_config.json"
-copy_if_missing "genz_config.json.example"  "genz_config.json"
-copy_if_missing "gyaru_config.json.example" "gyaru_config.json"
-copy_if_missing "channels.json.example"     "channels.json"
+copy_if_missing "config/llm_config.json.example"   "llm_config.json"
+copy_if_missing "config/nk_config.json.example"    "nk_config.json"
+copy_if_missing "config/genz_config.json.example"  "genz_config.json"
+copy_if_missing "config/gyaru_config.json.example" "gyaru_config.json"
+copy_if_missing "config/channels.json.example"     "channels.json"
 
 # ── 5. 안내 ───────────────────────────────────────────────────────────
 say "부트스트랩 완료."

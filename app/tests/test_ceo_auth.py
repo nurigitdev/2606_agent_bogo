@@ -216,7 +216,7 @@ class MattermostIPv4ForcedRegressionTest(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         for fname in ("bogo_runtime.py", "ceo_admin_runtime.py", "ceo_auth.py",
                       "mm_client.py"):
-            with open(os.path.join(here, fname), encoding="utf-8") as f:
+            with open(os.path.join(here, "..", fname), encoding="utf-8") as f:
                 src = f.read()
             for bad in ("://localhost:8065", "://localhost:8067"):
                 self.assertNotIn(
@@ -238,13 +238,14 @@ class MattermostIPv4ForcedRegressionTest(unittest.TestCase):
         import os
         import re
         here = os.path.dirname(os.path.abspath(__file__))
+        here_runtime = os.path.join(here, "..")  # app/ root where runtime .py files live
         # scheme://localhost[:port] — http/https/ws/wss 등 모든 접속 스킴.
         pat = re.compile(r"[a-z][a-z0-9+.\-]*://localhost\b", re.IGNORECASE)
         offenders = []
-        for fn in os.listdir(here):
+        for fn in os.listdir(here_runtime):
             if not fn.endswith(".py") or fn.startswith("test_"):
                 continue
-            path = os.path.join(here, fn)
+            path = os.path.join(here_runtime, fn)
             with open(path, encoding="utf-8") as f:
                 for i, line in enumerate(f, 1):
                     if pat.search(line):
