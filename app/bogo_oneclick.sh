@@ -72,7 +72,25 @@ PY
 }
 
 # ── 포트를 LISTEN 중인 PID 목록(루프백 한정 판단은 호출부에서) ──────────
-pids_on_port() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u; }
+# WHY  macOS 는 lsof 가 기본 존재하지만, 슬림/컨테이너 리눅스(데비안 slim, alpine,
+#   최소 설치 등)에는 lsof 가 없을 수 있다. 그 환경에서도 포트 PID 탐지가 동작하도록
+#   lsof → ss(iproute2) → fuser(psmisc) 순으로 폴백한다. 어느 경로든 출력은
+#   "줄당 PID 하나, 정렬·중복제거" 형식으로 동일하게 정규화한다.
+pids_on_port() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    # macOS 기본 경로(기존 동작 유지). LISTEN 소켓의 PID 만 추출.
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u
+  elif command -v ss >/dev/null 2>&1; then
+    # iproute2. -p 로 프로세스 정보 포함. users:(("proc",pid=1234,fd=5)) 에서 pid 추출.
+    ss -ltnpH "( sport = :$port )" 2>/dev/null \
+      | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+  elif command -v fuser >/dev/null 2>&1; then
+    # psmisc. TCP 포트를 점유한 PID 를 공백 구분으로 stderr/stdout 에 출력 → 줄당 하나로 정규화.
+    fuser -n tcp "$port" 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u
+  fi
+  # 셋 다 없으면 빈 출력(호출부는 빈 결과를 "탐지 도구 없음/미점유"로 안전 처리).
+}
 
 # ════════════════════════════════════════════════════════════════════════
 # 1) venv·의존성 점검

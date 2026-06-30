@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BOGO 시작
+Name[en]=Start BOGO
+Comment=BOGO 통신 백본·에이전트 봇·CEO 대시보드를 한 번에 기동/설치합니다
+Comment[en]=Install and start the BOGO backbone, agent bots, and CEO dashboard
+# WHY  더블클릭 진입점. Exec 는 절대경로를 박지 않는다(설치 위치가 PC마다 다름).
+#   대신 같은 폴더의 start_linux.sh 를 상대 실행한다. Terminal=true 로 설치 로그를
+#   사용자가 보며 진행 상황·블로커를 확인할 수 있게 한다.
+# 사용법(최초 1회): 이 .desktop 파일과 start_linux.sh 가 app 디렉토리 안에 함께 있어야 한다.
+#   파일 관리자에서 더블클릭 → "신뢰함/실행 허용" 1회 → 터미널 창에서 설치 진행.
+#   일부 데스크톱 환경은 .desktop 우클릭 후 "Allow Launching" 을 먼저 켜야 한다.
+Exec=bash -c 'cd "$(dirname "$(readlink -f "%k")")" && ./start_linux.sh; echo; echo "[BOGO] 종료하려면 Enter 를 누르세요."; read _'
+Terminal=true
+Categories=Utility;Development;
