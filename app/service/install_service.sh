@@ -22,6 +22,12 @@ ROLES=(orchestrator hr dev admin)
 # CEO 대시보드 리슨 포트(루프백 전용). 환경변수로 덮어쓰기 가능, 기본 8642.
 DASH_PORT="${BOGO_DASHBOARD_PORT:-8642}"
 
+# 자동 데이터 백업 주기(초)·보관 개수. 봇 운영 중 주기적으로 폴더 안에 최신 백업을 쌓아
+# '백업 더블클릭' 단계를 없앤다(폴더 복사 시 백업 동반 → 새 PC 시작 1번에 자동 복원).
+# 기본 6시간·3개 보관(최대 18시간 이력). 환경변수로 조정 가능.
+BACKUP_INTERVAL="${BOGO_BACKUP_INTERVAL:-21600}"
+BACKUP_RETAIN="${BOGO_BACKUP_RETAIN:-3}"
+
 # Repo root = app/ (this script lives in app/service/).
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SELF/.." && pwd)"
@@ -119,6 +125,21 @@ mac_bootstrap_safe() {
   fi
 }
 
+# 자동 데이터 백업 LaunchAgent 등록(멱등). 봇 운영 중 BACKUP_INTERVAL 마다 read-only pg_dump +
+# MM 볼륨 백업을 '원본 repo' 의 migration/ 에 쌓는다(__REPO__ = 폴더 복사 대상). 사람이 백업을
+# 누를 필요가 없어진다 — 폴더만 새 PC 로 복사하면 최신 백업이 동반된다.
+mac_install_backup_agent() {
+  local plist="$mac_la/com.bogo.backup.plist"
+  sed -e "s#__APP__#$mac_app#g" \
+      -e "s#__REPO__#$REPO#g" \
+      -e "s#__LOGS__#$mac_logs#g" \
+      -e "s#__INTERVAL__#$BACKUP_INTERVAL#g" \
+      -e "s#__RETAIN__#$BACKUP_RETAIN#g" \
+      "$TPL/com.bogo.backup.plist.template" > "$plist"
+  mac_bootstrap_safe "com.bogo.backup" "$plist"
+  say "등록+기동: com.bogo.backup (${BACKUP_INTERVAL}s 마다 자동 백업 → $REPO/migration)"
+}
+
 mac_install() {
   # Place an ASCII-path launcher that launchd calls (run_role.sh from the mirror).
   mkdir -p "${HOME}/.bogo-bin" "$mac_la"
@@ -153,6 +174,8 @@ mac_install() {
       "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
   mac_bootstrap_safe "com.bogo.dashboard" "$dplist"
   say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
+  # 자동 데이터 백업 잡 등록(봇 운영 중 폴더 안에 최신 백업 누적 → 무인 이전 완성).
+  mac_install_backup_agent
   say "macOS launchd 설치 완료. 상태:  ./service/install_service.sh status"
 }
 
@@ -181,6 +204,10 @@ mac_uninstall() {
   launchctl bootout "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1 || true
   rm -f "$mac_la/com.bogo.dashboard.plist"
   say "해제: com.bogo.dashboard"
+  # 자동 데이터 백업 LaunchAgent 해제(이미 떠낸 백업 산출물은 보존 — 데이터 이전용).
+  launchctl bootout "gui/$uid/com.bogo.backup" >/dev/null 2>&1 || true
+  rm -f "$mac_la/com.bogo.backup.plist"
+  say "해제: com.bogo.backup"
   # Colima 부팅 자동시작 LaunchAgent 도 함께 해제(콜리마 VM 자체는 건드리지 않음).
   launchctl bootout "gui/$uid/com.bogo.colima" >/dev/null 2>&1 || true
   rm -f "$mac_la/com.bogo.colima.plist"
@@ -213,6 +240,8 @@ mac_restart() {
     mac_bootstrap_safe "com.bogo.dashboard" "$dplist"
     say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
   fi
+  # 자동 백업 잡 (재)등록(멱등) — 구버전에서 올라온 환경에도 백업 잡을 보장한다.
+  mac_install_backup_agent
 }
 
 # 미러 동기화 드리프트 감지: 원본(REPO)과 ASCII 미러(mac_app)의 핵심 코드 파일이
