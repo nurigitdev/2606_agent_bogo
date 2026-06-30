@@ -215,7 +215,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 
 - 가동 상태는 `Get-ScheduledTask -TaskName "BOGO_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.bogo` 등가).
 - PowerShell 7(`pwsh`)이 있으면 그것을, 없으면 Windows 기본 `powershell` 5.1 을 자동으로 사용한다.
-- 처음이라면 `python.org 3.12`(설치 시 "Add to PATH" 체크) 설치 후 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
+- 처음이라면 `python.org`에서 Python 3.12 이상(설치 시 "Add to PATH" 체크)을 설치한 뒤 더블클릭하면 부트스트랩이 venv 부터 자동 구성한다.
 
 ## 가장 쉬운 시작 — 더블클릭/아이콘 (Linux)
 
@@ -354,9 +354,9 @@ pwsh ./bogo_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Schedul
 pwsh ./bogo_ctl.ps1 restart
 ```
 
-> **Python 3.12 필수**(3.14는 일부 wheel 미제공). 없으면 부트스트랩이 설치 안내 후 멈춘다.
-> mac: `brew install python@3.12` · Ubuntu: `sudo apt install python3.12 python3.12-venv`
-> Windows: [python.org 3.12](https://www.python.org/downloads/release/python-3120/) (설치 시 "Add to PATH" 체크)
+> **Python 3.12 이상 필수**(하한 3.12, 가능하면 최신 버전 자동 선택). 없으면 부트스트랩이 설치 안내 후 멈춘다.
+> mac: `brew install python@3.12`(또는 그 이상) · Ubuntu: `sudo apt install python3.12 python3.12-venv`(또는 그 이상)
+> Windows: [python.org](https://www.python.org/downloads/) 최신 버전 (설치 시 "Add to PATH" 체크)
 
 ### 시크릿은 커밋되지 않는다 (부트스트랩이 복사)
 
@@ -408,17 +408,17 @@ Linux 로그: `journalctl --user -u bogo@orchestrator -f`. Windows: 작업 스�
 
 ### NVIDIA DGX Spark / Ubuntu ARM64 상시 가동 (최종 사내 운영 타깃)
 
-최종 운영 환경은 **NVIDIA DGX Spark**(DGX OS = Ubuntu 24.04, **ARM64/aarch64**, Python 3.12)다.
+최종 운영 환경은 **NVIDIA DGX Spark**(DGX OS = Ubuntu 24.04, **ARM64/aarch64**, Python 3.12 이상)다.
 이 저장소는 ARM64에서 **추가 빌드 도구 없이 `pip install` 만으로** 동작한다 — 근거:
 
-- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처와 무관하게 설치된다(요구: Python ≥3.11, <3.14, requirements.txt 참조).
-- `websockets` 는 `manylinux_2_17_aarch64` + `cp312` 휠을 제공해 ARM64 Python 3.12 에서 바로 설치된다.
+- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처·파이썬 버전과 무관하게 설치된다(요구: Python ≥3.12, requirements.txt 참조).
+- `websockets` 는 `manylinux_2_17_aarch64` + `cp312` 이상 휠을 제공해 ARM64 Python 3.12 이상에서 바로 설치된다.
 - 따라서 DGX Spark 에서도 컴파일러·헤더 없이 `bootstrap.sh` 가 venv 를 만들고 의존성을 그대로 받는다.
 
 설치·상시 가동 절차(Ubuntu ARM64):
 
 ```bash
-# ① Python 3.12 + venv 모듈 (DGX OS 기본이 아닐 경우)
+# ① Python 3.12 이상 + venv 모듈 (DGX OS 기본이 아닐 경우 — 더 최신이면 그 버전 사용)
 sudo apt update
 sudo apt install -y python3.12 python3.12-venv
 

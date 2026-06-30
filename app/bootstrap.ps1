@@ -1,6 +1,6 @@
 # BOGO cross-platform bootstrap (Windows / PowerShell).
 #
-# From a fresh git clone or copy: locates Python 3.12, (re)creates a PORTABLE .venv,
+# From a fresh git clone or copy: locates Python >= 3.12 (newest preferred), (re)creates a PORTABLE .venv,
 # installs requirements.txt, copies *.example -> real config only when missing.
 # Idempotent + Hangul-path safe (paths resolved from script location, UTF-8).
 #
@@ -14,28 +14,48 @@ Set-Location $Here
 function Say($m) { Write-Host "[bootstrap] $m" -ForegroundColor Cyan }
 function Die($m) { Write-Host "[bootstrap:오류] $m" -ForegroundColor Red; exit 1 }
 
-# ── 1. Python 3.12 탐지 ──────────────────────────────────────────────
-function Find-Py312 {
-  # 1) py launcher
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    $v = (& py -3.12 -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
-    if ($v -eq "3.12") { return @("py", "-3.12") }
-  }
-  # 2) python on PATH
-  foreach ($c in @("python3.12", "python", "python3")) {
-    if (Get-Command $c -ErrorAction SilentlyContinue) {
-      $v = (& $c -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
-      if ($v -eq "3.12") { return @($c) }
-    }
-  }
+# ── 1. Python >=3.12 탐지 ────────────────────────────────────────────
+# 3.12 이상이면 채택하되 후보 중 가장 최신 버전을 우선 선택한다(3.12 미만만 거부).
+function Test-PyOk($exe, $verArgs) {
+  # returns "<major>.<minor>" if >= 3.12 else $null
+  $v = (& $exe @verArgs -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
+  if (-not $v) { return $null }
+  $parts = $v.Split('.')
+  if ([int]$parts[0] -gt 3 -or ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 12)) { return $v }
   return $null
 }
 
-$Py = Find-Py312
-if (-not $Py) {
-  Die "Python 3.12 를 찾지 못했습니다. https://www.python.org/downloads/release/python-3120/ 에서 설치(설치 시 'Add to PATH' 체크) 후 다시 실행하세요."
+function Find-Py {
+  $best = $null      # array form of the chosen invocation (e.g. @("py","-3.13"))
+  $bestVer = $null   # "<major>.<minor>" string of the chosen interpreter
+
+  # 1) py launcher: newest-first explicit versions
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    foreach ($pv in @("-3.14", "-3.13", "-3.12")) {
+      $ver = Test-PyOk "py" @($pv)
+      if ($ver -and (-not $bestVer -or ([version]$ver -gt [version]$bestVer))) {
+        $best = @("py", $pv); $bestVer = $ver
+      }
+    }
+  }
+  # 2) python on PATH: newest-first explicit names then generic
+  foreach ($c in @("python3.14", "python3.13", "python3.12", "python3", "python")) {
+    if (Get-Command $c -ErrorAction SilentlyContinue) {
+      $ver = Test-PyOk $c @()
+      if ($ver -and (-not $bestVer -or ([version]$ver -gt [version]$bestVer))) {
+        $best = @($c); $bestVer = $ver
+      }
+    }
+  }
+  return $best
 }
-Say "Python 3.12 사용: $($Py -join ' ')"
+
+$Py = Find-Py
+if (-not $Py) {
+  Die "Python 3.12 이상을 찾지 못했습니다. https://www.python.org/downloads/ 에서 최신 버전 설치(설치 시 'Add to PATH' 체크) 후 다시 실행하세요."
+}
+$PyVerShown = (& $Py[0] @($Py[1..($Py.Length-1)]) -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>$null)
+Say "Python $PyVerShown 사용: $($Py -join ' ')"
 
 # ── 2. 휴대용 venv (재)생성 ──────────────────────────────────────────
 $Venv = Join-Path $Here ".venv"

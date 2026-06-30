@@ -106,7 +106,7 @@ step_venv() {
   if [ ! -x "$VENV_PY" ]; then
     warn ".venv 없음 → bootstrap.sh 실행(수 분 소요 가능)"
     if ! "$HERE/bootstrap.sh"; then
-      err "bootstrap 실패. Python 3.12 설치 여부 확인: brew install python@3.12"
+      err "bootstrap 실패. Python 3.12 이상 설치 여부 확인: brew install python@3.12 (또는 그 이상 버전)"
       return 1
     fi
   fi
