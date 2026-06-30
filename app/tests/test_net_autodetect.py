@@ -282,6 +282,83 @@ class EnvUpsertTest(unittest.TestCase):
             self.assertNotIn("0.0.0.0", txt)  # 0.0.0.0 자동 주입 안 됨
 
 
+class IpForwardParseTest(unittest.TestCase):
+    """parse_ip_forward — sysctl/procfs 출력 → forwarding 활성 여부(순수 함수)."""
+
+    def test_sysctl_format_on(self):
+        self.assertIs(N.parse_ip_forward("net.ipv4.ip_forward = 1"), True)
+
+    def test_sysctl_format_off(self):
+        self.assertIs(N.parse_ip_forward("net.ipv4.ip_forward = 0"), False)
+
+    def test_sysctl_no_spaces(self):
+        self.assertIs(N.parse_ip_forward("net.ipv4.ip_forward=1"), True)
+        self.assertIs(N.parse_ip_forward("net.ipv4.ip_forward=0"), False)
+
+    def test_procfs_bare_value(self):
+        # cat /proc/sys/net/ipv4/ip_forward → "1" 또는 "0"
+        self.assertIs(N.parse_ip_forward("1\n"), True)
+        self.assertIs(N.parse_ip_forward("0\n"), False)
+
+    def test_unreadable_returns_none(self):
+        for bad in ("", "   ", "net.ipv4.ip_forward =", "abc", "net.ipv4.ip_forward = 2"):
+            self.assertIsNone(N.parse_ip_forward(bad), f"{bad!r} → None 이어야 함")
+
+
+class SegregationAssessTest(unittest.TestCase):
+    """assess_segregation — 멀티홈에서만 forwarding 위험 판정(자동화의 두뇌)."""
+
+    def test_multihome_forwarding_on_is_danger(self):
+        a = N.assess_segregation("multihome", True)
+        self.assertTrue(a["applies"])
+        self.assertEqual(a["risk"], "danger")
+        self.assertIn("라우터", a["message"])
+
+    def test_multihome_forwarding_off_is_ok(self):
+        a = N.assess_segregation("multihome", False)
+        self.assertTrue(a["applies"])
+        self.assertEqual(a["risk"], "ok")
+
+    def test_multihome_unknown_when_value_missing(self):
+        a = N.assess_segregation("multihome", None)
+        self.assertTrue(a["applies"])
+        self.assertEqual(a["risk"], "unknown")
+
+    def test_non_multihome_modes_not_applicable(self):
+        # 단일망/루프백/가드는 NIC ≤ 1 이라 망간 전달이 성립하지 않음 → 비적용.
+        for mode in ("lan", "loopback", "guard"):
+            for ipf in (True, False, None):
+                a = N.assess_segregation(mode, ipf)
+                self.assertFalse(a["applies"], f"{mode}/{ipf} 는 비적용이어야 함")
+                self.assertEqual(a["risk"], "n/a")
+
+    def test_lan_with_forwarding_on_is_still_na_not_danger(self):
+        # 회귀 가드: 단일망에서 forwarding=1 이어도 danger 로 잘못 올리면 안 된다
+        # (NIC 1개라 전달할 다른 망이 없음 — 기존 LAN/단일 PC 동작에 경고 노이즈 0).
+        a = N.assess_segregation("lan", True)
+        self.assertEqual(a["risk"], "n/a")
+
+
+class SegregationCommandsTest(unittest.TestCase):
+    """segregation_commands — 문서·런처가 공유하는 단일 진실원."""
+
+    def test_commands_contain_forwarding_and_forward_chain(self):
+        c = N.segregation_commands()
+        joined = " ".join(sum(c.values(), []))
+        # 핵심 두 조치가 명령 집합에 존재해야 한다.
+        self.assertIn("net.ipv4.ip_forward=0", joined)
+        self.assertIn("FORWARD DROP", joined)
+        # 점검 명령(읽기 전용)도 존재.
+        self.assertIn("net.ipv4.ip_forward", " ".join(c["check_forward"]))
+        self.assertIn("FORWARD", " ".join(c["check_policy"]))
+
+    def test_fix_forward_includes_runtime_and_persist(self):
+        # 런타임 즉시(sysctl -w) + 재부팅 영구화(drop-in) 둘 다 포함.
+        fix = " ".join(N.segregation_commands()["fix_forward"])
+        self.assertIn("sysctl -w net.ipv4.ip_forward=0", fix)
+        self.assertIn("/etc/sysctl.d/99-bogo-no-forward.conf", fix)
+
+
 class SummaryTest(unittest.TestCase):
     def test_multihome_summary_lists_each_net(self):
         d = N.decide_mode(N.classify_interfaces(N.parse_ip_o_output(SAMPLE_MULTIHOME)))

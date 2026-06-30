@@ -209,6 +209,72 @@ sudo ufw enable
 > 인터넷 향을 완전 차단하려면 `.env` 에 `LLM_BACKEND=local`(로컬 LLM)로 두어
 > 외부 호출 0 으로 운영한다(mm_client 의 LLM 백엔드 스위치).
 
+### 1-7. 멀티홈 망분리 유지 — 서버가 A↔B↔C 를 잇는 라우터가 되지 않게 (핵심)
+
+> **왜 필요한가(한 줄):** A·B·C 는 **서로 다른 회사의 망**이라 원래 물리적으로
+> 분리돼야 한다. 멀티홈 서버는 그 3개 망에 동시에 직결돼 있으므로, 커널의 IP
+> 포워딩이 켜져 있으면 서버가 NIC 간 패킷을 전달하는 **라우터/다리**가 되어 A망
+> 직원이 서버를 경유해 C망에 도달할 수 있다 — 이것이 곧 **망분리 무력화**다.
+
+1-6 의 방화벽은 "각 망 → 서버 **엔드포인트**(8065/8642)" 접속만 다룬다. 망분리를
+지키려면 그것과 **별개로**, 서버를 거쳐 한 망에서 다른 망으로 **통과(FORWARD)**하는
+경로를 차단해야 한다. 두 가지를 함께 강제한다:
+
+1. **IP 포워딩 끄기** — 서버가 라우터가 되지 않게(런타임 즉시 + 재부팅 영구):
+   ```bash
+   # 런타임 즉시 차단
+   sudo sysctl -w net.ipv4.ip_forward=0
+   # 재부팅에도 유지(drop-in 파일 — 멱등)
+   echo 'net.ipv4.ip_forward=0' | sudo tee /etc/sysctl.d/99-bogo-no-forward.conf
+   sudo sysctl --system
+   # 확인: 0 이어야 한다
+   sysctl -n net.ipv4.ip_forward
+   ```
+2. **FORWARD 체인 기본정책 DROP** — 포워딩이 어떤 이유로 켜지더라도(다른 패키지·
+   재부팅 경합 등) 망간 전달을 한 번 더 막는 이중 가드:
+   ```bash
+   sudo iptables -P FORWARD DROP      # 서버 경유 A↔B↔C 전달 차단
+   sudo iptables -F FORWARD           # 기존 FORWARD 규칙 비우기
+   # 확인: "Chain FORWARD (policy DROP)" 이어야 한다
+   sudo iptables -L FORWARD -n | head -1
+   ```
+   > `INPUT`/`OUTPUT` 은 건드리지 않으므로 **각 망 → 서버 엔드포인트**(1-6 의
+   > ufw 8065/8642 허용)는 그대로 동작한다. 막는 것은 오직 **서버를 통과하는
+   > 망간(NIC↔NIC) 전달**뿐이다.
+
+> **원클릭 런처의 자동 점검(멀티홈 모드 한정):** `./bogo_oneclick.sh start` 의
+> `[2.6/5] 멀티홈 망분리 가드` 단계가 멀티홈으로 판정된 경우에만 `net.ipv4.ip_forward`
+> 현재값을 점검한다. `1`(위험)이면 `sudo -n`(비밀번호 프롬프트 없는 권한)이 이미
+> 있을 때만 자동으로 `0` + `FORWARD DROP` 을 적용하고, 권한이 없으면 **강제하지
+> 않고 위 명령을 복붙용으로 출력**한다(시스템을 운영자 동의 없이 바꾸지 않으며,
+> 실패해도 기동을 막지 않는다). 단일망 LAN·루프백 모드는 NIC 가 1개 이하라 망간
+> 전달이 성립하지 않으므로 이 단계를 건너뛴다.
+>
+> **운영자 수동 경계(정직한 표시):** 무인 서버에서 런처는 비대화식 권한이 없으면
+> forwarding 을 **자동으로 끄지 못한다**(비밀번호 프롬프트를 띄워 기동을 막지
+> 않기 위함). 그 경우 망분리 최종 보장은 **운영자가 위 명령을 1회 관리자 권한으로
+> 실행**해야 완성된다. 영구화(`/etc/sysctl.d`·`iptables-persistent`)도 운영자
+> 책임이다. 런처는 점검·경고·자동 적용(권한 있을 때)까지만 보장한다.
+
+### 1-8. 단일 침해지점 대비 서버 하드닝 (최소 체크리스트)
+
+멀티홈 서버는 3개 회사망이 만나는 **유일한 지점**이라, 이 서버가 뚫리면 3개 망이
+함께 위험하다. 공격 표면을 최소로 줄인다:
+
+| 항목 | 명령/조치 | 이유 |
+|------|----------|------|
+| OS 보안 패치 | `sudo apt update && sudo apt upgrade -y` (주기 적용) | 알려진 취약점 제거 |
+| 포트 최소화 | 1-6 ufw 로 **8065/8642 만** 사내 사설대역에 허용, 그 외 전부 deny | 불필요 포트 노출 0 |
+| SSH 접근 제한 | 관리망(예: A망)에서만 22 허용 — `sudo ufw allow from 10.0.0.0/24 to any port 22 proto tcp`; 비밀번호 로그인 끄고 키 인증만(`PasswordAuthentication no`) | 서버 탈취 경로 차단 |
+| 불필요 서비스 off | `systemctl list-unit-files --state=enabled` 검토 후 미사용 데몬 `disable` | 공격 표면 축소 |
+| 포워딩 차단 | 1-7 (net.ipv4.ip_forward=0 + FORWARD DROP) | 망분리 유지(핵심) |
+| 시크릿 보호 | `.env`·`employees.json` 은 커밋 금지(`.gitignore` 처리됨), 파일 권한 `chmod 600` | 자격증명 유출 방지 |
+| 대시보드 인증 | ceo_auth 로그인 게이트(이미 적용) 유지 | 사설 IP 라도 무인증 노출 0 |
+
+> 위 항목 중 **OS 패치·SSH 제한·불필요 서비스 off** 는 런처가 자동화하지 않는다
+> (시스템 정책 영역이라 운영자 판단이 필요). 런처가 보장하는 것은 바인딩 안전
+> (루프백 기본·멀티홈만 0.0.0.0)·forwarding 점검·대시보드 인증 게이트까지다.
+
 ---
 
 ## 2. 대안: Tailscale 메시 VPN (방화벽·포트포워딩 없이 사내 전용 연결)
@@ -369,6 +435,11 @@ docker compose down && docker compose up -d      # MM_BIND_HOST/MM_SITE_URL 반�
   `channels.json` 은 `.gitignore` 로 차단되고, git 에는 `*.example` 만 추적된다.
 - **기본값은 항상 안전하다.** 환경변수를 하나도 설정하지 않으면 전부 `127.0.0.1`
   루프백 전용으로 떨어진다 — 잘못 설정해도 외부로 새지 않는 게 기본 동작이다.
+- **멀티홈 서버는 망간 라우터가 되지 않는다(망분리 유지).** A·B·C 는 서로 다른
+  회사망이므로, 멀티홈 모드에서는 `net.ipv4.ip_forward=0` + iptables `FORWARD`
+  기본정책 `DROP` 으로 서버를 경유한 망간(NIC↔NIC) 전달을 차단한다(1-7 참고).
+  런처가 멀티홈에서 점검·경고하고 권한이 있으면 자동 적용하되, 무권한 무인 서버는
+  운영자가 1회 수동 적용해야 최종 보장된다(코드로 강제 못 하는 경계).
 
 ---
 
@@ -386,6 +457,9 @@ docker compose down && docker compose up -d      # MM_BIND_HOST/MM_SITE_URL 반�
 | 대시보드 | 대표 브라우저 `http://<자기망 NIC IP>:8642` | 로그인 후 현황 카드 |
 | 봇 경로(로컬) | 중앙 서버에서 `curl http://127.0.0.1:8065/api/v4/system/ping` | `{"status":"OK"}` (봇은 이 경로) |
 | 외부 차단 확인 | 사내 3개 망 **밖**(인터넷)에서 서버로 접속 시도 | 도달 경로 없음(공인 NIC 부재) |
+| **망분리: 포워딩 꺼짐** | 중앙 서버에서 `sysctl -n net.ipv4.ip_forward` | `0` (서버가 라우터 아님 — 1-7) |
+| **망분리: FORWARD 차단** | 중앙 서버에서 `sudo iptables -L FORWARD -n \| head -1` | `Chain FORWARD (policy DROP)` |
+| **망간 격리 실증** | A망 PC 에서 C망 호스트로 `ping`/`curl` 시도(서버 경유 가정) | 도달 실패(망분리 유지) |
 
 연결이 안 되면: ① 중앙 서버 `.env` 에 `BOGO_MULTIHOME=1` + `MM_BIND_HOST=0.0.0.0`
 이 있는지, ② `docker compose down && up -d` 재기동으로 바인딩·SiteURL·CORS 가

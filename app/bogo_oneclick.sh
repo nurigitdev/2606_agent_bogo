@@ -178,6 +178,71 @@ step_netdetect() {
 }
 
 # ════════════════════════════════════════════════════════════════════════
+# 2.6) 멀티홈 망분리 가드 (서버가 A↔B↔C 회사망을 잇는 라우터가 되지 않게)
+# ════════════════════════════════════════════════════════════════════════
+#  WHY  멀티홈 중앙 서버는 NIC 3장으로 '서로 다른 회사망' A/B/C 에 직결돼 있다.
+#    커널 net.ipv4.ip_forward=1 이면 서버가 NIC 간 패킷을 전달하는 '라우터/다리'가
+#    되어, 물리적으로 분리돼야 할 3개 회사망이 서버를 경유해 서로 도달 가능해진다
+#    (망분리 무력화 — 다른 회사 간 트래픽이라 심각). 그래서 멀티홈 모드에서는
+#    ① net.ipv4.ip_forward=0 ② iptables FORWARD 기본정책 DROP 을 강제해야 한다.
+#  설계  멱등·기동 비차단. forwarding 이 켜져 있으면 sudo 비대화식으로 끄기를 시도하되
+#    (sudo -n: 비밀번호 프롬프트 없이만), 권한이 없거나 실패하면 강제하지 않고 경고 +
+#    복붙 명령만 낸다(시스템을 운영자 동의 없이 강제 변경하지 않는다). 멀티홈이 아닌
+#    모드(NIC ≤ 1)는 망간 전달이 성립하지 않으므로 이 단계를 통째로 건너뛴다.
+step_netseg() {
+  # 멀티홈일 때만 의미가 있다(단일망 LAN/루프백/가드 모드는 비적용).
+  [ "$DETECTED_MODE" = "multihome" ] || return 0
+  [ -f "$HERE/net_autodetect.py" ] || return 0
+
+  say "[2.6/5] 멀티홈 망분리 가드(서버가 A↔B↔C 라우터가 되지 않게 점검)..."
+
+  # 망분리 진단 JSON 을 순수 함수(net_autodetect.assess_segregation)에서 얻는다.
+  local seg_json risk ipf
+  seg_json="$("$VENV_PY" "$HERE/net_autodetect.py" segregation 2>/dev/null)"
+  risk="$(printf '%s' "$seg_json" | "$VENV_PY" -c \
+    'import sys,json; print(json.load(sys.stdin)["assessment"]["risk"])' 2>/dev/null || echo unknown)"
+  ipf="$(printf '%s' "$seg_json" | "$VENV_PY" -c \
+    'import sys,json; v=json.load(sys.stdin)["ip_forward"]; print("" if v is None else ("1" if v else "0"))' 2>/dev/null || echo "")"
+
+  case "$risk" in
+    ok)
+      ok "IP forwarding 꺼짐(0) — 서버가 라우터가 아님(망분리 유지)." ;;
+    danger)
+      warn "IP forwarding 이 켜져 있음(1) → 서버가 A↔B↔C 회사망을 잇는 라우터가 됨(망분리 무력화)."
+      # sudo 비대화식(-n)으로만 안전하게 끄기 시도. 권한 없으면 강제하지 않고 안내.
+      if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        if sudo -n sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1; then
+          # 재부팅 영구화(drop-in). 실패해도 런타임 차단은 이미 적용됨.
+          echo 'net.ipv4.ip_forward=0' | sudo -n tee /etc/sysctl.d/99-bogo-no-forward.conf >/dev/null 2>&1 || true
+          sudo -n iptables -P FORWARD DROP >/dev/null 2>&1 || true
+          sudo -n iptables -F FORWARD >/dev/null 2>&1 || true
+          ok "IP forwarding 차단 적용(net.ipv4.ip_forward=0 + FORWARD DROP). 망분리 복구됨."
+        else
+          warn "forwarding 자동 차단 실패 — 아래 명령을 관리자 권한으로 직접 실행하세요(기동은 계속):"
+          _netseg_print_fix
+        fi
+      else
+        warn "sudo 무권한(또는 부재) — 자동 차단을 강제하지 않습니다. 아래 명령을 관리자 권한으로 실행하세요(기동은 계속):"
+        _netseg_print_fix
+      fi
+      ;;
+    *)
+      warn "IP forwarding 값을 확정하지 못함(값='${ipf:-?}'). 관리자 권한으로 아래를 점검하세요(기동은 계속):"
+      _netseg_print_fix
+      ;;
+  esac
+}
+
+# 망분리 복구 명령을 운영자가 복붙할 수 있게 출력(net_autodetect.segregation_commands 와 동일).
+_netseg_print_fix() {
+  printf '    %ssudo sysctl -w net.ipv4.ip_forward=0%s\n' "$C_WARN" "$C_RST" >&2
+  printf '    %secho '\''net.ipv4.ip_forward=0'\'' | sudo tee /etc/sysctl.d/99-bogo-no-forward.conf%s\n' "$C_WARN" "$C_RST" >&2
+  printf '    %ssudo sysctl --system%s\n' "$C_WARN" "$C_RST" >&2
+  printf '    %ssudo iptables -P FORWARD DROP && sudo iptables -F FORWARD%s\n' "$C_WARN" "$C_RST" >&2
+  printf '    %s(상세 근거·영구화는 docs/DEPLOY_NETWORK.md 1-7 멀티홈 망분리 유지 참고)%s\n' "$C_INFO" "$C_RST" >&2
+}
+
+# ════════════════════════════════════════════════════════════════════════
 # 3) Mattermost 통신 백본
 # ════════════════════════════════════════════════════════════════════════
 step_infra() {
@@ -393,6 +458,9 @@ do_start() {
   # 네트워크 자동 감지 → .env 주입. 인프라(docker compose)·대시보드가 .env 를 읽기
   # '전에' 실행해야 새 바인딩이 반영된다. 실패해도 기존 .env 로 계속(경고만).
   step_netdetect                                 # 실패해도 진행(경고만)
+  # 멀티홈으로 판정됐으면 서버가 망간 라우터가 되지 않도록 IP forwarding 차단을 점검·적용.
+  # 비멀티홈은 내부에서 즉시 통과. 실패해도 기동을 막지 않는다(경고 + 복붙 명령만).
+  step_netseg                                    # 실패해도 진행(경고만)
   local infra_rc
   step_infra; infra_rc=$?
   if [ "$infra_rc" -eq 2 ]; then

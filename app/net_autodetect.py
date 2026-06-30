@@ -25,6 +25,7 @@ CLI
   python net_autodetect.py detect            # 감지 결과를 JSON 으로 출력(진단용)
   python net_autodetect.py summary           # 사람이 읽는 1회 요약(런처가 출력)
   python net_autodetect.py apply --env PATH  # .env 에 네트워크 키 멱등 주입
+  python net_autodetect.py segregation       # 멀티홈 망분리(IP forwarding) 가드 진단 JSON
 """
 from __future__ import annotations
 
@@ -282,6 +283,111 @@ def detect() -> dict:
     return decide_mode(classify_interfaces(_read_iface_ips()))
 
 
+# ── 멀티홈 망분리 가드 (서버가 망간 라우터가 되지 않게) ───────────────────
+# WHY  멀티홈 중앙 서버는 NIC 3장으로 '서로 다른 회사망' A/B/C 에 직결돼 있다.
+#   리눅스 커널의 net.ipv4.ip_forward=1 이면 이 서버가 패킷을 NIC 간 전달하는
+#   '라우터/다리'가 되어, 원래 물리적으로 분리돼야 할 3개 회사망이 서버를 경유해
+#   서로 도달 가능해진다(망분리 무력화). 이는 다른 회사 간 트래픽이라 심각하다.
+#   따라서 멀티홈 모드에서는 ① net.ipv4.ip_forward=0 ② iptables FORWARD 기본정책
+#   DROP 두 가지를 함께 강제해야 서버가 단지 '엔드포인트'로만 동작한다.
+#   (단일망 LAN/루프백 모드는 NIC 가 1개 이하라 망간 전달 자체가 성립하지 않으므로
+#    이 가드는 멀티홈 모드에서만 의미가 있다 — decide_mode 의 mode 와 연동.)
+
+
+def parse_ip_forward(text: str) -> bool | None:
+    """`sysctl net.ipv4.ip_forward` 또는 procfs 출력 → forwarding 활성 여부.
+
+    순수 함수(테스트 대상). 반환:
+      - True : forwarding 켜짐(1) — 망간 전달 위험(멀티홈에서 차단 필요)
+      - False: forwarding 꺼짐(0) — 안전
+      - None : 값을 읽을 수 없음(키 부재/빈 출력 등 — 판정 불가)
+
+    허용 입력 형태:
+      "net.ipv4.ip_forward = 1"  (sysctl)
+      "net.ipv4.ip_forward=0"     (sysctl, 공백 없음)
+      "1"                          (cat /proc/sys/net/ipv4/ip_forward)
+    """
+    s = text.strip()
+    if not s:
+        return None
+    # sysctl 형식이면 '=' 우변만 취한다. 아니면 전체를 값으로 본다.
+    val = s.split("=", 1)[1].strip() if "=" in s else s
+    # 첫 토큰만(여러 줄/잡음 방지).
+    val = val.split()[0] if val.split() else ""
+    if val == "1":
+        return True
+    if val == "0":
+        return False
+    return None
+
+
+def segregation_commands() -> dict[str, list[str]]:
+    """멀티홈 망분리 유지를 위한 점검·복구 명령 집합(순수 함수, 단일 진실원).
+
+    문서(DEPLOY_NETWORK.md)·런처(bogo_oneclick.sh)가 같은 명령을 쓰도록 한 곳에서
+    정의한다(문서와 코드가 어긋나지 않게 — 단일 진실원).
+
+    반환 dict:
+      - "check_forward":  forwarding 현재값 점검 명령(읽기 전용)
+      - "check_policy":   FORWARD 체인 기본정책 점검 명령(읽기 전용)
+      - "fix_forward":    forwarding 끄기(런타임 + 영구) — 관리자 권한 필요
+      - "fix_policy":     FORWARD 기본정책 DROP — 관리자 권한 필요
+    """
+    return {
+        "check_forward": ["sysctl -n net.ipv4.ip_forward"],
+        "check_policy": ["iptables -L FORWARD -n | head -1"],
+        # 런타임 즉시 반영 + 재부팅 영구화(둘 다). drop-in 파일로 멱등 기록.
+        "fix_forward": [
+            "sudo sysctl -w net.ipv4.ip_forward=0",
+            "echo 'net.ipv4.ip_forward=0' | sudo tee /etc/sysctl.d/99-bogo-no-forward.conf",
+            "sudo sysctl --system >/dev/null",
+        ],
+        # FORWARD 체인 자체를 DROP(서버 경유 A↔B↔C 전달 차단). INPUT/OUTPUT 은 건드리지
+        # 않으므로 각 망→서버 엔드포인트 접속(1-6 ufw)은 그대로 동작한다.
+        "fix_policy": [
+            "sudo iptables -P FORWARD DROP",
+            "sudo iptables -F FORWARD",
+        ],
+    }
+
+
+def assess_segregation(mode: str, ip_forward: bool | None) -> dict:
+    """모드 + forwarding 현재값 → 망분리 위험 판정(순수 함수, 자동화의 두뇌).
+
+    멀티홈 모드에서만 forwarding 이 위험하다(NIC ≥ 2 라야 망간 전달이 성립).
+    반환 dict:
+      - "applies": 이 가드가 적용되는 모드인가(멀티홈만 True)
+      - "risk":    "danger"(forwarding=1)|"ok"(=0)|"unknown"(판정불가)|"n/a"(비적용)
+      - "message": 운영자용 한국어 한 줄 설명
+    """
+    if mode != "multihome":
+        return {
+            "applies": False,
+            "risk": "n/a",
+            "message": "단일 NIC 이하 모드 — 망간 전달이 성립하지 않아 망분리 가드 비적용.",
+        }
+    if ip_forward is True:
+        return {
+            "applies": True,
+            "risk": "danger",
+            "message": (
+                "IP forwarding 이 켜져 있어 서버가 A↔B↔C 회사망을 잇는 라우터가 됨 "
+                "→ 망분리 무력화. 즉시 차단 필요."
+            ),
+        }
+    if ip_forward is False:
+        return {
+            "applies": True,
+            "risk": "ok",
+            "message": "IP forwarding 꺼짐(0) — 서버가 라우터가 아님(망분리 유지).",
+        }
+    return {
+        "applies": True,
+        "risk": "unknown",
+        "message": "IP forwarding 값을 읽지 못함 — 관리자 권한으로 수동 점검 권장.",
+    }
+
+
 # ── .env 멱등 upsert ─────────────────────────────────────────────────────
 # 네트워크 자동화가 소유하는 키. apply 는 '오직 이 키들만' 갱신하고, 그 외(비밀·
 # 수동 설정)는 한 글자도 건드리지 않는다.
@@ -436,6 +542,46 @@ def format_summary(decision: dict) -> str:
     return "\n".join(lines)
 
 
+def _read_ip_forward() -> bool | None:
+    """현재 호스트의 net.ipv4.ip_forward 를 읽는다(sysctl → procfs 폴백).
+
+    네트워크 호출이 아니라 로컬 커널 파라미터 조회다(파싱은 parse_ip_forward 가
+    순수 함수로 검증). 리눅스 외(macOS 등)에서는 키가 없어 None 을 반환한다.
+    """
+    if shutil.which("sysctl"):
+        try:
+            r = subprocess.run(
+                ["sysctl", "net.ipv4.ip_forward"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return parse_ip_forward(r.stdout)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        with open("/proc/sys/net/ipv4/ip_forward", encoding="utf-8") as f:
+            return parse_ip_forward(f.read())
+    except OSError:
+        return None
+
+
+def segregation_report() -> dict:
+    """멀티홈 망분리 가드 진단(감지 → forwarding 읽기 → 위험 판정 + 명령).
+
+    런처(bogo_oneclick.sh)의 멀티홈 부팅 시퀀스가 JSON 으로 소비한다.
+    """
+    decision = detect()
+    mode = decision["mode"]
+    ipf = _read_ip_forward()
+    assessment = assess_segregation(mode, ipf)
+    return {
+        "mode": mode,
+        "ip_forward": ipf,
+        "assessment": assessment,
+        "commands": segregation_commands(),
+    }
+
+
 def _main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "detect"
     if cmd == "detect":
@@ -443,6 +589,9 @@ def _main(argv: list[str]) -> int:
         return 0
     if cmd == "summary":
         print(format_summary(detect()))
+        return 0
+    if cmd == "segregation":
+        print(json.dumps(segregation_report(), ensure_ascii=False, indent=2))
         return 0
     if cmd == "apply":
         # --env PATH (필수), --example PATH (선택)
