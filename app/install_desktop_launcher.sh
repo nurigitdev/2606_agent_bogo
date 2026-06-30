@@ -2,7 +2,7 @@
 # ════════════════════════════════════════════════════════════════════════
 #  Linux GUI 런처 설치 (권장 진입점) — 자기치유형
 # ════════════════════════════════════════════════════════════════════════
-#  WHAT  'BOGO 시작.desktop.template' 의 __START_SH__ 를 실제 절대경로로 치환해
+#  WHAT  'launchers/BOGO 시작.desktop.template' 의 __START_SH__ 를 실제 절대경로로 치환해
 #    ~/.local/share/applications 에 .desktop 을 설치한다. 앱 메뉴/파일관리자에서
 #    'BOGO 시작' 아이콘 클릭으로 풀 코어(bogo_oneclick.sh start)를 띄울 수 있게 한다.
 #
@@ -18,8 +18,8 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"   # 프로젝트 루트(= app 의 부모)
-START_SH="$ROOT/BOGO 시작.sh"
-TPL="$ROOT/BOGO 시작.desktop.template"
+START_SH="$ROOT/launchers/BOGO 시작.sh"
+TPL="$ROOT/launchers/BOGO 시작.desktop.template"
 
 say() { printf '\033[0;36m[desktop]\033[0m %s\n' "$*"; }
 err() { printf '\033[0;31m[desktop:오류]\033[0m %s\n' "$*" >&2; }
@@ -37,7 +37,7 @@ heal_chmod() {
   local f
   for f in \
     "$START_SH" \
-    "$ROOT/BOGO 정지.sh" \
+    "$ROOT/launchers/BOGO 정지.sh" \
     "$HERE/start_linux.sh" \
     "$HERE/bogo_oneclick.sh" \
     "$HERE/bogo_ctl.sh" \

@@ -20,7 +20,7 @@ set -u
 # ── 자기 위치 = app 디렉토리 → 부모가 프로젝트 루트 ───────────────────────
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-START_SH="$ROOT/BOGO 시작.sh"   # 리눅스 단일 코어 진입점(풀 코어로 위임)
+START_SH="$ROOT/launchers/BOGO 시작.sh"   # 리눅스 단일 코어 진입점(풀 코어로 위임)
 
 if [ ! -f "$START_SH" ]; then
   echo "[start_linux] 오류: 루트 진입점을 찾을 수 없습니다: $START_SH" >&2

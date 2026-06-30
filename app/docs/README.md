@@ -191,6 +191,7 @@ BOGO_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 ## 가장 쉬운 시작 — 더블클릭 (macOS)
 
 터미널 타이핑이 귀찮으면 프로젝트 루트의 **`BOGO 시작.command`** 파일을 Finder에서 더블클릭한다.
+(파일 위치: `launchers/BOGO 시작.command` — 최상위에 더블클릭하면 자동으로 열림)
 
 - 아직 미설치면 → 자동으로 `setup`(venv+의존성+config+launchd 등록) 수행
 - 이미 상시 가동 중이면 → 중복 기동 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
@@ -202,6 +203,7 @@ BOGO_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 ## 가장 쉬운 시작 — 더블클릭 (Windows)
 
 mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을 탐색기에서 더블클릭한다.
+(파일 위치: `launchers/BOGO 시작.bat` — 최상위에 더블클릭하면 자동으로 열림)
 
 - 아직 미등록이면 → 자동으로 `setup`(venv+의존성+config+**Task Scheduler** 등록) 수행
 - 이미 상시 가동 등록돼 있으면 → 중복 등록 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
@@ -218,7 +220,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 ## 가장 쉬운 시작 — 더블클릭/아이콘 (Linux)
 
 리눅스 파일관리자는 macOS 의 `.command` 를 실행하지 못한다. 그래서 **단일 진입점**은
-프로젝트 루트의 **`BOGO 시작.sh`** 이다. 이 파일 하나가 macOS `.command` 와 **완전히 동일한
+`launchers/` 폴더의 **`BOGO 시작.sh`** 이다. 이 파일 하나가 macOS `.command` 와 **완전히 동일한
 풀 코어**(`app/bogo_oneclick.sh start`: venv→reindex→통신백본→**데이터 자동복원**→봇·대시보드
 상시가동 등록→대시보드 헬스체크)로 수렴한다. 즉 "폴더 복사 후 1번 실행"이면 데이터까지 따라온다.
 
@@ -235,7 +237,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
    (c)앱 메뉴 캐시 갱신(`update-desktop-database`)까지 해 준다. 이후 **앱 메뉴/파일관리자에서
    'BOGO 시작' 아이콘을 클릭**하면 터미널 창에 로그가 뜨며 풀 코어가 돈다. (안 보이면 로그아웃→재로그인 1회.)
 
-2. **파일관리자에서 `BOGO 시작.sh` 더블클릭** — 일부 환경은 `.sh` 우클릭 →
+2. **파일관리자에서 `launchers/BOGO 시작.sh` 더블클릭** — 일부 환경은 `.sh` 우클릭 →
    "속성 → 실행 허용"(또는 "Allow Launching")을 1회 켜야 한다. TTY 없이 실행돼도
    `BOGO 시작.sh` 가 설치된 터미널(gnome-terminal/konsole/xterm 등)을 자동 탐지해 그 안에서
    자기 자신을 다시 띄워 로그를 보여준다(무한재귀 가드 포함). 터미널을 못 찾으면
@@ -243,10 +245,10 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 
 > **더블클릭이 막히면(편집기로 열리거나 권한 거부) 아래 한 줄을 터미널에 그대로 복붙하면 항상 동작한다:**
 >
-> **`bash "/실제/경로/BOGO 시작.sh"`**
+> **`bash "/실제/경로/launchers/BOGO 시작.sh"`**
 >
-> (예: 홈에 압축을 풀었다면 **`bash "$HOME/agent-bogo/BOGO 시작.sh"`**. 경로에 한글·공백이 있으므로
-> 반드시 **따옴표로 감싼다.** 정지는 같은 방식으로 **`bash "/실제/경로/BOGO 정지.sh"`**.)
+> (예: 홈에 압축을 풀었다면 **`bash "$HOME/agent-bogo/launchers/BOGO 시작.sh"`**. 경로에 한글·공백이 있으므로
+> 반드시 **따옴표로 감싼다.** 정지는 같은 방식으로 **`bash "/실제/경로/launchers/BOGO 정지.sh"`**.)
 
 > 헤드리스 서버(GUI 없음)에서는 위 더블클릭 대신 아래 "다른 PC에서 시작"의 CLI 절차를 쓴다.
 
