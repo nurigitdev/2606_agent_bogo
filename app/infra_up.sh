@@ -109,11 +109,16 @@ ensure_colima() {
 container_state() { docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || echo "absent"; }
 
 # docker compose 호출자(신형 'docker compose' / 구형 'docker-compose' 자동 선택).
+# --project-directory 를 compose 파일이 있는 디렉토리(=app)로 못박는다. 이렇게 하면
+# 호출 cwd 나 compose 구현(v2/구형 docker-compose)과 무관하게 '항상' app/.env 가
+# 자동 로드된다 → net_autodetect 가 주입한 멀티홈 네트워크 키(${MM_BIND_HOST} 등)가
+# 어떤 진입점·cwd 에서 호출해도 compose 변수 보간에 끊김 없이 전달된다(폴백 누락 차단).
+COMPOSE_DIR="$(cd "$(dirname "$COMPOSE_FILE")" && pwd)"
 compose() {
   if docker compose version >/dev/null 2>&1; then
-    docker compose -f "$COMPOSE_FILE" "$@"
+    docker compose --project-directory "$COMPOSE_DIR" -f "$COMPOSE_FILE" "$@"
   elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose -f "$COMPOSE_FILE" "$@"
+    docker-compose --project-directory "$COMPOSE_DIR" -f "$COMPOSE_FILE" "$@"
   else
     return 127
   fi

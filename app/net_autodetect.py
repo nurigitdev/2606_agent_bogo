@@ -315,7 +315,15 @@ def upsert_env_text(text: str, env: dict[str, str]) -> str:
       - 본문에 없는 네트워크 키는 파일 끝의 자동 생성 블록에 모아 추가한다.
       - 자동 생성 블록은 마커로 식별해, 재실행 시 통째로 교체한다(중복 누적 방지).
       - env 가 비면(가드 모드) 본문 활성 키는 건드리지 않고 블록만 제거한다.
+      - 줄 종결 스타일(LF/CRLF)은 원본을 그대로 보존한다. Windows 에서 편집된
+        .env(CRLF)나 CRLF .env.example 을 시드해도 비밀·수동값 라인의 \r 을
+        삼키지 않는다('비밀값 한 글자도 안 건드림' 불변식 유지).
     """
+    # 원본 줄 종결 스타일을 감지해 결과에 그대로 복원한다. splitlines() 는 \r\n·\n
+    # 을 모두 먹으므로, 재조립 시 원본 스타일을 쓰지 않으면 CRLF 가 LF 로 강제
+    # 변환되어 비-네트워크(비밀) 라인까지 변형된다(데이터 손상). 첫 CRLF 존재로
+    # 파일 전체 스타일을 판정한다(혼재 시 다수파인 CRLF 보존 — Windows 편집 흔적).
+    newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.splitlines()
     remaining = dict(env)  # 아직 본문에서 교체하지 못한 키들.
 
@@ -359,9 +367,9 @@ def upsert_env_text(text: str, env: dict[str, str]) -> str:
                 out.append(f"{k}={_quote_value(remaining[k])}")
         out.append(_BLOCK_END)
 
-    result = "\n".join(out)
-    if not result.endswith("\n"):
-        result += "\n"
+    result = newline.join(out)
+    if not result.endswith(newline):
+        result += newline
     return result
 
 

@@ -216,6 +216,34 @@ class EnvUpsertTest(unittest.TestCase):
         # 활성 값은 블록에 들어가 실제 적용됨.
         self.assertIn(N._BLOCK_BEGIN, new)
 
+    def test_crlf_line_endings_are_preserved(self):
+        # 회귀 가드: Windows 에서 편집된 .env(CRLF)나 CRLF .env.example 을 시드해도
+        # 비밀·수동값 라인의 \r 을 삼키지 않아야 한다('비밀값 한 글자도 안 건드림' 불변식).
+        # 과거엔 splitlines()+"\n".join 으로 CRLF 가 LF 로 강제 변환돼 비밀 라인이 변형됐다.
+        original = (
+            "OPENROUTER_API_KEY=sk-or-v1-SECRET\r\n"
+            "BOGO_ADMIN_PASS=Manual-Pass-1111!\r\n"
+        )
+        new = N.upsert_env_text(original, self.MULTIHOME_ENV)
+        # 비밀 라인이 CRLF 그대로 보존(LF 로 강등되지 않음).
+        self.assertIn("OPENROUTER_API_KEY=sk-or-v1-SECRET\r\n", new)
+        self.assertIn("BOGO_ADMIN_PASS=Manual-Pass-1111!\r\n", new)
+        # 외톨이 LF(\r 없는 줄바꿈)가 비밀 라인에 끼어들지 않음.
+        self.assertNotIn("OPENROUTER_API_KEY=sk-or-v1-SECRET\n", new.replace("\r\n", "\r\r"))
+
+    def test_lf_file_stays_lf(self):
+        # LF 파일은 CR 이 새로 끼어들지 않아야 한다(스타일 보존, 회귀 0).
+        original = "OPENROUTER_API_KEY=sk-or-v1-SECRET\n"
+        new = N.upsert_env_text(original, self.MULTIHOME_ENV)
+        self.assertNotIn("\r", new)
+
+    def test_crlf_idempotent_reapply_is_stable(self):
+        # CRLF 입력도 재적용 멱등이어야 한다(스타일 보존이 멱등을 깨지 않음).
+        original = "OPENROUTER_API_KEY=sk-or-v1-SECRET\r\n"
+        once = N.upsert_env_text(original, self.MULTIHOME_ENV)
+        twice = N.upsert_env_text(once, self.MULTIHOME_ENV)
+        self.assertEqual(once, twice, "CRLF 재적용 시 .env 가 달라짐(멱등 위반)")
+
     def test_apply_creates_env_from_example_when_missing(self):
         with tempfile.TemporaryDirectory() as d:
             example = os.path.join(d, ".env.example")
