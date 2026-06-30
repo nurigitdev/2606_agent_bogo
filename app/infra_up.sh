@@ -44,6 +44,27 @@ need() {
   command -v "$1" >/dev/null 2>&1 || { err "$1 명령을 찾지 못했습니다. (brew install $1)"; exit 1; }
 }
 
+# Docker 데몬 접근성 점검(OS 인지). Linux native 에서 가장 흔한 실패는 (a)도커 데몬 미기동,
+# (b)현재 사용자가 docker 그룹에 없어 소켓 권한 거부 — 둘 다 명확한 1줄 안내로 잡는다.
+# macOS(Colima)는 ensure_colima 가 VM 을 띄우므로 여기서는 데몬 ping 만 한다.
+ensure_docker_reachable() {
+  docker info >/dev/null 2>&1 && return 0
+  if [ "$(uname -s)" = "Linux" ]; then
+    # 권한 문제인지(소켓은 있으나 거부) 데몬 자체가 죽었는지 구분해 안내.
+    if [ -S /var/run/docker.sock ] && ! docker info >/dev/null 2>&1; then
+      err "Docker 소켓 접근 거부 — 현재 사용자가 docker 그룹이 아닐 수 있습니다."
+      err "할 일 1가지:  sudo usermod -aG docker \"\$USER\"  실행 후 '재로그인'(또는 newgrp docker)."
+    else
+      err "Docker 데몬에 연결할 수 없습니다(미기동 추정)."
+      err "할 일 1가지:  sudo systemctl start docker   (부팅 자동시작: sudo systemctl enable docker)"
+    fi
+    exit 1
+  fi
+  # macOS: Colima 가 떠 있어야 도달 가능. ensure_colima 이후에도 실패면 그쪽 안내를 따른다.
+  err "Docker 데몬에 연결할 수 없습니다. 'colima start' 후 다시 실행하세요."
+  exit 1
+}
+
 # ── 1. Colima 보장 ────────────────────────────────────────────────────────
 ensure_colima() {
   # Colima 는 macOS 의 도커 런타임 VM. Linux 네이티브 docker 환경엔 colima 가 없고
@@ -187,6 +208,8 @@ ensure_pg_legacy_alias() {
 
 ensure_containers() {
   need docker
+  # Docker 데몬 도달성 확인(Linux: 데몬/권한, macOS: Colima 경유). 실패 시 명확 안내 후 종료.
+  ensure_docker_reachable
   # DB 먼저(데이터 계층), 그 다음 MM(앱 계층).
   ensure_container "$PG_NAME"
   # MM 을 띄우기 전에 레거시 호스트명 별칭을 보장한다(MM 이 hermes-pg 로 DB 를 찾으므로).

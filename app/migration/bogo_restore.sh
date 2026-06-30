@@ -62,10 +62,13 @@ read_pg_creds() {
 # 백업 파일 지문(경로+크기+mtime). 같은 백업이면 동일 → 중복 복원 skip 판정에 사용.
 backup_fingerprint() {
   local f="$1"
+  # 해시 도구 선호 순서: shasum(macOS 기본) → sha256sum(GNU/Linux 기본). 둘 다 없으면
+  # 크기+mtime 로 근사(BSD stat -f → GNU stat -c 폴백). OS 무관하게 항상 지문을 만든다.
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$f" 2>/dev/null | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" 2>/dev/null | awk '{print $1}'
   else
-    # 해시 도구 없으면 크기+mtime 로 근사.
     stat -f '%z-%m' "$f" 2>/dev/null || stat -c '%s-%Y' "$f" 2>/dev/null || echo "nofp"
   fi
 }

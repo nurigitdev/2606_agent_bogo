@@ -1,0 +1,13 @@
+[Desktop Entry]
+# BOGO 시작 — Linux GUI 파일관리자/바탕화면용 런처(선택).
+# .desktop 의 Exec 는 자기 위치를 자동 해석하지 못하므로, 절대경로를 한 번 넣어야 한다.
+# 자동 설치: 프로젝트 루트에서  ./app/install_desktop_launcher.sh  실행(아래 스크립트가
+# 이 템플릿의 __START_SH__ 를 실제 절대경로로 치환해 ~/.local/share/applications 에 설치).
+# 수동 설치: __START_SH__ 를 'BOGO 시작.sh' 의 절대경로로 바꾼 뒤 이 파일을 실행권한 부여.
+Type=Application
+Name=BOGO 시작
+Name[en]=BOGO Start
+Comment=BOGO 전 구성요소 기동 + 데이터 자동복원 (폴더 복사 후 1번 실행)
+Exec=bash "__START_SH__"
+Terminal=true
+Categories=Utility;
