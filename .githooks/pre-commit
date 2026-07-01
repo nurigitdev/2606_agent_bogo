@@ -20,8 +20,6 @@
 #   fails silently, which previously let Hangul slip through the gate.
 set -eu
 
-SCRIPT_EXT_RE='\.(bat|cmd|ps1|sh|command|desktop|template)$'
-
 if [ "${ALLOW_HANGUL:-0}" = "1" ]; then
   echo "pre-commit: ALLOW_HANGUL=1 set — Hangul gate bypassed." >&2
   exit 0
