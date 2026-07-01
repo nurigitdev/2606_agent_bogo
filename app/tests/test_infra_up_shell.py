@@ -543,6 +543,177 @@ def test_linux_launcher_prints_user_systemd_specific_next_action_for_rc4(tmp_pat
     assert "systemctl --user status" in output
 
 
+def test_linux_launcher_self_updates_and_reexecs_before_oneclick(tmp_path: Path) -> None:
+    root = tmp_path / "bogo"
+    launcher_dir = root / "launchers"
+    app_dir = root / "app"
+    fake_bin = tmp_path / "bin"
+    git_state = tmp_path / "git-state"
+    launcher_dir.mkdir(parents=True)
+    app_dir.mkdir()
+    fake_bin.mkdir()
+    git_state.mkdir()
+    shutil.copy2(APP_DIR.parent / "launchers" / "BOGO_start.sh", launcher_dir / "BOGO_start.sh")
+
+    oneclick_calls = tmp_path / "oneclick.calls"
+    git_calls = tmp_path / "git.calls"
+    _write_executable(
+        app_dir / "bogo_oneclick.sh",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> {str(oneclick_calls)!r}
+        exit 0
+        """,
+    )
+    _write_executable(
+        fake_bin / "git",
+        """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "${1:-}" = "-C" ]; then
+          shift 2
+        fi
+        printf '%s\n' "$*" >> "$FAKE_GIT_CALLS"
+
+        case "${1:-}" in
+          rev-parse)
+            if [ "${2:-}" = "--is-inside-work-tree" ]; then
+              echo true
+              exit 0
+            fi
+            if [ "${2:-}" = "--abbrev-ref" ]; then
+              echo origin/kh
+              exit 0
+            fi
+            if [ "${2:-}" = "HEAD" ]; then
+              count_file="$FAKE_GIT_STATE/head-count"
+              count=0
+              [ -f "$count_file" ] && count="$(cat "$count_file")"
+              if [ "$count" = "0" ]; then
+                echo 1111111111111111111111111111111111111111
+              else
+                echo 2222222222222222222222222222222222222222
+              fi
+              echo $((count + 1)) > "$count_file"
+              exit 0
+            fi
+            ;;
+          status)
+            exit 0
+            ;;
+          fetch|merge)
+            exit 0
+            ;;
+        esac
+
+        echo "unexpected git args: $*" >&2
+        exit 2
+        """,
+    )
+
+    proc = subprocess.run(
+        ["bash", str(launcher_dir / "BOGO_start.sh")],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "BOGO_IN_TERM": "1",
+            "FAKE_GIT_CALLS": str(git_calls),
+            "FAKE_GIT_STATE": str(git_state),
+        },
+        input="",
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    assert "Updated launcher code (1111111 -> 2222222); restarting with the latest version." in output
+    assert oneclick_calls.read_text(encoding="utf-8").splitlines() == ["start"]
+    call_log = git_calls.read_text(encoding="utf-8")
+    assert "fetch --prune" in call_log
+    assert "merge --ff-only origin/kh" in call_log
+
+
+def test_linux_launcher_skips_self_update_when_tracked_files_are_dirty(tmp_path: Path) -> None:
+    root = tmp_path / "bogo"
+    launcher_dir = root / "launchers"
+    app_dir = root / "app"
+    fake_bin = tmp_path / "bin"
+    launcher_dir.mkdir(parents=True)
+    app_dir.mkdir()
+    fake_bin.mkdir()
+    shutil.copy2(APP_DIR.parent / "launchers" / "BOGO_start.sh", launcher_dir / "BOGO_start.sh")
+
+    oneclick_calls = tmp_path / "oneclick.calls"
+    git_calls = tmp_path / "git.calls"
+    _write_executable(
+        app_dir / "bogo_oneclick.sh",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> {str(oneclick_calls)!r}
+        exit 0
+        """,
+    )
+    _write_executable(
+        fake_bin / "git",
+        """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "${1:-}" = "-C" ]; then
+          shift 2
+        fi
+        printf '%s\n' "$*" >> "$FAKE_GIT_CALLS"
+
+        case "${1:-}" in
+          rev-parse)
+            if [ "${2:-}" = "--is-inside-work-tree" ]; then
+              echo true
+              exit 0
+            fi
+            if [ "${2:-}" = "--abbrev-ref" ]; then
+              echo origin/kh
+              exit 0
+            fi
+            ;;
+          status)
+            echo " M launchers/BOGO_start.sh"
+            exit 0
+            ;;
+        esac
+
+        echo "unexpected git args: $*" >&2
+        exit 2
+        """,
+    )
+
+    proc = subprocess.run(
+        ["bash", str(launcher_dir / "BOGO_start.sh")],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "BOGO_IN_TERM": "1",
+            "FAKE_GIT_CALLS": str(git_calls),
+        },
+        input="",
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    assert "Tracked local changes exist" in output
+    assert oneclick_calls.read_text(encoding="utf-8").splitlines() == ["start"]
+    call_log = git_calls.read_text(encoding="utf-8")
+    assert "fetch --prune" not in call_log
+    assert "merge --ff-only origin/kh" not in call_log
+
+
 def test_linux_systemd_install_fails_cleanly_when_systemctl_is_absent(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

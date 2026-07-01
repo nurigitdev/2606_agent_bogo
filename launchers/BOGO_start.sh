@@ -16,7 +16,8 @@ set -u
 # This script's own location (symlink/space/Unicode path safe). Absolute path via BASH_SOURCE.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 SELF_PATH="$SELF_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
-REPO="$SELF_DIR/../app"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+REPO="$ROOT/app"
 ONECLICK="$REPO/bogo_oneclick.sh"
 
 # ── Terminal auto-detect fallback ───────────────────────────────────────
@@ -43,10 +44,11 @@ if [ -z "${BOGO_IN_TERM:-}" ] && [ ! -t 1 ]; then
   exit $?
 fi
 
-C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
+C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_WARN=$'\033[0;33m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { printf "%s[BOGO]%s %s\n" "$C_INFO" "$C_RST" "$*"; }
 ok()   { printf "%s[OK]%s %s\n"    "$C_OK"   "$C_RST" "$*"; }
 fail() { printf "%s[ERROR]%s %s\n" "$C_ERR"  "$C_RST" "$*"; }
+warn() { printf "%s[WARN]%s %s\n"  "$C_WARN" "$C_RST" "$*"; }
 
 # When double-clicked in a file manager (=run without a terminal), wait so the window does not
 # close immediately. When run directly in a terminal, read waits for input; when non-interactive
@@ -59,6 +61,49 @@ pause_exit() {
 }
 
 printf '\n'; say "Starting the BOGO one-click launcher (Linux/generic)"; say "Location: $REPO"; printf '\n'
+
+try_self_update() {
+  [ "${BOGO_SELF_UPDATE_DONE:-0}" = "1" ] && return 0
+  [ "${BOGO_SKIP_SELF_UPDATE:-0}" = "1" ] && { say "Self-update skipped by BOGO_SKIP_SELF_UPDATE=1."; return 0; }
+  command -v git >/dev/null 2>&1 || return 0
+
+  if [ "$(git -C "$ROOT" rev-parse --is-inside-work-tree 2>/dev/null || echo false)" != "true" ]; then
+    return 0
+  fi
+
+  local upstream dirty before after before_short after_short
+  if ! upstream="$(git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    return 0
+  fi
+
+  dirty="$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  if [ -n "$dirty" ]; then
+    warn "Tracked local changes exist — skipping self-update and continuing with current files."
+    return 0
+  fi
+
+  before="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+  say "Checking for launcher updates from $upstream..."
+  if env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" git -C "$ROOT" fetch --prune; then
+    if env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" git -C "$ROOT" merge --ff-only "$upstream"; then
+      after="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+      if [ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ]; then
+        before_short="${before:0:7}"
+        after_short="${after:0:7}"
+        ok "Updated launcher code ($before_short -> $after_short); restarting with the latest version."
+        export BOGO_SELF_UPDATE_DONE=1
+        exec bash "$SELF_PATH" "$@"
+      fi
+      ok "Launcher code already up to date."
+    else
+      warn "Self-update skipped because fast-forward from $upstream was not possible; continuing with current files."
+    fi
+  else
+    warn "Self-update skipped because git fetch could not complete; continuing with current files."
+  fi
+}
+
+try_self_update "$@"
 
 if [ ! -f "$ONECLICK" ]; then
   fail "bogo_oneclick.sh not found: $ONECLICK"
