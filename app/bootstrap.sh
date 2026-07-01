@@ -24,9 +24,10 @@ err() { printf '\033[0;31m[bootstrap:error]\033[0m %s\n' "$*" >&2; }
 
 VENV_PY="$HERE/.venv/bin/python"
 REQ_STAMP="$HERE/.venv/.bogo_requirements.sha256"
+BOOTSTRAP_HELPER_DIR="$HERE/.bogo-bootstrap"
+BOOTSTRAP_HELPER_PY="$BOOTSTRAP_HELPER_DIR/bin/python"
 PY=""
 PY_VERSION=""
-PY_COMPAT=""
 REQ_HASH=""
 REQUIREMENTS_INSTALLED=0
 
@@ -51,6 +52,13 @@ python_candidate_commands() {
   if [ -n "${BOGO_PYTHON:-}" ]; then
     printf '%s\n' "$BOGO_PYTHON"
     return 0
+  fi
+  printf '%s\n' python3 python python3.13 python3.12 python3.11 python3.10
+}
+
+bootstrap_helper_candidate_commands() {
+  if [ -n "${BOGO_BOOTSTRAP_PYTHON:-}" ]; then
+    printf '%s\n' "$BOGO_BOOTSTRAP_PYTHON"
   fi
   printf '%s\n' python3 python python3.13 python3.12 python3.11 python3.10
 }
@@ -137,6 +145,74 @@ install_requirements_current_venv() {
   printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
 }
 
+ensure_virtualenv_helper() {
+  local candidate path version compat seen_paths=":"
+  if [ -x "$BOOTSTRAP_HELPER_PY" ] && "$BOOTSTRAP_HELPER_PY" -m virtualenv --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  rm -rf "$BOOTSTRAP_HELPER_DIR"
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    path="$(resolve_python_candidate "$candidate")"
+    [ -n "$path" ] || continue
+    case "$seen_paths" in
+      *":$path:"*) continue ;;
+    esac
+    seen_paths="${seen_paths}${path}:"
+
+    version="$(python_version_for "$path" 2>/dev/null || echo unknown)"
+    compat="$(python_compat_for "$path" 2>/dev/null || echo unusable)"
+    case "$compat" in
+      supported|future) ;;
+      *) continue ;;
+    esac
+
+    say "Preparing virtualenv helper with Python: $path ($version)"
+    rm -rf "$BOOTSTRAP_HELPER_DIR"
+    if "$path" -m venv --copies "$BOOTSTRAP_HELPER_DIR" \
+      && "$BOOTSTRAP_HELPER_PY" -m pip install --upgrade pip virtualenv; then
+      return 0
+    fi
+  done < <(bootstrap_helper_candidate_commands)
+
+  rm -rf "$BOOTSTRAP_HELPER_DIR"
+  return 1
+}
+
+create_venv_with_virtualenv_helper() {
+  local target_python="$1" version="$2"
+  say "Python $version at $target_python could not seed pip via venv; trying virtualenv helper."
+  rm -rf "$HERE/.venv"
+  if ensure_virtualenv_helper \
+    && "$BOOTSTRAP_HELPER_PY" -m virtualenv --clear --copies -p "$target_python" "$HERE/.venv"; then
+    say "Created .venv for Python $version via virtualenv helper."
+    return 0
+  fi
+  rm -rf "$HERE/.venv"
+  return 1
+}
+
+venv_has_pip() {
+  [ -x "$VENV_PY" ] && "$VENV_PY" -m pip --version >/dev/null 2>&1
+}
+
+seed_pip_current_venv() {
+  local creator="$1"
+  if venv_has_pip; then
+    return 0
+  fi
+
+  say "Created .venv without pip; trying to seed pip."
+  if "$VENV_PY" -m ensurepip --upgrade >/dev/null 2>&1 && venv_has_pip; then
+    return 0
+  fi
+  if "$creator" -m pip --version >/dev/null 2>&1 && "$creator" -m pip --python "$HERE/.venv" install --upgrade pip >/dev/null 2>&1 && venv_has_pip; then
+    return 0
+  fi
+  return 1
+}
+
 create_venv_and_install_with_available_python() {
   local candidate path version compat seen_paths=":" tried_any=0
   while IFS= read -r candidate; do
@@ -170,20 +246,30 @@ create_venv_and_install_with_available_python() {
     fi
 
     rm -rf "$HERE/.venv"
-    if ! "$path" -m venv --copies "$HERE/.venv"; then
+    if "$path" -m venv --copies "$HERE/.venv" && seed_pip_current_venv "$path"; then
+      :
+    else
       rm -rf "$HERE/.venv"
-      if [ -n "${BOGO_PYTHON:-}" ]; then
-        err "BOGO_PYTHON was set to $path, but it could not create .venv."
-        print_python_install_guidance
-        exit 1
+      say "Python $version at $path could not create .venv with seeded pip; retrying without pip seed."
+      if "$path" -m venv --copies --without-pip "$HERE/.venv" && seed_pip_current_venv "$path"; then
+        :
+      elif create_venv_with_virtualenv_helper "$path" "$version"; then
+        :
+      else
+        rm -rf "$HERE/.venv"
+        if [ -n "${BOGO_PYTHON:-}" ]; then
+          err "BOGO_PYTHON was set to $path, but it could not create .venv with pip."
+          err "Tried pip seed methods: venv ensurepip, base pip --python, base virtualenv helper."
+          print_python_install_guidance
+          exit 1
+        fi
+        say "Python $version at $path could not create .venv with pip; trying another interpreter."
+        continue
       fi
-      say "Python $version at $path could not create .venv; trying another interpreter."
-      continue
     fi
 
     PY="$path"
     PY_VERSION="$version"
-    PY_COMPAT="$compat"
     say "Using Python: $PY ($PY_VERSION)"
     if install_requirements_current_venv; then
       REQUIREMENTS_INSTALLED=1

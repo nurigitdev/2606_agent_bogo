@@ -34,6 +34,7 @@ app/migration/.bogo_restored
 .venv/
 venv/
 .venv_*/
+app/.bogo-bootstrap/
 # QA 스크린샷·검증 산출물(로컬 전용 — git 추적 금지)
 artifacts/
 __pycache__/
