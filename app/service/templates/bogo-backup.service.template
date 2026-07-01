@@ -8,9 +8,9 @@ Description=BOGO automatic data backup (conversations/accounts/channels/reports)
 
 [Service]
 Type=oneshot
-WorkingDirectory=__WORKDIR__
+WorkingDirectory="__WORKDIR__"
 # --quiet automatic mode; output goes to the repo's migration/, auto-pruned to __RETAIN__ kept.
-ExecStart=/usr/bin/env bash __WORKDIR__/migration/bogo_backup.sh --quiet --out __WORKDIR__/migration --retain __RETAIN__
+ExecStart=/usr/bin/env bash "__WORKDIR__/migration/bogo_backup.sh" --quiet --out "__WORKDIR__/migration" --retain __RETAIN__
 # Low priority so the backup does not interfere with the bots' responsiveness.
 Nice=10
 IOSchedulingClass=idle

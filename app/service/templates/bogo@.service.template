@@ -12,8 +12,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=__WORKDIR__
-ExecStart=__WORKDIR__/run_role.sh %i
+WorkingDirectory="__WORKDIR__"
+ExecStart=/usr/bin/env bash "__WORKDIR__/run_role.sh" %i
 Restart=always
 RestartSec=10
 # Memory-leak guard: kernel restarts the unit if RSS exceeds the cap.

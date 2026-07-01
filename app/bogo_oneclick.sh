@@ -42,16 +42,47 @@ cd "$HERE"
 LOGS="$HERE/logs"
 mkdir -p "$LOGS"
 
+env_file_value() {
+  local key="$1" file="$HERE/.env"
+  if [ "${!key+x}" = "x" ]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  [ -f "$file" ] || return 0
+  awk -v key="$key" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    {
+      line=$0
+      sub(/^[[:space:]]*/, "", line)
+      if (line ~ "^" key "[[:space:]]*=") {
+        sub(/^[^=]*=/, "", line)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (substr(line, 1, 1) == "\"" && substr(line, length(line), 1) == "\"") {
+          line=substr(line, 2, length(line) - 2)
+          gsub(/\\"/, "\"", line)
+        }
+        print line
+      }
+    }
+  ' "$file" | tail -n 1
+}
+
+env_or_default() {
+  local key="$1" default="$2" value
+  value="$(env_file_value "$key")"
+  printf '%s' "${value:-$default}"
+}
+
 # Dashboard loopback-only + port (overridable via env var, default 8642).
 DASH_HOST="127.0.0.1"
-DASH_PORT="${BOGO_DASHBOARD_PORT:-8642}"
+DASH_PORT="$(env_or_default BOGO_DASHBOARD_PORT 8642)"
 DASH_PID_FILE="$LOGS/dashboard.pid"
 DASH_OUT="$LOGS/dashboard.out.log"
 DASH_ERR="$LOGS/dashboard.err.log"
 DASH_HEALTH_TIMEOUT="${BOGO_DASH_WAIT_TIMEOUT:-30}"
 
 MM_HOST="127.0.0.1"
-MM_PORT="8065"
+MM_PORT="$(env_or_default MM_PORT 8065)"
 
 # Network auto-detection result (filled in by step_netdetect). So the health check probes
 # the actual NIC IP rather than loopback on multihome/single-network setups, we keep the
@@ -111,14 +142,29 @@ step_venv() {
   if [ ! -x "$VENV_PY" ]; then
     warn ".venv missing → running bootstrap.sh (may take a few minutes)"
     if ! "$HERE/bootstrap.sh"; then
-      err "bootstrap failed. Check whether Python 3 is installed: brew install python"
+      case "$(uname -s)" in
+        Darwin) err "bootstrap failed. Check whether Python 3 is installed: brew install python" ;;
+        Linux)  err "bootstrap failed. Check whether Python 3 + venv are installed: sudo apt install python3 python3-venv" ;;
+        *)      err "bootstrap failed. Check whether Python 3 is installed." ;;
+      esac
       return 1
     fi
   fi
   # Verify core dependency imports (sentence-transformers is optional, so excluded).
   if ! "$VENV_PY" -c "import urllib.request, json, sqlite3" >/dev/null 2>&1; then
-    err "The venv python is not working properly: $VENV_PY"
-    return 1
+    warn ".venv exists but is not usable here → recreating it with bootstrap.sh"
+    if ! "$HERE/bootstrap.sh"; then
+      case "$(uname -s)" in
+        Darwin) err "bootstrap failed. Check whether Python 3 is installed: brew install python" ;;
+        Linux)  err "bootstrap failed. Check whether Python 3 + venv are installed: sudo apt install python3 python3-venv" ;;
+        *)      err "bootstrap failed. Check whether Python 3 is installed." ;;
+      esac
+      return 1
+    fi
+    if ! "$VENV_PY" -c "import urllib.request, json, sqlite3" >/dev/null 2>&1; then
+      err "The venv python is still not working properly after bootstrap: $VENV_PY"
+      return 1
+    fi
   fi
   ok "venv ready: $VENV_PY"
 }
@@ -256,12 +302,35 @@ step_infra() {
     err "infra_up.sh is missing or not executable."
     return 1
   fi
-  if "$HERE/infra_up.sh"; then
+  local rc
+  "$HERE/infra_up.sh"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
     ok "Communication backbone ready (MM http://$MM_HOST:$MM_PORT)"
   else
-    err "Communication backbone startup failed — Docker/Colima check needed (see the blocker guidance below)."
-    return 2   # 2 = external-dependency (Docker) blocker signal
+    err "Communication backbone startup failed — see the infra error above for the real blocker."
+    return "$rc"   # 2 remains the external-dependency (Docker/Colima) blocker signal.
   fi
+}
+
+mm_health_host() {
+  case "$DETECTED_MODE" in
+    multihome|lan) echo "$DETECTED_HOST" ;;
+    *) echo "$MM_HOST" ;;
+  esac
+}
+
+step_mattermost_host_check() {
+  local hhost; hhost="$(mm_health_host)"
+  say "[3.1/5] Mattermost host-side reachability check ($hhost:$MM_PORT, mode:$DETECTED_MODE)..."
+  if http_ok "http://$hhost:$MM_PORT/api/v4/system/ping"; then
+    ok "Mattermost reachable from host at http://$hhost:$MM_PORT"
+    return 0
+  fi
+  err "Mattermost is healthy inside Docker but not reachable from the host/NIC URL."
+  err "Cause: Docker port binding likely does not match the current .env network mode."
+  err "Diagnostics: docker port bogo-mm 8065/tcp ; docker compose -f \"$HERE/docker-compose.yml\" ps"
+  return 1
 }
 
 # ════════════════════════════════════════════════════════════════════════
@@ -344,8 +413,18 @@ step_dashboard() {
     fi
     sleep 1; waited=$((waited + 1))
   done
-  err "Dashboard did not respond within ${DASH_HEALTH_TIMEOUT}s (check launchd com.bogo.dashboard)."
-  err "  Diagnostics: launchctl print gui/\$(id -u)/com.bogo.dashboard ; tail logs/dashboard.err.log"
+  err "Dashboard did not respond within ${DASH_HEALTH_TIMEOUT}s (check the always-on service registration)."
+  case "$(uname -s)" in
+    Linux)
+      err "  Diagnostics: systemctl --user status bogo@dashboard.service ; journalctl --user -u bogo@dashboard.service -n 50"
+      ;;
+    Darwin)
+      err "  Diagnostics: launchctl print gui/\$(id -u)/com.bogo.dashboard ; tail logs/dashboard.err.log"
+      ;;
+    *)
+      err "  Diagnostics: tail logs/dashboard.err.log"
+      ;;
+  esac
   tail -n 15 "$DASH_ERR" 2>/dev/null >&2 || true
   return 1
 }
@@ -371,12 +450,20 @@ step_bots() {
   if [ "${loaded:-0}" -ge 1 ]; then
     say "${loaded} bots already registered → redeploy latest code + restart (no duplicate launch)."
     # restart internally calls infra_up.sh again, but it is idempotent so it is safe (already up = passes immediately).
+    local rc
     if "$HERE/bogo_ctl.sh" restart; then ok "Bot redeploy+restart complete."; else
-      err "Bot restart failed — diagnostics: ./bogo_ctl.sh status"; return 1; fi
+      rc=$?
+      err "Bot restart failed — diagnostics: ./bogo_ctl.sh status"
+      return "$rc"
+    fi
   else
     say "Bots not registered → first install (bootstrap + backbone + launchd registration)."
+    local rc
     if "$HERE/bogo_ctl.sh" setup; then ok "Bot install + always-on registration complete."; else
-      err "Bot install failed — check the log above."; return 1; fi
+      rc=$?
+      err "Bot install failed — check the log above."
+      return "$rc"
+    fi
   fi
 }
 
@@ -473,18 +560,42 @@ do_start() {
   step_infra; infra_rc=$?
   if [ "$infra_rc" -eq 2 ]; then
     err "════ Blocker: could not bring up the Mattermost communication backbone ════"
-    err "Cause: the Docker/Colima runtime is not ready."
-    err "The one thing the operator should do: run 'colima start' (or start Docker Desktop), then re-run this launcher."
+    case "$(uname -s)" in
+      Linux)
+        err "Cause: the Docker daemon is not ready or this user cannot access /var/run/docker.sock."
+        err "The one thing the operator should do: run 'sudo systemctl start docker' and, on permission errors, 'sudo usermod -aG docker \"\$USER\"' then re-login."
+        ;;
+      *)
+        err "Cause: the Docker/Colima runtime is not ready."
+        err "The one thing the operator should do: run 'colima start' (or start Docker Desktop), then re-run this launcher."
+        ;;
+    esac
     return 2
+  elif [ "$infra_rc" -eq 3 ]; then
+    err "════ Blocker: could not bring up the Mattermost communication backbone ════"
+    err "Cause: Docker Compose is not available."
+    err "The one thing the operator should do: install/enable the Docker Compose plugin, then re-run this launcher."
+    return 3
   elif [ "$infra_rc" -ne 0 ]; then
     err "Step 3 (backbone) failed — aborting."
     return 1
   fi
+  step_mattermost_host_check || { err "Step 3.1 (host-side Mattermost reachability) failed — aborting."; return 1; }
   # Now, with the infra (empty bogo-pg/bogo-mm) just up, is the right moment for data injection. If a backup exists,
   # auto-restore the old PC's conversation/account/channel/report; otherwise pass through empty (automatic branch).
   step_restore                                   # proceeds even on failure (warn only — service comes up even if empty)
   # Register both bots and dashboard as always-on launchd/systemd (install_service.sh brings up both).
-  step_bots      || { err "Step 4 (bot + dashboard registration) failed — aborting."; return 1; }
+  local bots_rc
+  step_bots; bots_rc=$?
+  if [ "$bots_rc" -eq 4 ]; then
+    err "════ Blocker: could not register Linux always-on services ════"
+    err "Cause: systemd --user is not reachable in this session."
+    err "The one thing the operator should do: run from a normal logged-in user terminal, then re-run this launcher."
+    return 4
+  elif [ "$bots_rc" -ne 0 ]; then
+    err "Step 4 (bot + dashboard registration) failed — aborting."
+    return 1
+  fi
   # Health-check until the launchd-started dashboard responds (not a direct launch; auto-revival ownership is launchd's).
   step_dashboard || { err "Step 5 (dashboard health check) failed — need to check launchd status."; return 1; }
 

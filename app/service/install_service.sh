@@ -36,6 +36,9 @@ TPL="$SELF/templates"
 
 say() { printf '\033[0;36m[service]\033[0m %s\n' "$*"; }
 err() { printf '\033[0;31m[service:ERROR]\033[0m %s\n' "$*" >&2; }
+sed_replacement() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/[&#]/\\&/g'
+}
 
 OS="$(uname -s)"
 ACTION="${1:-install}"
@@ -282,11 +285,22 @@ mac_status() {
 sd_dir="${HOME}/.config/systemd/user"
 sd_unit="$sd_dir/bogo@.service"
 
+linux_require_systemd_user() {
+  command -v systemctl >/dev/null 2>&1 || { err "systemctl not found — this is not a systemd environment."; exit 4; }
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    err "systemd --user is not reachable for this login session."
+    err "One thing to do: run from a normal Linux desktop/login session with user systemd enabled, then retry."
+    err "Diagnostics: systemctl --user status ; loginctl user-status \"$(id -un)\""
+    exit 4
+  fi
+}
+
 linux_install() {
-  command -v systemctl >/dev/null 2>&1 || { err "systemctl not found — this is not a systemd environment."; exit 1; }
+  linux_require_systemd_user
   chmod +x "$REPO/run_role.sh"
   mkdir -p "$sd_dir"
-  sed -e "s#__WORKDIR__#$REPO#g" "$TPL/bogo@.service.template" > "$sd_unit"
+  local repo_sed; repo_sed="$(sed_replacement "$REPO")"
+  sed -e "s#__WORKDIR__#$repo_sed#g" "$TPL/bogo@.service.template" > "$sd_unit"
   systemctl --user daemon-reload
   # Lingering so user services survive logout / run at boot.
   loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || \
@@ -306,9 +320,13 @@ linux_install() {
 
 # Register a periodic backup via a systemd user timer (idempotent). Generate the service+timer units by substitution, then enable.
 linux_install_backup_timer() {
-  sed -e "s#__WORKDIR__#$REPO#g" -e "s#__RETAIN__#$BACKUP_RETAIN#g" \
+  local repo_sed retain_sed interval_sed
+  repo_sed="$(sed_replacement "$REPO")"
+  retain_sed="$(sed_replacement "$BACKUP_RETAIN")"
+  interval_sed="$(sed_replacement "$BACKUP_INTERVAL")"
+  sed -e "s#__WORKDIR__#$repo_sed#g" -e "s#__RETAIN__#$retain_sed#g" \
       "$TPL/bogo-backup.service.template" > "$sd_dir/bogo-backup.service"
-  sed -e "s#__INTERVAL_SEC__#$BACKUP_INTERVAL#g" \
+  sed -e "s#__INTERVAL_SEC__#$interval_sed#g" \
       "$TPL/bogo-backup.timer.template" > "$sd_dir/bogo-backup.timer"
   systemctl --user daemon-reload
   systemctl --user enable --now "bogo-backup.timer"
@@ -316,6 +334,7 @@ linux_install_backup_timer() {
 }
 
 linux_uninstall() {
+  linux_require_systemd_user
   for r in "${ROLES[@]}"; do
     systemctl --user disable --now "bogo@$r.service" >/dev/null 2>&1 || true
     say "unregistered: bogo@$r"
@@ -332,6 +351,7 @@ linux_uninstall() {
 }
 
 linux_restart() {
+  linux_require_systemd_user
   chmod +x "$REPO/run_role.sh"
   for r in "${ROLES[@]}"; do
     systemctl --user restart "bogo@$r.service" && say "restarted: bogo@$r"
@@ -344,6 +364,7 @@ linux_restart() {
 }
 
 linux_status() {
+  linux_require_systemd_user
   for r in "${ROLES[@]}"; do
     printf '%-14s ' "bogo@$r"
     systemctl --user is-active "bogo@$r.service" 2>/dev/null || true

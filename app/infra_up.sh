@@ -44,7 +44,7 @@ MM_WAIT_TIMEOUT="${BOGO_MM_WAIT_TIMEOUT:-180}"
 COLIMA_WAIT_TIMEOUT="${BOGO_COLIMA_WAIT_TIMEOUT:-180}"
 
 need() {
-  command -v "$1" >/dev/null 2>&1 || { err "Could not find the '$1' command. (brew install $1)"; exit 1; }
+  command -v "$1" >/dev/null 2>&1 || { err "Could not find the '$1' command. Install Docker/Compose, then try again."; exit 2; }
 }
 
 # Check Docker daemon reachability (OS-aware). On Linux native the most common failures are
@@ -55,18 +55,19 @@ ensure_docker_reachable() {
   docker info >/dev/null 2>&1 && return 0
   if [ "$(uname -s)" = "Linux" ]; then
     # Distinguish a permission issue (socket exists but denied) from a dead daemon and advise.
-    if [ -S /var/run/docker.sock ] && ! docker info >/dev/null 2>&1; then
+    local docker_sock="${BOGO_DOCKER_SOCK:-/var/run/docker.sock}"
+    if [ -S "$docker_sock" ] && ! docker info >/dev/null 2>&1; then
       err "Docker socket access denied — the current user may not be in the docker group."
       err "One thing to do:  run  sudo usermod -aG docker \"\$USER\"  then 're-login' (or newgrp docker)."
     else
       err "Cannot connect to the Docker daemon (likely not running)."
       err "One thing to do:  sudo systemctl start docker   (auto-start on boot: sudo systemctl enable docker)"
     fi
-    exit 1
+    exit 2
   fi
   # macOS: Colima must be up to be reachable. If it still fails after ensure_colima, follow that guidance.
   err "Cannot connect to the Docker daemon. Run 'colima start' and try again."
-  exit 1
+  exit 2
 }
 
 # ── 1. Ensure Colima ──────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ ensure_colima() {
     sleep 2
     if ! colima start >/dev/null 2>&1; then
       err "Colima failed to start. Check manually: colima status / colima start"
-      exit 1
+      exit 2
     fi
   fi
 
@@ -103,7 +104,7 @@ ensure_colima() {
     sleep 2; waited=$((waited + 2))
     if [ "$waited" -ge "$COLIMA_WAIT_TIMEOUT" ]; then
       err "Colima did not reach running within ${COLIMA_WAIT_TIMEOUT}s."
-      exit 1
+      exit 2
     fi
   done
   ok "Colima running (took ${waited}s)."
@@ -129,6 +130,74 @@ compose() {
   fi
 }
 
+env_file_value() {
+  local key="$1" file="$COMPOSE_DIR/.env"
+  if [ "${!key+x}" = "x" ]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  [ -f "$file" ] || return 0
+  awk -v key="$key" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    {
+      line=$0
+      sub(/^[[:space:]]*/, "", line)
+      if (line ~ "^" key "[[:space:]]*=") {
+        sub(/^[^=]*=/, "", line)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (substr(line, 1, 1) == "\"" && substr(line, length(line), 1) == "\"") {
+          line=substr(line, 2, length(line) - 2)
+          gsub(/\\"/, "\"", line)
+        }
+        print line
+      }
+    }
+  ' "$file" | tail -n 1
+}
+
+container_env_value() {
+  local name="$1" key="$2" env_lines
+  env_lines="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$name" 2>/dev/null || true)"
+  printf '%s\n' "$env_lines" | awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }'
+}
+
+port_binding_has_host() {
+  local desired="$1" line host
+  while IFS= read -r line; do
+    case "$line" in
+      *:8065) ;;
+      *) continue ;;
+    esac
+    host="${line%:8065}"
+    host="${host#[}"
+    host="${host%]}"
+    if [ "$host" = "$desired" ]; then
+      return 0
+    fi
+    if [ "$desired" = "0.0.0.0" ] && [ "$host" = "::" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+compose_up_or_exit() {
+  local rc
+  set +e
+  compose up -d
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  if [ "$rc" = "127" ]; then
+    err "Could not find docker compose. Docker Desktop/Compose plugin must be installed."
+    exit 3
+  fi
+  err "compose up failed (rc=$rc). Diagnose: docker compose -f \"$COMPOSE_FILE\" logs"
+  exit 1
+}
+
 # If any container is missing, create both from scratch via compose (idempotent: no change if
 # they already exist). The key to portability across PCs — without this step it stalls at
 # 'absent' and MM itself can't come up.
@@ -142,15 +211,7 @@ ensure_created_via_compose() {
     exit 1
   fi
   say "Detected missing containers → creating/starting from scratch via docker-compose.yml (bogo-pg, bogo-mm)..."
-  if ! compose up -d; then
-    local rc=$?
-    if [ "$rc" = "127" ]; then
-      err "Could not find docker compose. Docker Desktop/Compose plugin must be installed."
-    else
-      err "compose up failed (rc=$rc). Diagnose: docker compose -f \"$COMPOSE_FILE\" logs"
-    fi
-    exit 1
-  fi
+  compose_up_or_exit
   ok "Container creation/startup via compose complete."
 }
 
@@ -219,6 +280,39 @@ ensure_pg_legacy_alias() {
   done
 }
 
+ensure_compose_config_current() {
+  [ "$(container_state "$MM_NAME")" != "absent" ] || return 0
+
+  local desired_bind desired_site desired_cors actual_ports actual_site actual_cors needs_reconcile=0
+  desired_bind="$(env_file_value MM_BIND_HOST)"
+  desired_bind="${desired_bind:-127.0.0.1}"
+  desired_site="$(env_file_value MM_SITE_URL)"
+  desired_site="${desired_site:-http://127.0.0.1:8065}"
+  desired_cors="$(env_file_value MM_ALLOW_CORS_FROM)"
+
+  actual_ports="$(docker port "$MM_NAME" 8065/tcp 2>/dev/null || true)"
+  if ! printf '%s\n' "$actual_ports" | port_binding_has_host "$desired_bind"; then
+    say "$MM_NAME published port does not match MM_BIND_HOST=$desired_bind → reconciling via compose."
+    needs_reconcile=1
+  fi
+
+  actual_site="$(container_env_value "$MM_NAME" MM_SERVICESETTINGS_SITEURL)"
+  if [ -n "$actual_site" ] && [ "$actual_site" != "$desired_site" ]; then
+    say "$MM_NAME SiteURL differs from .env ($actual_site → $desired_site) → reconciling via compose."
+    needs_reconcile=1
+  fi
+
+  actual_cors="$(container_env_value "$MM_NAME" MM_SERVICESETTINGS_ALLOWCORSFROM)"
+  if [ "$actual_cors" != "$desired_cors" ]; then
+    say "$MM_NAME AllowCorsFrom differs from .env → reconciling via compose."
+    needs_reconcile=1
+  fi
+
+  [ "$needs_reconcile" = "1" ] || return 0
+  compose_up_or_exit
+  ok "Compose configuration reconciled with .env."
+}
+
 ensure_containers() {
   need docker
   # Check Docker daemon reachability (Linux: daemon/permissions, macOS: via Colima). On failure, advise clearly then exit.
@@ -228,6 +322,9 @@ ensure_containers() {
   # Ensure the legacy hostname alias before bringing up MM (since MM looks up the DB as hermes-pg).
   ensure_pg_legacy_alias
   ensure_container "$MM_NAME"
+  # Existing containers keep their original published ports/env. If net_autodetect changed
+  # MM_BIND_HOST/SiteURL/CORS in .env, reconcile now so Linux LAN mode cannot false-succeed.
+  ensure_compose_config_current
 }
 
 # ── 3. Wait for MM healthy ─────────────────────────────────────────────────
