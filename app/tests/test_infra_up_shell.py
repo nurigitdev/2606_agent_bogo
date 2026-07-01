@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import socket
@@ -281,6 +282,14 @@ def test_infra_up_uses_plain_docker_fallback_when_compose_is_missing(tmp_path: P
           exit 0
         fi
 
+        if [ "$cmd" = "image" ] && [ "${2:-}" = "inspect" ]; then
+          exit 1
+        fi
+
+        if [ "$cmd" = "pull" ]; then
+          exit 0
+        fi
+
         if [ "$cmd" = "run" ]; then
           name=""
           prev=""
@@ -381,15 +390,169 @@ def test_infra_up_uses_plain_docker_fallback_when_compose_is_missing(tmp_path: P
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Docker Compose is not available" in proc.stdout
     assert "plain Docker CLI fallback" in proc.stdout
+    assert "Pulling Docker image: postgres:15-alpine" in proc.stdout
+    assert "Pulling Docker image: mattermost/mattermost-team-edition:9.11" in proc.stdout
     assert "Backbone container creation/startup complete." in proc.stdout
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
     assert "compose version" in calls
+    assert "image inspect postgres:15-alpine" in calls
+    assert "pull postgres:15-alpine" in calls
+    assert "image inspect mattermost/mattermost-team-edition:9.11" in calls
+    assert "pull mattermost/mattermost-team-edition:9.11" in calls
     assert "network inspect bogo-net" in calls
     assert "volume inspect bogo-pg-data" in calls
     assert "run -d --name bogo-pg" in calls
     assert "run -d --name bogo-mm" in calls
     assert "-p 172.16.100.200:8065:8065" in calls
     assert "MM_SERVICESETTINGS_SITEURL=http://172.16.100.200:8065" in calls
+
+
+def test_infra_up_uses_docker_cli_when_existing_pg_has_no_healthcheck(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "pg").write_text("legacy", encoding="utf-8")
+    _write_running_colima(fake_bin)
+
+    _write_executable(
+        fake_bin / "docker",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        pg_state="${FAKE_DOCKER_STATE_DIR}/pg"
+        mm_state="${FAKE_DOCKER_STATE_DIR}/mm"
+        net_state="${FAKE_DOCKER_STATE_DIR}/pg-net"
+        log="${FAKE_DOCKER_STATE_DIR}/calls.log"
+        printf '%s\n' "$*" >> "$log"
+
+        cmd="${1:-}"
+        if [ "$cmd" = "info" ]; then
+          exit 0
+        fi
+
+        if [ "$cmd" = "compose" ]; then
+          if [ "${2:-}" = "version" ]; then
+            exit 0
+          fi
+          echo "compose up should not run for legacy PG without healthcheck" >&2
+          exit 88
+        fi
+
+        if [ "$cmd" = "network" ]; then
+          if [ "${2:-}" = "inspect" ]; then
+            exit 0
+          fi
+          if [ "${2:-}" = "connect" ]; then
+            touch "$net_state"
+            exit 0
+          fi
+        fi
+
+        if [ "$cmd" = "volume" ] || { [ "$cmd" = "image" ] && [ "${2:-}" = "inspect" ]; }; then
+          exit 0
+        fi
+
+        if [ "$cmd" = "run" ]; then
+          name=""
+          prev=""
+          for arg in "$@"; do
+            if [ "$prev" = "--name" ]; then
+              name="$arg"
+              break
+            fi
+            prev="$arg"
+          done
+          [ "$name" = "bogo-mm" ] || { echo "unexpected run target: $name" >&2; exit 99; }
+          touch "$mm_state"
+          echo "fake-bogo-mm"
+          exit 0
+        fi
+
+        if [ "$cmd" = "inspect" ]; then
+          fmt=""
+          shift
+          if [ "${1:-}" = "-f" ]; then
+            fmt="$2"
+            shift 2
+          fi
+          name="${1:-}"
+          case "$fmt" in
+            *State.Status*)
+              case "$name" in
+                bogo-pg) [ -f "$pg_state" ] && echo running || echo absent ;;
+                bogo-mm) [ -f "$mm_state" ] && echo running || echo absent ;;
+                *) echo absent ;;
+              esac
+              exit 0 ;;
+            *State.Health*)
+              if [ "$name" = "bogo-pg" ]; then
+                echo none
+              else
+                echo healthy
+              fi
+              exit 0 ;;
+            *HostConfig.RestartPolicy.Name*)
+              echo unless-stopped
+              exit 0 ;;
+            *Config.Env*)
+              echo "MM_SERVICESETTINGS_SITEURL=${MM_SITE_URL:-http://127.0.0.1:8065}"
+              echo "MM_SERVICESETTINGS_ALLOWCORSFROM="
+              exit 0 ;;
+            *NetworkSettings.Networks*)
+              if [ "$name" = "bogo-pg" ] && [ ! -f "$net_state" ]; then
+                echo ""
+              elif [[ "$fmt" == *Aliases* ]]; then
+                echo "bogo-pg hermes-pg"
+              else
+                echo "bogo-net "
+              fi
+              exit 0 ;;
+          esac
+        fi
+
+        if [ "$cmd" = "exec" ] || [ "$cmd" = "update" ]; then
+          exit 0
+        fi
+
+        if [ "$cmd" = "port" ]; then
+          echo "${MM_BIND_HOST:-127.0.0.1}:8065"
+          exit 0
+        fi
+
+        echo "unexpected docker args: $*" >&2
+        exit 99
+        """,
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "FAKE_DOCKER_STATE_DIR": str(state_dir),
+            "BOGO_SKIP_PROVISION": "1",
+            "BOGO_MM_WAIT_TIMEOUT": "1",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(APP_DIR / "infra_up.sh")],
+        cwd=APP_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    assert "without a Docker healthcheck" in output
+    assert "plain Docker CLI fallback" in output
+    calls = (state_dir / "calls.log").read_text(encoding="utf-8")
+    assert "compose --project-directory" not in calls
+    assert "network connect --alias hermes-pg --alias bogo-pg bogo-net bogo-pg" in calls
+    assert "run -d --name bogo-mm" in calls
 
 
 def test_infra_up_reconciles_stale_mm_bind_host_for_lan_mode(tmp_path: Path) -> None:
@@ -591,7 +754,7 @@ def test_infra_up_linux_reports_docker_socket_permission_when_socket_exists(tmp_
 def test_oneclick_propagates_infra_rc2_and_rc3_without_relabeling(tmp_path: Path) -> None:
     for rc, expected in [
         (2, "Cause: the Docker/Colima runtime is not ready."),
-        (3, "Cause: Docker Compose is not available."),
+        (3, "Cause: Docker Compose is explicitly required"),
     ]:
         app_dir = tmp_path / f"app-rc{rc}"
         shutil.copytree(APP_DIR, app_dir, ignore=shutil.ignore_patterns(".venv", "logs", "__pycache__"))
@@ -669,7 +832,92 @@ def test_oneclick_propagates_linux_user_systemd_rc4(tmp_path: Path) -> None:
     assert "systemd --user is not reachable in this session" in proc.stderr
 
 
-def test_linux_launcher_prints_compose_specific_next_action_for_rc3(tmp_path: Path) -> None:
+def test_oneclick_verifies_linux_bot_systemd_services_after_install(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+    shutil.copytree(APP_DIR, app_dir, ignore=shutil.ignore_patterns(".venv", "logs", "__pycache__"))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    venv_bin = app_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    _write_executable(
+        venv_bin / "python",
+        """
+        #!/usr/bin/env bash
+        if [ "${1:-}" = "-" ]; then
+          exit 0
+        fi
+        case "${1:-}" in
+          *net_autodetect.py)
+            if [ "${2:-}" = "detect" ]; then
+              echo '{"mode":"loopback"}'
+            else
+              echo "네트워크 자동 감지: 루프백"
+            fi
+            exit 0 ;;
+          *)
+            exit 0 ;;
+        esac
+        """,
+    )
+    _write_linux_uname(fake_bin)
+    _write_executable(
+        fake_bin / "systemctl",
+        """
+        #!/usr/bin/env bash
+        if [ "${1:-}" = "--user" ] && [ "${2:-}" = "show-environment" ]; then
+          exit 0
+        fi
+        if [ "${1:-}" = "--user" ] && [ "${2:-}" = "is-active" ]; then
+          echo active
+          exit 0
+        fi
+        exit 0
+        """,
+    )
+    _write_executable(
+        app_dir / "infra_up.sh",
+        """
+        #!/usr/bin/env bash
+        exit 0
+        """,
+    )
+    _write_executable(
+        app_dir / "bogo_ctl.sh",
+        """
+        #!/usr/bin/env bash
+        exit 0
+        """,
+    )
+    _write_executable(
+        app_dir / "migration" / "bogo_restore.sh",
+        """
+        #!/usr/bin/env bash
+        exit 0
+        """,
+    )
+
+    proc = subprocess.run(
+        ["bash", str(app_dir / "bogo_oneclick.sh"), "start"],
+        cwd=app_dir,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "BOGO_MM_WAIT_TIMEOUT": "1",
+            "BOGO_DASH_WAIT_TIMEOUT": "1",
+        },
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    assert "Verifying agent bot systemd services are active" in output
+    assert "Agent bot systemd services active." in output
+
+
+def test_linux_launcher_prints_compose_required_next_action_for_rc3(tmp_path: Path) -> None:
     root = tmp_path / "bogo"
     launcher_dir = root / "launchers"
     app_dir = root / "app"
@@ -698,8 +946,9 @@ def test_linux_launcher_prints_compose_specific_next_action_for_rc3(tmp_path: Pa
 
     output = proc.stdout + proc.stderr
     assert proc.returncode == 3, output
-    assert "Stopped because Docker Compose is not available." in output
-    assert "install/enable Docker Compose" in output
+    assert "Docker Compose was explicitly required" in output
+    assert "unset BOGO_REQUIRE_COMPOSE" in output
+    assert "falls back to plain Docker CLI" in output
     assert "docker compose version" in output
 
 
@@ -952,12 +1201,61 @@ def test_linux_systemd_templates_quote_repo_paths() -> None:
 
     assert 'WorkingDirectory="__WORKDIR__"' in unit
     assert 'ExecStart=/usr/bin/env bash "__WORKDIR__/run_role.sh" %i' in unit
+    assert "NoNewPrivileges=true" in unit
+    assert "PrivateTmp=true" in unit
     assert 'WorkingDirectory="__WORKDIR__"' in backup
     assert 'ExecStart=/usr/bin/env bash "__WORKDIR__/migration/bogo_backup.sh"' in backup
     assert '--out "__WORKDIR__/migration"' in backup
+    assert "NoNewPrivileges=true" in backup
+    assert "PrivateTmp=true" in backup
 
 
 def test_env_example_quotes_multihome_cors_value() -> None:
     example = (APP_DIR / ".env.example").read_text(encoding="utf-8")
 
     assert '# MM_ALLOW_CORS_FROM="http://172.16.0.10:8065 http://192.168.50.10:8065"' in example
+
+
+def test_bootstrap_reuses_usable_venv_when_requirements_are_unchanged(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    shutil.copy2(APP_DIR / "bootstrap.sh", app_dir / "bootstrap.sh")
+    requirements = app_dir / "requirements.txt"
+    requirements.write_text("demo-package==1\n", encoding="utf-8")
+    venv_bin = app_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    calls = tmp_path / "venv-python.calls"
+    _write_executable(
+        venv_bin / "python",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> {str(calls)!r}
+        if [ "${{1:-}}" = "-c" ]; then
+          exit 0
+        fi
+        if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "pip" ]; then
+          echo "pip should not run when requirements stamp matches" >&2
+          exit 99
+        fi
+        exit 0
+        """,
+    )
+    req_hash = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    (app_dir / ".venv" / ".bogo_requirements.sha256").write_text(f"{req_hash}\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        ["bash", str(app_dir / "bootstrap.sh")],
+        cwd=app_dir,
+        env={**os.environ, "PATH": "/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    assert "Existing .venv is usable" in output
+    assert "Requirements unchanged" in output
+    call_log = calls.read_text(encoding="utf-8")
+    assert "-m pip" not in call_log

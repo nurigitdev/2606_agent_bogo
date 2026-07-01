@@ -132,6 +132,28 @@ container_state() {
   esac
 }
 
+container_health() {
+  local out
+  out="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1" 2>/dev/null || echo 'absent')"
+  out="$(printf '%s\n' "$out" | awk 'NF { print; exit }')"
+  case "$out" in
+    healthy|unhealthy|starting|none|absent) printf '%s\n' "$out" ;;
+    *) printf 'none\n' ;;
+  esac
+}
+
+container_networks() {
+  docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$1" 2>/dev/null || true
+}
+
+container_on_network() {
+  local name="$1" net="$2"
+  case " $(container_networks "$name") " in
+    *" $net "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # docker compose invoker (auto-selects the new 'docker compose' / legacy 'docker-compose').
 # Pins --project-directory to the directory containing the compose file (=app). This way,
 # regardless of the calling cwd or the compose implementation (v2 / legacy docker-compose),
@@ -209,11 +231,36 @@ docker_network_ensure() {
   docker network inspect "$NET_NAME" >/dev/null 2>&1 || docker network create "$NET_NAME" >/dev/null
 }
 
+ensure_pg_network_attachment() {
+  [ "$(container_state "$PG_NAME")" != "absent" ] || return 0
+  docker_network_ensure
+  if container_on_network "$PG_NAME" "$NET_NAME"; then
+    return 0
+  fi
+  say "$PG_NAME is not attached to $NET_NAME → attaching with aliases ($PG_NAME, $PG_LEGACY_ALIAS)."
+  if ! docker network connect --alias "$PG_LEGACY_ALIAS" --alias "$PG_NAME" "$NET_NAME" "$PG_NAME" >/dev/null; then
+    err "Failed to attach $PG_NAME to $NET_NAME. Mattermost cannot resolve the database without this network."
+    exit 1
+  fi
+}
+
+docker_image_ensure() {
+  local image="$1"
+  docker image inspect "$image" >/dev/null 2>&1 && return 0
+  say "Pulling Docker image: $image (first run may take a while)..."
+  if ! docker pull "$image"; then
+    err "Could not pull Docker image: $image"
+    err "Cause: first-time startup needs internet access, or this image must be pre-loaded."
+    err "Retry after network access is available, or run: docker pull $image"
+    exit 1
+  fi
+}
+
 wait_pg_ready() {
   local pg_user="$1" pg_db="$2" waited=0 health
   say "Waiting for Postgres healthy (up to ${PG_WAIT_TIMEOUT}s)..."
   while :; do
-    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$PG_NAME" 2>/dev/null || echo 'none')"
+    health="$(container_health "$PG_NAME")"
     if [ "$health" = "healthy" ] || docker exec "$PG_NAME" pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
       ok "Postgres ready (${waited}s)."
       return 0
@@ -229,6 +276,7 @@ wait_pg_ready() {
 
 run_pg_with_docker_cli() {
   local pg_user="$1" pg_pass="$2" pg_db="$3"
+  docker_image_ensure "postgres:15-alpine"
   say "$PG_NAME absent → docker run (Postgres, persistent volume)."
   if ! docker run -d \
     --name "$PG_NAME" \
@@ -252,6 +300,7 @@ run_pg_with_docker_cli() {
 run_mm_with_docker_cli() {
   local pg_user="$1" pg_pass="$2" pg_db="$3" bind_host="$4" site_url="$5" cors_from="$6"
   local datasource
+  docker_image_ensure "mattermost/mattermost-team-edition:9.11"
   datasource="postgres://${pg_user}:${pg_pass}@${PG_LEGACY_ALIAS}:5432/${pg_db}?sslmode=disable&connect_timeout=10"
   say "$MM_NAME absent → docker run (Mattermost, persistent volumes, bind $bind_host:8065)."
   if ! docker run -d \
@@ -303,6 +352,7 @@ docker_cli_up_or_exit() {
     say "$PG_NAME state=$st → docker start"
     docker start "$PG_NAME" >/dev/null
   fi
+  ensure_pg_network_attachment
   wait_pg_ready "$pg_user" "$pg_db"
 
   if [ "$recreate_mm" = "1" ] && [ "$(container_state "$MM_NAME")" != "absent" ]; then
@@ -354,6 +404,12 @@ ensure_created_via_compose() {
     exit 1
   fi
   say "Detected missing containers → creating/starting backbone (compose if available, Docker CLI fallback otherwise)..."
+  if [ "$(container_state "$PG_NAME")" != "absent" ] && [ "$(container_health "$PG_NAME")" = "none" ]; then
+    warn "$PG_NAME already exists without a Docker healthcheck → using Docker CLI fallback to avoid compose depends_on failure."
+    docker_cli_up_or_exit 0
+    ok "Backbone container creation/startup complete."
+    return 0
+  fi
   compose_up_or_exit 0
   ok "Backbone container creation/startup complete."
 }
@@ -399,6 +455,7 @@ ensure_container() {
 # 'hermes-pg' resolves to 'bogo-pg'. The alias disappears when the container is recreated, so
 # it is guaranteed on every boot.
 ensure_pg_legacy_alias() {
+  ensure_pg_network_attachment
   # Find the network PG is attached to and, if the hermes-pg alias is absent, assign it (idempotent).
   local nets
   nets="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$PG_NAME" 2>/dev/null || echo '')"

@@ -128,10 +128,10 @@ elif [ "$rc" -eq 2 ]; then
   say "  - Linux native:  sudo systemctl start docker  (on permission errors: sudo usermod -aG docker \"\$USER\" then re-login)"
   say "  - when using colima: colima start"
 elif [ "$rc" -eq 3 ]; then
-  fail "Stopped because Docker Compose is not available."
-  say "Next action: install/enable Docker Compose, then run again."
-  say "  - Linux native: install the docker compose plugin package for your distro."
-  say "  - Docker Desktop/Colima: make sure 'docker compose version' works."
+  fail "Stopped because Docker Compose was explicitly required but is not available."
+  say "Next action: unset BOGO_REQUIRE_COMPOSE or install/enable Docker Compose, then run again."
+  say "  - Normal Linux one-click startup does not require Compose; it falls back to plain Docker CLI."
+  say "  - Compose-only mode: make sure 'docker compose version' works."
 elif [ "$rc" -eq 4 ]; then
   fail "Stopped because Linux user services are not reachable."
   say "Next action: run from a normal logged-in user terminal, then run again."

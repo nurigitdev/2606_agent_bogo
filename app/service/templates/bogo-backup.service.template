@@ -11,6 +11,9 @@ Type=oneshot
 WorkingDirectory="__WORKDIR__"
 # --quiet automatic mode; output goes to the repo's migration/, auto-pruned to __RETAIN__ kept.
 ExecStart=/usr/bin/env bash "__WORKDIR__/migration/bogo_backup.sh" --quiet --out "__WORKDIR__/migration" --retain __RETAIN__
+# Conservative hardening that still permits Docker CLI access and repo-local backup writes.
+NoNewPrivileges=true
+PrivateTmp=true
 # Low priority so the backup does not interfere with the bots' responsiveness.
 Nice=10
 IOSchedulingClass=idle

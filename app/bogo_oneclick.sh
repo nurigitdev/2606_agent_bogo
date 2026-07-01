@@ -151,7 +151,7 @@ step_venv() {
     fi
   fi
   # Verify core dependency imports (sentence-transformers is optional, so excluded).
-  if ! "$VENV_PY" -c "import urllib.request, json, sqlite3" >/dev/null 2>&1; then
+  if ! "$VENV_PY" -c "import urllib.request, json, sqlite3, websockets" >/dev/null 2>&1; then
     warn ".venv exists but is not usable here → recreating it with bootstrap.sh"
     if ! "$HERE/bootstrap.sh"; then
       case "$(uname -s)" in
@@ -161,7 +161,7 @@ step_venv() {
       esac
       return 1
     fi
-    if ! "$VENV_PY" -c "import urllib.request, json, sqlite3" >/dev/null 2>&1; then
+    if ! "$VENV_PY" -c "import urllib.request, json, sqlite3, websockets" >/dev/null 2>&1; then
       err "The venv python is still not working properly after bootstrap: $VENV_PY"
       return 1
     fi
@@ -467,6 +467,27 @@ step_bots() {
   fi
 }
 
+step_bot_services_check() {
+  case "$(uname -s)" in
+    Linux)
+      command -v systemctl >/dev/null 2>&1 || return 0
+      systemctl --user show-environment >/dev/null 2>&1 || return 0
+      say "[5.1/5] Verifying agent bot systemd services are active..."
+      local r active failed=0
+      for r in orchestrator hr dev admin; do
+        active="$(systemctl --user is-active "bogo@$r.service" 2>/dev/null || true)"
+        if [ "$active" != "active" ]; then
+          err "bogo@$r.service is not active (state=${active:-unknown})."
+          journalctl --user -u "bogo@$r.service" -n 20 --no-pager 2>/dev/null >&2 || true
+          failed=1
+        fi
+      done
+      [ "$failed" -eq 0 ] || return 1
+      ok "Agent bot systemd services active."
+      ;;
+  esac
+}
+
 # ════════════════════════════════════════════════════════════════════════
 # Stop / status
 # ════════════════════════════════════════════════════════════════════════
@@ -573,8 +594,8 @@ do_start() {
     return 2
   elif [ "$infra_rc" -eq 3 ]; then
     err "════ Blocker: could not bring up the Mattermost communication backbone ════"
-    err "Cause: Docker Compose is not available."
-    err "The one thing the operator should do: install/enable the Docker Compose plugin, then re-run this launcher."
+    err "Cause: Docker Compose is explicitly required (BOGO_REQUIRE_COMPOSE=1) but is not available."
+    err "The one thing the operator should do: unset BOGO_REQUIRE_COMPOSE or install/enable Docker Compose, then re-run this launcher."
     return 3
   elif [ "$infra_rc" -ne 0 ]; then
     err "Step 3 (backbone) failed — aborting."
@@ -596,6 +617,7 @@ do_start() {
     err "Step 4 (bot + dashboard registration) failed — aborting."
     return 1
   fi
+  step_bot_services_check || { err "Step 5.1 (agent bot service health) failed — aborting."; return 1; }
   # Health-check until the launchd-started dashboard responds (not a direct launch; auto-revival ownership is launchd's).
   step_dashboard || { err "Step 5 (dashboard health check) failed — need to check launchd status."; return 1; }
 

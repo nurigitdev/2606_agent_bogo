@@ -37,22 +37,47 @@ if [ -z "${PY:-}" ]; then
 fi
 say "Using Python: $PY"
 
-# ── 2. (Re)create the portable venv ────────────────────────────────────────────
-# If an existing .venv was copied from another PC or has an absolute path pinned, it cannot be
-# trusted → recreate it unconditionally. --copies copies binaries instead of symlinks for portability.
-if [ -d "$HERE/.venv" ]; then
-  say "Removing and recreating the existing .venv (to drop pinned absolute paths)"
-  rm -rf "$HERE/.venv"
-fi
-say "Creating .venv..."
-"$PY" -m venv --copies "$HERE/.venv"
-
 VENV_PY="$HERE/.venv/bin/python"
+REQ_STAMP="$HERE/.venv/.bogo_requirements.sha256"
+
+requirements_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$HERE/requirements.txt" | awk '{print $1}'
+  else
+    shasum -a 256 "$HERE/requirements.txt" | awk '{print $1}'
+  fi
+}
+
+venv_usable() {
+  [ -x "$VENV_PY" ] && "$VENV_PY" -c "import json, sqlite3, urllib.request, websockets" >/dev/null 2>&1
+}
+
+# ── 2. Create or reuse the portable venv ───────────────────────────────────────
+# If an existing .venv still runs at this path, keep it. This prevents one-click
+# setup from deleting a working venv and re-downloading packages later in the
+# same startup. If the venv was copied from another PC and its interpreter is
+# pinned to an old absolute path, the usability check fails and we recreate it.
+if venv_usable; then
+  say "Existing .venv is usable — reusing it."
+else
+  if [ -d "$HERE/.venv" ]; then
+    say "Existing .venv is not usable here → recreating it."
+    rm -rf "$HERE/.venv"
+  fi
+  say "Creating .venv..."
+  "$PY" -m venv --copies "$HERE/.venv"
+fi
 
 # ── 3. Install dependencies ────────────────────────────────────────────────────
-say "Upgrading pip + installing requirements..."
-"$VENV_PY" -m pip install --upgrade pip >/dev/null
-"$VENV_PY" -m pip install -r "$HERE/requirements.txt"
+req_hash="$(requirements_hash)"
+if [ -f "$REQ_STAMP" ] && [ "$(cat "$REQ_STAMP" 2>/dev/null || true)" = "$req_hash" ]; then
+  say "Requirements unchanged — skipping pip install."
+else
+  say "Upgrading pip + installing requirements..."
+  "$VENV_PY" -m pip install --upgrade pip >/dev/null
+  "$VENV_PY" -m pip install -r "$HERE/requirements.txt"
+  printf '%s\n' "$req_hash" > "$REQ_STAMP"
+fi
 
 # ── 4. Copy config / .env (only when missing) ─────────────────────────────────
 copy_if_missing() {
