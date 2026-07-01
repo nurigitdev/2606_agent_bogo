@@ -97,12 +97,16 @@ if [ ! -f "$HERE/.env" ]; then
     say "Created: .env  (from .env.example, fill in OPENROUTER_API_KEY)"
   fi
 fi
+[ -f "$HERE/.env" ] && chmod go-rwx "$HERE/.env" 2>/dev/null || true
 
 copy_if_missing "config/llm_config.json.example"   "llm_config.json"
 copy_if_missing "config/nk_config.json.example"    "nk_config.json"
 copy_if_missing "config/genz_config.json.example"  "genz_config.json"
 copy_if_missing "config/gyaru_config.json.example" "gyaru_config.json"
 copy_if_missing "config/channels.json.example"     "channels.json"
+for secret_file in "$HERE"/*_config.json "$HERE/channels.json" "$HERE/employees.json"; do
+  [ -f "$secret_file" ] && chmod go-rwx "$secret_file" 2>/dev/null || true
+done
 
 # ── 4b. Git hooks: activate repo hooks so the Hangul/cp949 gate runs on every
 #        commit in a fresh clone too (core.hooksPath is a local, uncommitted

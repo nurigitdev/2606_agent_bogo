@@ -250,7 +250,7 @@ docker_image_ensure() {
   say "Pulling Docker image: $image (first run may take a while)..."
   if ! docker pull "$image"; then
     err "Could not pull Docker image: $image"
-    err "Cause: first-time startup needs internet access, or this image must be pre-loaded."
+    err "Cause: first-time startup needs internet access, this image must be pre-loaded, or the image may not support this host architecture."
     err "Retry after network access is available, or run: docker pull $image"
     exit 1
   fi

@@ -1222,6 +1222,12 @@ def test_bootstrap_reuses_usable_venv_when_requirements_are_unchanged(tmp_path: 
     shutil.copy2(APP_DIR / "bootstrap.sh", app_dir / "bootstrap.sh")
     requirements = app_dir / "requirements.txt"
     requirements.write_text("demo-package==1\n", encoding="utf-8")
+    env_file = app_dir / ".env"
+    env_file.write_text("OPENROUTER_API_KEY=secret\n", encoding="utf-8")
+    config_file = app_dir / "nk_config.json"
+    config_file.write_text('{"bot_token":"secret"}\n', encoding="utf-8")
+    env_file.chmod(0o644)
+    config_file.chmod(0o644)
     venv_bin = app_dir / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
     calls = tmp_path / "venv-python.calls"
@@ -1259,3 +1265,5 @@ def test_bootstrap_reuses_usable_venv_when_requirements_are_unchanged(tmp_path: 
     assert "Requirements unchanged" in output
     call_log = calls.read_text(encoding="utf-8")
     assert "-m pip" not in call_log
+    assert env_file.stat().st_mode & 0o077 == 0
+    assert config_file.stat().st_mode & 0o077 == 0

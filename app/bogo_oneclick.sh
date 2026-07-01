@@ -42,6 +42,15 @@ cd "$HERE"
 LOGS="$HERE/logs"
 mkdir -p "$LOGS"
 
+lock_down_secret_files() {
+  local f
+  for f in "$HERE/.env" "$HERE"/*_config.json "$HERE/channels.json" "$HERE/employees.json"; do
+    [ -f "$f" ] && chmod go-rwx "$f" 2>/dev/null || true
+  done
+}
+
+lock_down_secret_files
+
 env_file_value() {
   local key="$1" file="$HERE/.env"
   if [ "${!key+x}" = "x" ]; then
