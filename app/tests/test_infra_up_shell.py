@@ -1296,6 +1296,8 @@ def test_requirements_select_python_specific_hermes_agent_versions() -> None:
     assert _selected_hermes_agent_versions("3.13") == [">=0.17.0"]
     assert _selected_hermes_agent_versions("3.9") == []
     assert _selected_hermes_agent_versions("3.14") == [">=0.17.0"]
+    assert _selected_hermes_agent_versions("3.15") == [">=0.17.0"]
+    assert _selected_hermes_agent_versions("3.99") == [">=0.17.0"]
 
 
 def test_bootstrap_skips_too_old_python_candidates_before_venv(tmp_path: Path) -> None:
@@ -1353,7 +1355,7 @@ def test_bootstrap_skips_too_old_python_candidates_before_venv(tmp_path: Path) -
     assert "venv should not be created" not in output
 
 
-def test_bootstrap_future_python_falls_back_when_hermes_is_missing(tmp_path: Path) -> None:
+def test_bootstrap_any_future_python_falls_back_when_hermes_is_missing(tmp_path: Path) -> None:
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     shutil.copy2(APP_DIR / "bootstrap.sh", app_dir / "bootstrap.sh")
@@ -1361,14 +1363,14 @@ def test_bootstrap_future_python_falls_back_when_hermes_is_missing(tmp_path: Pat
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     calls = tmp_path / "python.calls"
-    venv_py_314 = tmp_path / "venv-python-314"
+    venv_py_future = tmp_path / "venv-python-future"
     venv_py_313 = tmp_path / "venv-python-313"
     _write_executable(
-        venv_py_314,
+        venv_py_future,
         r"""
         #!/usr/bin/env bash
         if [ "${1:-}" = "-c" ]; then
-          printf '3.14.4\n'
+          printf '3.99.4\n'
           exit 0
         fi
         if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then
@@ -1407,14 +1409,14 @@ def test_bootstrap_future_python_falls_back_when_hermes_is_missing(tmp_path: Pat
         printf 'python3 %s\\n' "$*" >> {str(calls)!r}
         if [ "${{1:-}}" = "-c" ]; then
           case "${{2:-}}" in
-            *'sys.version_info[:3]'*) printf '3.14.4\\n'; exit 0 ;;
+            *'sys.version_info[:3]'*) printf '3.99.4\\n'; exit 0 ;;
             *'v=sys.version_info'*) printf 'future\\n'; exit 0 ;;
           esac
         fi
         if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "venv" ]; then
           venv_dir="${{4:?}}"
           mkdir -p "$venv_dir/bin"
-          cp {str(venv_py_314)!r} "$venv_dir/bin/python"
+          cp {str(venv_py_future)!r} "$venv_dir/bin/python"
           chmod +x "$venv_dir/bin/python"
           exit 0
         fi
@@ -1477,9 +1479,9 @@ def test_bootstrap_future_python_falls_back_when_hermes_is_missing(tmp_path: Pat
 
     output = proc.stdout + proc.stderr
     assert proc.returncode == 0, output
-    assert "Trying future Python 3.14.4" in output
+    assert "Trying future Python 3.99.4" in output
     assert "Runtime dependency validation failed after pip install" in output
-    assert "Python 3.14.4" in output
+    assert "Python 3.99.4" in output
     assert "could not satisfy BOGO dependencies; trying another interpreter" in output
     assert "Using Python:" in output
     assert "3.13.5" in output
