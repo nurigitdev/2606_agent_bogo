@@ -23,8 +23,9 @@ say() { printf '\033[0;36m[bootstrap]\033[0m %s\n' "$*"; }
 err() { printf '\033[0;31m[bootstrap:error]\033[0m %s\n' "$*" >&2; }
 
 # ── 1. Detect the Python interpreter ──────────────────────────────────────────
-# Do not parse, compare, or pin versions. Use python3 if present, otherwise python.
-# Only when neither exists do we print install guidance and exit.
+# Use python3 if present, otherwise python. Dependency support is checked only
+# when this script needs to create/recreate the local venv; an already working
+# .venv can continue to run without caring about the system interpreter.
 PY="$(command -v python3 || command -v python || true)"
 if [ -z "${PY:-}" ]; then
   err "Could not find a Python interpreter (neither python3 nor python)."
@@ -39,6 +40,35 @@ say "Using Python: $PY"
 
 VENV_PY="$HERE/.venv/bin/python"
 REQ_STAMP="$HERE/.venv/.bogo_requirements.sha256"
+
+python_version() {
+  "$PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'
+}
+
+python_compat() {
+  "$PY" -c 'import sys; v=sys.version_info; print("ok" if (v.major, v.minor) >= (3, 10) and (v.major, v.minor) < (3, 14) else ("too_old" if (v.major, v.minor) < (3, 10) else "too_new"))'
+}
+
+require_supported_python_for_new_venv() {
+  local py_ver compat
+  py_ver="$(python_version 2>/dev/null || echo unknown)"
+  compat="$(python_compat 2>/dev/null || echo too_old)"
+  case "$compat" in
+    ok) return 0 ;;
+    too_old)
+      err "Python $py_ver is too old for BOGO dependencies."
+      err "Use Python 3.10-3.13. Python 3.10 selects hermes-agent==0.15.2; Python 3.11-3.13 selects hermes-agent==0.17.0."
+      ;;
+    too_new)
+      err "Python $py_ver is newer than the supported hermes-agent range."
+      err "Use Python 3.10-3.13 until hermes-agent publishes support for this Python version."
+      ;;
+    *)
+      err "Could not verify Python compatibility for: $PY"
+      ;;
+  esac
+  exit 1
+}
 
 requirements_hash() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -64,8 +94,16 @@ else
     say "Existing .venv is not usable here → recreating it."
     rm -rf "$HERE/.venv"
   fi
+  require_supported_python_for_new_venv
   say "Creating .venv..."
-  "$PY" -m venv --copies "$HERE/.venv"
+  if ! "$PY" -m venv --copies "$HERE/.venv"; then
+    err "Could not create .venv with Python $(python_version 2>/dev/null || echo unknown) at: $PY"
+    case "$(uname -s)" in
+      Linux) err "If Debian/Ubuntu reports ensurepip or venv missing, install the matching venv package, e.g. sudo apt install python3-venv." ;;
+      Darwin) err "Install or repair Python with venv support, e.g. brew install python." ;;
+    esac
+    exit 1
+  fi
 fi
 
 # ── 3. Install dependencies ────────────────────────────────────────────────────
@@ -74,8 +112,18 @@ if [ -f "$REQ_STAMP" ] && [ "$(cat "$REQ_STAMP" 2>/dev/null || true)" = "$req_ha
   say "Requirements unchanged — skipping pip install."
 else
   say "Upgrading pip + installing requirements..."
-  "$VENV_PY" -m pip install --upgrade pip >/dev/null
-  "$VENV_PY" -m pip install -r "$HERE/requirements.txt"
+  if ! "$VENV_PY" -m pip install --upgrade pip >/dev/null; then
+    err "pip upgrade failed. Check Python/pip installation or network access, then retry."
+    exit 1
+  fi
+  if ! "$VENV_PY" -m pip install -r "$HERE/requirements.txt"; then
+    err "Dependency installation failed."
+    err "This is usually a Python-version/package compatibility issue or network/package-index problem."
+    err "Python in use: $("$VENV_PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unknown)"
+    err "Expected hermes-agent selection: Python 3.10 -> 0.15.2; Python 3.11-3.13 -> 0.17.0."
+    err "If pip tries hermes-agent==0.17.0 on Python 3.10, use this updated requirements.txt with Python markers and retry."
+    exit 1
+  fi
   printf '%s\n' "$req_hash" > "$REQ_STAMP"
 fi
 

@@ -104,7 +104,7 @@ cd app
 
 Windows(PowerShell): `pwsh ./bogo_ctl.ps1 setup` → `pwsh ./bogo_ctl.ps1 restart`
 
-> **Python 3 필요**(버전 강제·체크 없음 — `python3`(없으면 `python`)을 찾아 그대로 venv 구성). Docker가 동작해야 통신 백본이 선다
+> **Python 3.10-3.13 필요**(`python3` 우선, 없으면 `python`; venv 생성 시 지원 범위를 확인). Docker가 동작해야 통신 백본이 선다
 > (macOS는 Colima 또는 Docker Desktop, Linux는 `docker.io`, Windows는 Docker Desktop). Docker Compose가 있으면 사용하고,
 > 없으면 `infra_up.sh`가 Docker CLI fallback으로 Mattermost/Postgres를 만든다.
 > 통신 백본만 직접 올리려면 `cd app && ./infra_up.sh` 또는 Compose 설치 환경에서 `docker compose up -d`.
@@ -177,8 +177,8 @@ agent-bogo/
 
 ## 기술 스택
 
-- **언어 / 런타임** — Python 3 (버전 체크 없음; ARM64 포함, 추가 빌드 도구 없이 `pip install` 동작)
-- **두뇌** — Nous Research `hermes-agent==0.17.0` (AIAgent 런타임), 모델은 OpenRouter DeepSeek V4 Flash(기본) 또는 로컬 Ollama 등 OpenAI 호환 서버
+- **언어 / 런타임** — Python 3.10-3.13 (venv 생성 시 지원 범위 확인; ARM64 포함, 추가 빌드 도구 없이 `pip install` 동작)
+- **두뇌** — Nous Research `hermes-agent` (Python 3.11+은 0.17.0, Python 3.10은 0.15.2 fallback), 모델은 OpenRouter DeepSeek V4 Flash(기본) 또는 로컬 Ollama 등 OpenAI 호환 서버
 - **메시징** — Mattermost (WebSocket 수신 + REST 게시), `websockets>=15.0`
 - **인프라** — Docker (Compose 사용 가능, 미설치 시 CLI fallback), Mattermost + Postgres, 멀티홈 NIC 직결
 - **로컬 RAG** — SQLite FTS5(표준 라이브러리) + 선택적 `sentence-transformers`(all-MiniLM-L6-v2, 오프라인) · `numpy`

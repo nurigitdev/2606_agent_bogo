@@ -37,7 +37,7 @@ set -uo pipefail
 
 # ── Own location = app root (safe for Hangul/space paths) ──────────────────────────
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-cd "$HERE"
+cd "$HERE" || exit 1
 
 LOGS="$HERE/logs"
 mkdir -p "$LOGS"
@@ -86,7 +86,6 @@ env_or_default() {
 DASH_HOST="127.0.0.1"
 DASH_PORT="$(env_or_default BOGO_DASHBOARD_PORT 8642)"
 DASH_PID_FILE="$LOGS/dashboard.pid"
-DASH_OUT="$LOGS/dashboard.out.log"
 DASH_ERR="$LOGS/dashboard.err.log"
 DASH_HEALTH_TIMEOUT="${BOGO_DASH_WAIT_TIMEOUT:-30}"
 
@@ -151,11 +150,8 @@ step_venv() {
   if [ ! -x "$VENV_PY" ]; then
     warn ".venv missing → running bootstrap.sh (may take a few minutes)"
     if ! "$HERE/bootstrap.sh"; then
-      case "$(uname -s)" in
-        Darwin) err "bootstrap failed. Check whether Python 3 is installed: brew install python" ;;
-        Linux)  err "bootstrap failed. Check whether Python 3 + venv are installed: sudo apt install python3 python3-venv" ;;
-        *)      err "bootstrap failed. Check whether Python 3 is installed." ;;
-      esac
+      err "bootstrap failed — see the [bootstrap:error] line above for the real cause."
+      err "oneclick did not relabel the failure; fix the bootstrap-reported cause and retry."
       return 1
     fi
   fi
@@ -163,11 +159,8 @@ step_venv() {
   if ! "$VENV_PY" -c "import urllib.request, json, sqlite3, websockets" >/dev/null 2>&1; then
     warn ".venv exists but is not usable here → recreating it with bootstrap.sh"
     if ! "$HERE/bootstrap.sh"; then
-      case "$(uname -s)" in
-        Darwin) err "bootstrap failed. Check whether Python 3 is installed: brew install python" ;;
-        Linux)  err "bootstrap failed. Check whether Python 3 + venv are installed: sudo apt install python3 python3-venv" ;;
-        *)      err "bootstrap failed. Check whether Python 3 is installed." ;;
-      esac
+      err "bootstrap failed — see the [bootstrap:error] line above for the real cause."
+      err "oneclick did not relabel the failure; fix the bootstrap-reported cause and retry."
       return 1
     fi
     if ! "$VENV_PY" -c "import urllib.request, json, sqlite3, websockets" >/dev/null 2>&1; then
@@ -533,11 +526,10 @@ do_stop() {
   stop_backup_snapshot
   say "Stopping the dashboard (deregister launchd/systemd → block KeepAlive revival)..."
   dashboard_service_stop
-  local stopped=0
   # After deregistration, clean up any remaining dashboard processes of ours (including past nohup).
   for p in $(pids_on_port "$DASH_PORT"); do
     if ps -p "$p" -o command= 2>/dev/null | grep -q "ceo_dashboard.py"; then
-      kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true; stopped=1
+      kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true
     fi
   done
   rm -f "$DASH_PID_FILE"
@@ -545,7 +537,11 @@ do_stop() {
 
   if [ "$all" = "--all" ]; then
     say "Deregistering bot launchd/systemd (stopping always-on)..."
-    "$HERE/bogo_ctl.sh" uninstall && ok "Bot always-on deregistered." || warn "Warning during bot deregistration."
+    if "$HERE/bogo_ctl.sh" uninstall; then
+      ok "Bot always-on deregistered."
+    else
+      warn "Warning during bot deregistration."
+    fi
     say "Note: the Mattermost/Postgres containers and Colima are left as-is to preserve data."
     say "      If a full shutdown is needed, do it manually: docker stop bogo-mm bogo-pg && colima stop"
   fi

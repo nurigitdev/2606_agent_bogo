@@ -356,7 +356,7 @@ pwsh ./bogo_ctl.ps1 setup    # venv + 의존성 + config 복사 후 Task Schedul
 pwsh ./bogo_ctl.ps1 restart
 ```
 
-> **Python 3 필요**(버전 강제·체크 없음 — `python3`(없으면 `python`)을 찾아 그대로 venv 구성). 인터프리터가 **전혀 없을 때만** 부트스트랩이 설치 안내 후 멈춘다.
+> **Python 3.10-3.13 필요**(`python3` 우선, 없으면 `python`; venv 생성 시 지원 범위를 확인). 인터프리터가 없거나 지원 범위 밖이면 부트스트랩이 이유를 출력하고 멈춘다.
 > mac: `brew install python` · Ubuntu: `sudo apt install python3 python3-venv`
 > Windows: [python.org](https://www.python.org/downloads/) 최신 버전 (설치 시 "Add to PATH" 체크)
 
@@ -413,7 +413,7 @@ Linux 로그: `journalctl --user -u bogo@orchestrator -f`. Windows: 작업 스�
 최종 운영 환경은 **NVIDIA DGX Spark**(DGX OS = Ubuntu 24.04, **ARM64/aarch64**, Python 3.12 이상)다.
 이 저장소는 ARM64에서 **추가 빌드 도구 없이 `pip install` 만으로** 동작한다 — 근거:
 
-- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이라 아키텍처·파이썬 버전과 무관하게 설치된다(requirements.txt 참조).
+- Nous Research 외부 pip 런타임 패키지는 순수 파이썬 휠(`py3-none-any`)이지만 버전별 Python 요구사항이 다르다. `requirements.txt` 는 Python marker 로 Python 3.11 이상에서는 `hermes-agent==0.17.0`, Python 3.10 계열에서는 PyPI 설치 가능한 `0.15.2` 를 선택한다.
 - `websockets` 는 `manylinux_2_17_aarch64` + `cp312` 이상 휠을 제공해 ARM64 Python 3.12 이상에서 바로 설치된다.
 - 따라서 DGX Spark 에서도 컴파일러·헤더 없이 `bootstrap.sh` 가 venv 를 만들고 의존성을 그대로 받는다.
 
