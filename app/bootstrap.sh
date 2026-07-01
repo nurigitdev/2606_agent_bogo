@@ -79,6 +79,14 @@ copy_if_missing "config/genz_config.json.example"  "genz_config.json"
 copy_if_missing "config/gyaru_config.json.example" "gyaru_config.json"
 copy_if_missing "config/channels.json.example"     "channels.json"
 
+# ── 4b. Git hooks: activate repo hooks so the Hangul/cp949 gate runs on every
+#        commit in a fresh clone too (core.hooksPath is a local, uncommitted
+#        setting, so it must be (re)applied here). ──────────────────────────
+if command -v git >/dev/null 2>&1 && git -C "$HERE/.." rev-parse --git-dir >/dev/null 2>&1; then
+  git -C "$HERE/.." config core.hooksPath .githooks
+  say "Git hooks activated (core.hooksPath=.githooks)"
+fi
+
 # ── 5. Guidance ───────────────────────────────────────────────────────────
 say "Bootstrap complete."
 say "Next steps:"

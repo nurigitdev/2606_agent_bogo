@@ -61,6 +61,17 @@ Copy-IfMissing "config\genz_config.json.example"  "genz_config.json"
 Copy-IfMissing "config\gyaru_config.json.example" "gyaru_config.json"
 Copy-IfMissing "config\channels.json.example"     "channels.json"
 
+# Git hooks: activate repo hooks so the Hangul/cp949 gate runs on every commit
+# in a fresh clone too (core.hooksPath is a local, uncommitted setting).
+if (Get-Command git -ErrorAction SilentlyContinue) {
+  $Repo = Split-Path -Parent $Here
+  & git -C $Repo rev-parse --git-dir *> $null
+  if ($LASTEXITCODE -eq 0) {
+    & git -C $Repo config core.hooksPath .githooks
+    Say "Git hooks activated (core.hooksPath=.githooks)"
+  }
+}
+
 Say "Bootstrap complete."
 Say "Next steps:"
 Say "  1) Fill real values into .env / *_config.json / channels.json"

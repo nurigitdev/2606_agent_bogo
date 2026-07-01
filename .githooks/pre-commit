@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# BOGO pre-commit hook — block Hangul in scripts and filenames at the source.
+#
+# WHY: Korean text (echo/comments/error strings) inside Windows batch/PowerShell
+#   scripts and Korean characters in filenames cause cp949 decoding errors in the
+#   Windows cmd console and broke launchers repeatedly. This gate makes the whole
+#   class of failure structurally impossible: any commit that introduces Hangul
+#   into a script body or a filename is rejected before it lands.
+#
+# SCOPE:
+#   1) File CONTENT — staged files with these extensions must contain no Hangul:
+#      .bat .cmd .ps1 .sh .command .desktop .template
+#   2) File NAMES — no staged path (added/renamed/modified) may contain Hangul.
+#
+# EXCLUDES: app/.venv/** (third-party, never edited by us).
+# BYPASS (use only with reason): ALLOW_HANGUL=1 git commit ...
+#
+# PORTABILITY: detection uses `perl \p{Hangul}` (covers syllables + jamo +
+#   compatibility jamo). We do NOT use `grep -P`: macOS/BSD grep has no -P and
+#   fails silently, which previously let Hangul slip through the gate.
+set -eu
+
+SCRIPT_EXT_RE='\.(bat|cmd|ps1|sh|command|desktop|template)$'
+
+if [ "${ALLOW_HANGUL:-0}" = "1" ]; then
+  echo "pre-commit: ALLOW_HANGUL=1 set — Hangul gate bypassed." >&2
+  exit 0
+fi
+
+if ! command -v perl >/dev/null 2>&1; then
+  echo "pre-commit: perl not found — cannot run Hangul gate. Aborting commit." >&2
+  echo "  install perl or bypass with ALLOW_HANGUL=1 (discouraged)." >&2
+  exit 1
+fi
+
+# returns 0 (true) if the given STRING contains any Hangul codepoint
+_str_has_hangul() {
+  printf '%s' "$1" | perl -CSD -e 'my $s=do{local $/;<STDIN>}; exit(($s=~/\p{Hangul}/)?0:1)'
+}
+# prints the number of lines in FILE that contain Hangul
+_file_hangul_lines() {
+  perl -CSD -ne '$c++ if /\p{Hangul}/; END{print $c+0}' "$1" 2>/dev/null
+}
+
+name_hits=()
+content_hits=()
+
+# Staged files (Added/Copied/Modified/Renamed), NUL-safe, venv excluded.
+# bash 3.2 compatible (macOS default): read NUL-delimited via process sub.
+while IFS= read -r -d '' f; do
+  [ -n "$f" ] || continue
+
+  # 1) filename check
+  if _str_has_hangul "$f"; then
+    name_hits+=("$f")
+  fi
+
+  # 2) content check (only target script extensions, only files present on disk)
+  case "$f" in
+    *.bat|*.cmd|*.ps1|*.sh|*.command|*.desktop|*.template)
+      if [ -f "$f" ]; then
+        n=$(_file_hangul_lines "$f")
+        if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+          content_hits+=("$f ($n line(s))")
+        fi
+      fi
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- . ':(exclude)app/.venv/**')
+
+if [ "${#name_hits[@]}" -eq 0 ] && [ "${#content_hits[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+echo "" >&2
+echo "COMMIT BLOCKED — Hangul detected (cp949/cmd safety gate)" >&2
+echo "------------------------------------------------------------" >&2
+
+if [ "${#name_hits[@]}" -gt 0 ]; then
+  echo "Korean characters in filename(s):" >&2
+  for h in "${name_hits[@]}"; do echo "  - $h" >&2; done
+  echo "  -> rename to ASCII (e.g. 'BOGO 시작' -> 'BOGO_start')." >&2
+fi
+
+if [ "${#content_hits[@]}" -gt 0 ]; then
+  echo "Korean text inside script(s):" >&2
+  for h in "${content_hits[@]}"; do echo "  - $h" >&2; done
+  echo "  -> translate echo/comments/error strings to English." >&2
+fi
+
+echo "------------------------------------------------------------" >&2
+echo "Emergency bypass (discouraged): ALLOW_HANGUL=1 git commit ..." >&2
+echo "" >&2
+exit 1
