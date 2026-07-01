@@ -274,19 +274,21 @@ Mattermost·Postgres 컨테이너가 그 PC에 **존재**해야 한다. 저장�
 # 전제: Docker 가 동작해야 한다.
 #   macOS  : Colima(권장)  brew install colima docker && colima start
 #            또는 Docker Desktop 실행
-#   Linux  : sudo apt install docker.io docker-compose-plugin && sudo systemctl enable --now docker
+#   Linux  : sudo apt install docker.io && sudo systemctl enable --now docker
+#            (docker-compose-plugin 은 선택: 없으면 infra_up.sh 가 Docker CLI fallback 사용)
 #   Windows: Docker Desktop(WSL2 백엔드) 실행
 
 cd app
-docker compose up -d            # bogo-pg + bogo-mm 최초 생성·기동(멱등 — 이미 있으면 무변경)
+./infra_up.sh                   # bogo-pg + bogo-mm 최초 생성·기동(Compose 있으면 사용, 없으면 Docker CLI fallback)
+# 또는 Compose 설치 환경에서: docker compose up -d
 # MM 콜드 부팅은 수십 초 걸린다. 준비 확인:
 curl -fsS http://127.0.0.1:8065/api/v4/system/ping   # {"status":"OK"} 면 준비됨
 ```
 
-> `infra_up.sh`(및 `bogo_ctl.sh restart`·`bogo_oneclick.sh`)는 컨테이너가 **없으면 이 compose 로 자동
+> `infra_up.sh`(및 `bogo_ctl.sh restart`·`bogo_oneclick.sh`)는 컨테이너가 **없으면 compose 또는 Docker CLI fallback 으로 자동
 > 생성**하고, 이미 있으면 기동만 한다(데이터 보존). 즉 `./bogo_ctl.sh setup` 한 줄에도 통신 백본이 함께 선다.
-> 명시적으로 백본만 올리려면 위 `docker compose up -d` 를, 멱등 부트 체인(Colima→컨테이너→MM readiness)을
-> 한 번에 보장하려면 `./infra_up.sh` 를 쓴다.
+> 명시적으로 백본만 올릴 때도 `./infra_up.sh` 를 쓰면 Compose 유무와 무관하게 멱등 부트 체인
+> (Colima→컨테이너→MM readiness)을 한 번에 보장한다. Compose 설치 환경에서는 `docker compose up -d` 도 직접 쓸 수 있다.
 
 #### 관리자·봇·채널 셋업 — 이제 자동 (무인 프로비저닝)
 

@@ -32,6 +32,8 @@ err()  { printf '\033[0;31m[infra:ERROR]\033[0m %s\n' "$*" >&2; }
 # the two files).
 PG_NAME="bogo-pg"
 MM_NAME="bogo-mm"
+NET_NAME="bogo-net"
+PG_LEGACY_ALIAS="hermes-pg"
 
 # Initial container creation definition (portability). On a machine where the containers
 # don't exist at all (like another PC), this compose creates bogo-pg/bogo-mm once. Keep it
@@ -41,6 +43,9 @@ COMPOSE_FILE="${BOGO_COMPOSE_FILE:-$HERE/docker-compose.yml}"
 
 # MM healthy wait limit (seconds). An MM cold boot can take tens of seconds.
 MM_WAIT_TIMEOUT="${BOGO_MM_WAIT_TIMEOUT:-180}"
+# PG healthy wait limit (seconds). The plain Docker fallback has to emulate compose's
+# depends_on: service_healthy contract before it starts Mattermost.
+PG_WAIT_TIMEOUT="${BOGO_PG_WAIT_TIMEOUT:-90}"
 # Colima boot wait limit (seconds).
 COLIMA_WAIT_TIMEOUT="${BOGO_COLIMA_WAIT_TIMEOUT:-180}"
 
@@ -195,8 +200,128 @@ port_binding_has_host() {
   return 1
 }
 
+docker_volume_ensure() {
+  local volume="$1"
+  docker volume inspect "$volume" >/dev/null 2>&1 || docker volume create "$volume" >/dev/null
+}
+
+docker_network_ensure() {
+  docker network inspect "$NET_NAME" >/dev/null 2>&1 || docker network create "$NET_NAME" >/dev/null
+}
+
+wait_pg_ready() {
+  local pg_user="$1" pg_db="$2" waited=0 health
+  say "Waiting for Postgres healthy (up to ${PG_WAIT_TIMEOUT}s)..."
+  while :; do
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$PG_NAME" 2>/dev/null || echo 'none')"
+    if [ "$health" = "healthy" ] || docker exec "$PG_NAME" pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
+      ok "Postgres ready (${waited}s)."
+      return 0
+    fi
+    sleep 2; waited=$((waited + 2))
+    if [ "$waited" -ge "$PG_WAIT_TIMEOUT" ]; then
+      err "Postgres was not ready within ${PG_WAIT_TIMEOUT}s (health=$health)."
+      err "Diagnose: docker logs --tail 50 $PG_NAME"
+      exit 1
+    fi
+  done
+}
+
+run_pg_with_docker_cli() {
+  local pg_user="$1" pg_pass="$2" pg_db="$3"
+  say "$PG_NAME absent → docker run (Postgres, persistent volume)."
+  if ! docker run -d \
+    --name "$PG_NAME" \
+    --restart unless-stopped \
+    --network "$NET_NAME" \
+    --network-alias "$PG_LEGACY_ALIAS" \
+    -e "POSTGRES_USER=$pg_user" \
+    -e "POSTGRES_PASSWORD=$pg_pass" \
+    -e "POSTGRES_DB=$pg_db" \
+    -v bogo-pg-data:/var/lib/postgresql/data \
+    --health-cmd "pg_isready -U $pg_user -d $pg_db" \
+    --health-interval 10s \
+    --health-timeout 5s \
+    --health-retries 10 \
+    postgres:15-alpine >/dev/null; then
+    err "Failed to create $PG_NAME via Docker CLI. Diagnose: docker logs --tail 50 $PG_NAME"
+    exit 1
+  fi
+}
+
+run_mm_with_docker_cli() {
+  local pg_user="$1" pg_pass="$2" pg_db="$3" bind_host="$4" site_url="$5" cors_from="$6"
+  local datasource
+  datasource="postgres://${pg_user}:${pg_pass}@${PG_LEGACY_ALIAS}:5432/${pg_db}?sslmode=disable&connect_timeout=10"
+  say "$MM_NAME absent → docker run (Mattermost, persistent volumes, bind $bind_host:8065)."
+  if ! docker run -d \
+    --name "$MM_NAME" \
+    --restart unless-stopped \
+    --network "$NET_NAME" \
+    -p "${bind_host}:8065:8065" \
+    -e "MM_SQLSETTINGS_DRIVERNAME=postgres" \
+    -e "MM_SQLSETTINGS_DATASOURCE=$datasource" \
+    -e "MM_SERVICESETTINGS_SITEURL=$site_url" \
+    -e "MM_SERVICESETTINGS_ALLOWCORSFROM=$cors_from" \
+    -e "MM_SERVICESETTINGS_ENABLELOCALMODE=true" \
+    -v bogo-mm-config:/mattermost/config \
+    -v bogo-mm-data:/mattermost/data \
+    -v bogo-mm-logs:/mattermost/logs \
+    -v bogo-mm-plugins:/mattermost/plugins \
+    -v bogo-mm-client-plugins:/mattermost/client/plugins \
+    --health-cmd "curl -fsS http://localhost:8065/api/v4/system/ping || exit 1" \
+    --health-interval 10s \
+    --health-timeout 5s \
+    --health-retries 20 \
+    --health-start-period 60s \
+    mattermost/mattermost-team-edition:9.11 >/dev/null; then
+    err "Failed to create $MM_NAME via Docker CLI. Diagnose: docker logs --tail 50 $MM_NAME"
+    exit 1
+  fi
+}
+
+docker_cli_up_or_exit() {
+  local recreate_mm="${1:-0}"
+  local pg_user pg_pass pg_db bind_host site_url cors_from st
+  pg_user="$(env_file_value BOGO_PG_USER)"; pg_user="${pg_user:-mmuser}"
+  pg_pass="$(env_file_value BOGO_PG_PASSWORD)"; pg_pass="${pg_pass:-mmuser_password}"
+  pg_db="$(env_file_value BOGO_PG_DB)"; pg_db="${pg_db:-mattermost}"
+  bind_host="$(env_file_value MM_BIND_HOST)"; bind_host="${bind_host:-127.0.0.1}"
+  site_url="$(env_file_value MM_SITE_URL)"; site_url="${site_url:-http://127.0.0.1:8065}"
+  cors_from="$(env_file_value MM_ALLOW_CORS_FROM)"
+
+  say "Docker Compose is not available → using plain Docker CLI fallback (no package install)."
+  docker_network_ensure
+  for volume in bogo-pg-data bogo-mm-config bogo-mm-data bogo-mm-logs bogo-mm-plugins bogo-mm-client-plugins; do
+    docker_volume_ensure "$volume"
+  done
+
+  st="$(container_state "$PG_NAME")"
+  if [ "$st" = "absent" ]; then
+    run_pg_with_docker_cli "$pg_user" "$pg_pass" "$pg_db"
+  elif [ "$st" != "running" ]; then
+    say "$PG_NAME state=$st → docker start"
+    docker start "$PG_NAME" >/dev/null
+  fi
+  wait_pg_ready "$pg_user" "$pg_db"
+
+  if [ "$recreate_mm" = "1" ] && [ "$(container_state "$MM_NAME")" != "absent" ]; then
+    say "$MM_NAME configuration changed → recreating container with existing named volumes via Docker CLI."
+    docker stop "$MM_NAME" >/dev/null 2>&1 || true
+    docker rm "$MM_NAME" >/dev/null
+  fi
+
+  st="$(container_state "$MM_NAME")"
+  if [ "$st" = "absent" ]; then
+    run_mm_with_docker_cli "$pg_user" "$pg_pass" "$pg_db" "$bind_host" "$site_url" "$cors_from"
+  elif [ "$st" != "running" ]; then
+    say "$MM_NAME state=$st → docker start"
+    docker start "$MM_NAME" >/dev/null
+  fi
+}
+
 compose_up_or_exit() {
-  local rc
+  local recreate_mm="${1:-0}" rc
   set +e
   compose up -d
   rc=$?
@@ -205,16 +330,20 @@ compose_up_or_exit() {
     return 0
   fi
   if [ "$rc" = "127" ]; then
-    err "Could not find docker compose. Docker Desktop/Compose plugin must be installed."
-    exit 3
+    if [ "${BOGO_REQUIRE_COMPOSE:-0}" = "1" ]; then
+      err "Could not find docker compose. Docker Desktop/Compose plugin must be installed."
+      exit 3
+    fi
+    docker_cli_up_or_exit "$recreate_mm"
+    return 0
   fi
   err "compose up failed (rc=$rc). Diagnose: docker compose -f \"$COMPOSE_FILE\" logs"
   exit 1
 }
 
-# If any container is missing, create both from scratch via compose (idempotent: no change if
-# they already exist). The key to portability across PCs — without this step it stalls at
-# 'absent' and MM itself can't come up.
+# If any container is missing, create both from scratch via compose or plain Docker CLI
+# fallback (idempotent: no change if they already exist). The key to portability across PCs
+# — without this step it stalls at 'absent' and MM itself can't come up.
 COMPOSE_CREATED=0
 ensure_created_via_compose() {
   [ "$COMPOSE_CREATED" = "1" ] && return 0   # try only once
@@ -224,9 +353,9 @@ ensure_created_via_compose() {
     err "(docker-compose.yml must be included in the repo for first-time creation on another PC.)"
     exit 1
   fi
-  say "Detected missing containers → creating/starting from scratch via docker-compose.yml (bogo-pg, bogo-mm)..."
-  compose_up_or_exit
-  ok "Container creation/startup via compose complete."
+  say "Detected missing containers → creating/starting backbone (compose if available, Docker CLI fallback otherwise)..."
+  compose_up_or_exit 0
+  ok "Backbone container creation/startup complete."
 }
 
 ensure_container() {
@@ -269,8 +398,6 @@ ensure_container() {
 # recreating MM (invasive), so instead we idempotently assign a network alias to PG so that
 # 'hermes-pg' resolves to 'bogo-pg'. The alias disappears when the container is recreated, so
 # it is guaranteed on every boot.
-PG_LEGACY_ALIAS="hermes-pg"
-
 ensure_pg_legacy_alias() {
   # Find the network PG is attached to and, if the hermes-pg alias is absent, assign it (idempotent).
   local nets
@@ -323,7 +450,7 @@ ensure_compose_config_current() {
   fi
 
   [ "$needs_reconcile" = "1" ] || return 0
-  compose_up_or_exit
+  compose_up_or_exit 1
   ok "Compose configuration reconciled with .env."
 }
 

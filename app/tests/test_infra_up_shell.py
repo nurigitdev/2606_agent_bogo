@@ -135,7 +135,7 @@ def test_infra_up_creates_absent_containers_via_compose(tmp_path: Path) -> None:
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Detected missing containers" in proc.stdout
-    assert "Container creation/startup via compose complete." in proc.stdout
+    assert "Backbone container creation/startup complete." in proc.stdout
     calls = (state_dir / "calls.log").read_text(encoding="utf-8").splitlines()
     assert any(line.startswith("compose --project-directory ") and line.endswith(" up -d") for line in calls)
     assert "start bogo-pg" not in calls
@@ -251,7 +251,7 @@ def test_infra_up_normalizes_blank_inspect_failure_to_absent(tmp_path: Path) -> 
     assert "start bogo-pg" not in calls
 
 
-def test_infra_up_returns_compose_specific_code_when_compose_is_missing(tmp_path: Path) -> None:
+def test_infra_up_uses_plain_docker_fallback_when_compose_is_missing(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     state_dir = tmp_path / "state"
@@ -263,19 +263,88 @@ def test_infra_up_returns_compose_specific_code_when_compose_is_missing(tmp_path
         r"""
         #!/usr/bin/env bash
         set -euo pipefail
+        pg_state="${FAKE_DOCKER_STATE_DIR}/pg"
+        mm_state="${FAKE_DOCKER_STATE_DIR}/mm"
         log="${FAKE_DOCKER_STATE_DIR}/calls.log"
         printf '%s\n' "$*" >> "$log"
 
-        if [ "${1:-}" = "info" ]; then
+        cmd="${1:-}"
+        if [ "$cmd" = "info" ]; then
           exit 0
         fi
-        if [ "${1:-}" = "compose" ] && [ "${2:-}" = "version" ]; then
+
+        if [ "$cmd" = "compose" ] && [ "${2:-}" = "version" ]; then
           exit 127
         fi
-        if [ "${1:-}" = "inspect" ]; then
-          echo absent
+
+        if [ "$cmd" = "network" ] || [ "$cmd" = "volume" ]; then
           exit 0
         fi
+
+        if [ "$cmd" = "run" ]; then
+          name=""
+          prev=""
+          for arg in "$@"; do
+            if [ "$prev" = "--name" ]; then
+              name="$arg"
+              break
+            fi
+            prev="$arg"
+          done
+          case "$name" in
+            bogo-pg) touch "$pg_state" ;;
+            bogo-mm) touch "$mm_state" ;;
+            *) echo "missing --name in docker run" >&2; exit 99 ;;
+          esac
+          echo "fake-$name"
+          exit 0
+        fi
+
+        if [ "$cmd" = "inspect" ]; then
+          fmt=""
+          shift
+          if [ "${1:-}" = "-f" ]; then
+            fmt="$2"
+            shift 2
+          fi
+          name="${1:-}"
+          case "$fmt" in
+            *State.Status*)
+              case "$name" in
+                bogo-pg) [ -f "$pg_state" ] && echo running || echo absent ;;
+                bogo-mm) [ -f "$mm_state" ] && echo running || echo absent ;;
+                *) echo absent ;;
+              esac
+              exit 0 ;;
+            *State.Health*)
+              echo healthy
+              exit 0 ;;
+            *HostConfig.RestartPolicy.Name*)
+              echo unless-stopped
+              exit 0 ;;
+            *NetworkSettings.Networks*)
+              if [[ "$fmt" == *Aliases* ]]; then
+                echo "bogo-pg hermes-pg"
+              else
+                echo "bogo-net "
+              fi
+              exit 0 ;;
+          esac
+        fi
+
+        if [ "$cmd" = "exec" ]; then
+          exit 0
+        fi
+
+        if [ "$cmd" = "port" ]; then
+          echo "${MM_BIND_HOST:-127.0.0.1}:8065"
+          exit 0
+        fi
+
+        if [ "$cmd" = "update" ]; then
+          exit 0
+        fi
+
         exit 99
         """,
     )
@@ -293,6 +362,9 @@ def test_infra_up_returns_compose_specific_code_when_compose_is_missing(tmp_path
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
             "FAKE_DOCKER_STATE_DIR": str(state_dir),
             "BOGO_SKIP_PROVISION": "1",
+            "BOGO_MM_WAIT_TIMEOUT": "1",
+            "MM_BIND_HOST": "172.16.100.200",
+            "MM_SITE_URL": "http://172.16.100.200:8065",
         }
     )
 
@@ -306,8 +378,18 @@ def test_infra_up_returns_compose_specific_code_when_compose_is_missing(tmp_path
         check=False,
     )
 
-    assert proc.returncode == 3, proc.stdout + proc.stderr
-    assert "Docker Desktop/Compose plugin must be installed" in proc.stderr
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Docker Compose is not available" in proc.stdout
+    assert "plain Docker CLI fallback" in proc.stdout
+    assert "Backbone container creation/startup complete." in proc.stdout
+    calls = (state_dir / "calls.log").read_text(encoding="utf-8")
+    assert "compose version" in calls
+    assert "network inspect bogo-net" in calls
+    assert "volume inspect bogo-pg-data" in calls
+    assert "run -d --name bogo-pg" in calls
+    assert "run -d --name bogo-mm" in calls
+    assert "-p 172.16.100.200:8065:8065" in calls
+    assert "MM_SERVICESETTINGS_SITEURL=http://172.16.100.200:8065" in calls
 
 
 def test_infra_up_reconciles_stale_mm_bind_host_for_lan_mode(tmp_path: Path) -> None:

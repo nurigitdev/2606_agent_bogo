@@ -114,7 +114,7 @@ def test_infra_absent_pg_uses_compose_creation_not_docker_start(tmp_path):
     call_log = calls.read_text(encoding="utf-8")
     assert result.returncode == 0, result.stdout
     assert "Detected missing containers" in result.stdout
-    assert "Container creation/startup via compose complete" in result.stdout
+    assert "Backbone container creation/startup complete" in result.stdout
     assert "compose --project-directory" in call_log
     assert "up -d" in call_log
     assert "start bogo-pg" not in call_log
