@@ -1291,14 +1291,14 @@ def _selected_hermes_agent_versions(python_version: str) -> list[str]:
 
 
 def test_requirements_select_python_specific_hermes_agent_versions() -> None:
-    assert _selected_hermes_agent_versions("3.10") == ["==0.15.2"]
-    assert _selected_hermes_agent_versions("3.11") == ["==0.17.0"]
-    assert _selected_hermes_agent_versions("3.13") == ["==0.17.0"]
+    assert _selected_hermes_agent_versions("3.10") == ["<0.16,>=0.15.2"]
+    assert _selected_hermes_agent_versions("3.11") == [">=0.17.0"]
+    assert _selected_hermes_agent_versions("3.13") == [">=0.17.0"]
     assert _selected_hermes_agent_versions("3.9") == []
-    assert _selected_hermes_agent_versions("3.14") == []
+    assert _selected_hermes_agent_versions("3.14") == [">=0.17.0"]
 
 
-def test_bootstrap_rejects_python_outside_hermes_supported_range(tmp_path: Path) -> None:
+def test_bootstrap_skips_too_old_python_candidates_before_venv(tmp_path: Path) -> None:
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     shutil.copy2(APP_DIR / "bootstrap.sh", app_dir / "bootstrap.sh")
@@ -1319,6 +1319,21 @@ def test_bootstrap_rejects_python_outside_hermes_supported_range(tmp_path: Path)
         exit 99
         """,
     )
+    for name in ["python", "python3.13", "python3.12", "python3.11", "python3.10"]:
+        _write_executable(
+            fake_bin / name,
+            r"""
+            #!/usr/bin/env bash
+            if [ "${1:-}" = "-c" ]; then
+              case "${2:-}" in
+                *'sys.version_info[:3]'*) printf '3.9.18\n'; exit 0 ;;
+                *'v=sys.version_info'*) printf 'too_old\n'; exit 0 ;;
+              esac
+            fi
+            printf 'venv should not be created for unsupported Python\n' >&2
+            exit 99
+            """,
+        )
 
     proc = subprocess.run(
         ["bash", str(app_dir / "bootstrap.sh")],
@@ -1332,9 +1347,145 @@ def test_bootstrap_rejects_python_outside_hermes_supported_range(tmp_path: Path)
 
     output = proc.stdout + proc.stderr
     assert proc.returncode == 1, output
-    assert "Python 3.9.18 is too old" in output
-    assert "Use Python 3.10-3.13" in output
+    assert "Skipping Python 3.9.18" in output
+    assert "Could not find a usable Python interpreter" not in output
+    assert "No available Python candidate could create a working BOGO venv" in output
     assert "venv should not be created" not in output
+
+
+def test_bootstrap_future_python_falls_back_when_hermes_is_missing(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    shutil.copy2(APP_DIR / "bootstrap.sh", app_dir / "bootstrap.sh")
+    shutil.copy2(APP_DIR / "requirements.txt", app_dir / "requirements.txt")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "python.calls"
+    venv_py_314 = tmp_path / "venv-python-314"
+    venv_py_313 = tmp_path / "venv-python-313"
+    _write_executable(
+        venv_py_314,
+        r"""
+        #!/usr/bin/env bash
+        if [ "${1:-}" = "-c" ]; then
+          printf '3.14.4\n'
+          exit 0
+        fi
+        if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then
+          exit 0
+        fi
+        if [ "${1:-}" = "-" ]; then
+          printf 'missing runtime dependency: hermes-agent\n' >&2
+          exit 1
+        fi
+        exit 0
+        """,
+    )
+    _write_executable(
+        venv_py_313,
+        r"""
+        #!/usr/bin/env bash
+        if [ "${1:-}" = "-c" ]; then
+          printf '3.13.5\n'
+          exit 0
+        fi
+        if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then
+          exit 0
+        fi
+        if [ "${1:-}" = "-" ]; then
+          exit 0
+        fi
+        exit 0
+        """,
+    )
+
+    _write_executable(
+        fake_bin / "python3",
+        f"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf 'python3 %s\\n' "$*" >> {str(calls)!r}
+        if [ "${{1:-}}" = "-c" ]; then
+          case "${{2:-}}" in
+            *'sys.version_info[:3]'*) printf '3.14.4\\n'; exit 0 ;;
+            *'v=sys.version_info'*) printf 'future\\n'; exit 0 ;;
+          esac
+        fi
+        if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "venv" ]; then
+          venv_dir="${{4:?}}"
+          mkdir -p "$venv_dir/bin"
+          cp {str(venv_py_314)!r} "$venv_dir/bin/python"
+          chmod +x "$venv_dir/bin/python"
+          exit 0
+        fi
+        exit 0
+        """,
+    )
+    _write_executable(
+        fake_bin / "python",
+        r"""
+        #!/usr/bin/env bash
+        if [ "${1:-}" = "-c" ]; then
+          case "${2:-}" in
+            *'sys.version_info[:3]'*) printf '3.9.18\n'; exit 0 ;;
+            *'v=sys.version_info'*) printf 'too_old\n'; exit 0 ;;
+          esac
+        fi
+        exit 99
+        """,
+    )
+    _write_executable(
+        fake_bin / "python3.13",
+        f"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf 'python3.13 %s\\n' "$*" >> {str(calls)!r}
+        if [ "${{1:-}}" = "-c" ]; then
+          case "${{2:-}}" in
+            *'sys.version_info[:3]'*) printf '3.13.5\\n'; exit 0 ;;
+            *'v=sys.version_info'*) printf 'supported\\n'; exit 0 ;;
+          esac
+        fi
+        if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "venv" ]; then
+          venv_dir="${{4:?}}"
+          mkdir -p "$venv_dir/bin"
+          cp {str(venv_py_313)!r} "$venv_dir/bin/python"
+          chmod +x "$venv_dir/bin/python"
+          exit 0
+        fi
+        exit 0
+        """,
+    )
+    for name in ["python3.12", "python3.11", "python3.10"]:
+        _write_executable(
+            fake_bin / name,
+            r"""
+            #!/usr/bin/env bash
+            exit 99
+            """,
+        )
+
+    proc = subprocess.run(
+        ["bash", str(app_dir / "bootstrap.sh")],
+        cwd=app_dir,
+        env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, output
+    assert "Trying future Python 3.14.4" in output
+    assert "Runtime dependency validation failed after pip install" in output
+    assert "Python 3.14.4" in output
+    assert "could not satisfy BOGO dependencies; trying another interpreter" in output
+    assert "Using Python:" in output
+    assert "3.13.5" in output
+    call_log = calls.read_text(encoding="utf-8")
+    assert "python3 -m venv --copies" in call_log
+    assert "python3.13 -m venv --copies" in call_log
 
 
 def test_bootstrap_pip_failure_reports_python_and_hermes_marker_contract(tmp_path: Path) -> None:
@@ -1344,21 +1495,10 @@ def test_bootstrap_pip_failure_reports_python_and_hermes_marker_contract(tmp_pat
     shutil.copy2(APP_DIR / "requirements.txt", app_dir / "requirements.txt")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    venv_py_310 = tmp_path / "venv-python-310"
     _write_executable(
-        fake_bin / "python3",
+        venv_py_310,
         r"""
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "${1:-}" = "-c" ]; then
-          case "${2:-}" in
-            *'sys.version_info[:3]'*) printf '3.10.12\n'; exit 0 ;;
-            *'v=sys.version_info'*) printf 'ok\n'; exit 0 ;;
-          esac
-        fi
-        if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
-          venv_dir="${4:?}"
-          mkdir -p "$venv_dir/bin"
-          cat > "$venv_dir/bin/python" <<'PY'
         #!/usr/bin/env bash
         if [ "${1:-}" = "-c" ]; then
           printf '3.10.12\n'
@@ -1372,7 +1512,23 @@ def test_bootstrap_pip_failure_reports_python_and_hermes_marker_contract(tmp_pat
           exit 1
         fi
         exit 0
-        PY
+        """,
+    )
+    _write_executable(
+        fake_bin / "python3",
+        f"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "${{1:-}}" = "-c" ]; then
+          case "${{2:-}}" in
+            *'sys.version_info[:3]'*) printf '3.10.12\n'; exit 0 ;;
+            *'v=sys.version_info'*) printf 'supported\n'; exit 0 ;;
+          esac
+        fi
+        if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "venv" ]; then
+          venv_dir="${{4:?}}"
+          mkdir -p "$venv_dir/bin"
+          cp {str(venv_py_310)!r} "$venv_dir/bin/python"
           chmod +x "$venv_dir/bin/python"
           exit 0
         fi
@@ -1383,7 +1539,7 @@ def test_bootstrap_pip_failure_reports_python_and_hermes_marker_contract(tmp_pat
     proc = subprocess.run(
         ["bash", str(app_dir / "bootstrap.sh")],
         cwd=app_dir,
-        env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}/usr/bin:/bin"},
+        env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}/usr/bin:/bin", "BOGO_PYTHON": str(fake_bin / "python3")},
         text=True,
         capture_output=True,
         timeout=10,
@@ -1394,8 +1550,8 @@ def test_bootstrap_pip_failure_reports_python_and_hermes_marker_contract(tmp_pat
     assert proc.returncode == 1, output
     assert "Dependency installation failed" in output
     assert "Python in use: 3.10.12" in output
-    assert "Python 3.10 -> 0.15.2" in output
-    assert "If pip tries hermes-agent==0.17.0 on Python 3.10" in output
+    assert "Python 3.10 -> 0.15.x" in output
+    assert "Python 3.11+ -> latest compatible hermes-agent from PyPI" in output
     assert "sudo apt install python3 python3-venv" not in output
 
 
@@ -1427,7 +1583,7 @@ def test_oneclick_preserves_bootstrap_pip_failure_without_venv_relabel(tmp_path:
     assert proc.returncode == 1, output
     assert "Dependency installation failed" in output
     assert "see the [bootstrap:error] line above" in output
-    assert "oneclick did not relabel the failure" in output
+    assert "Python/pip package compatibility" in output
     assert "sudo apt install python3 python3-venv" not in output
     assert "Check whether Python 3 + venv are installed" not in output
 
@@ -1468,5 +1624,5 @@ def test_oneclick_bootstrap_failure_keeps_real_dependency_error(tmp_path: Path) 
     assert proc.returncode == 1, output
     assert "Dependency installation failed." in output
     assert "see the [bootstrap:error] line above" in output
-    assert "oneclick did not relabel the failure" in output
+    assert "Python/pip package compatibility" in output
     assert "sudo apt install python3 python3-venv" not in output

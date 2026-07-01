@@ -151,7 +151,7 @@ step_venv() {
     warn ".venv missing → running bootstrap.sh (may take a few minutes)"
     if ! "$HERE/bootstrap.sh"; then
       err "bootstrap failed — see the [bootstrap:error] line above for the real cause."
-      err "oneclick did not relabel the failure; fix the bootstrap-reported cause and retry."
+      err "Common causes: Python/pip package compatibility, package-index/network access, or missing python3-venv."
       return 1
     fi
   fi
@@ -160,7 +160,7 @@ step_venv() {
     warn ".venv exists but is not usable here → recreating it with bootstrap.sh"
     if ! "$HERE/bootstrap.sh"; then
       err "bootstrap failed — see the [bootstrap:error] line above for the real cause."
-      err "oneclick did not relabel the failure; fix the bootstrap-reported cause and retry."
+      err "Common causes: Python/pip package compatibility, package-index/network access, or missing python3-venv."
       return 1
     fi
     if ! "$VENV_PY" -c "import urllib.request, json, sqlite3, websockets" >/dev/null 2>&1; then

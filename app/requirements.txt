@@ -1,13 +1,13 @@
 # 사내 보고 멀티에이전트 — 런타임 의존성
 # 두뇌: Nous Research AIAgent 프레임워크(외부 pip) 위에서 구동, 모델은 DeepSeek V4 Flash(OpenRouter).
 # 통로: Mattermost(WebSocket 수신 + REST 게시) = 메시징 게이트웨이.
-# Python 3.10+ distro 환경을 흡수한다. 최신 운영(DGX/Ubuntu 24.04)은 3.12+ 이지만,
-# 현장 Linux 기본 python3 이 3.10 인 경우도 있어서 hermes-agent 는 Python marker 로 분기한다.
+# Python 3.10+ distro 환경을 흡수한다. Python 은 계속 올라가므로 bootstrap.sh 는
+# 현재 python3 로 먼저 시도하고, 패키지 생태계가 아직 못 따라오면 설치된 안정 Python 으로 fallback 한다.
 
-# Nous Research 외부 pip 패키지. bootstrap.sh 가 Python 3.10-3.13 을 허용한다.
-# 0.16+ 는 Python >=3.11,<3.14 이므로 Python 3.10 은 0.15.2 로 fallback 한다.
-hermes-agent==0.17.0; python_version >= "3.11" and python_version < "3.14"
-hermes-agent==0.15.2; python_version >= "3.10" and python_version < "3.11"
+# Nous Research 외부 pip 패키지. Python 3.10 은 0.16+ 요구사항을 만족하지 못하므로
+# 0.15.x 라인에 묶고, Python 3.11+ 는 PyPI 의 최신 호환 버전을 pip 가 선택하게 둔다.
+hermes-agent>=0.17.0; python_version >= "3.11"
+hermes-agent>=0.15.2,<0.16; python_version >= "3.10" and python_version < "3.11"
 websockets>=15.0       # Mattermost WebSocket 게이트웨이 수신
 
 # ── Vault RAG(로컬 전용, 네트워크·API 키 0) ───────────────────────────────────

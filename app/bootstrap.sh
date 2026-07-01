@@ -22,52 +22,53 @@ cd "$HERE"
 say() { printf '\033[0;36m[bootstrap]\033[0m %s\n' "$*"; }
 err() { printf '\033[0;31m[bootstrap:error]\033[0m %s\n' "$*" >&2; }
 
-# ── 1. Detect the Python interpreter ──────────────────────────────────────────
-# Use python3 if present, otherwise python. Dependency support is checked only
-# when this script needs to create/recreate the local venv; an already working
-# .venv can continue to run without caring about the system interpreter.
-PY="$(command -v python3 || command -v python || true)"
-if [ -z "${PY:-}" ]; then
-  err "Could not find a Python interpreter (neither python3 nor python)."
-  case "$(uname -s)" in
-    Darwin) err "Install:  brew install python" ;;
-    Linux)  err "Install (Debian/Ubuntu):  sudo apt install python3 python3-venv" ;;
-  esac
-  err "After installing, run this script again."
-  exit 1
-fi
-say "Using Python: $PY"
-
 VENV_PY="$HERE/.venv/bin/python"
 REQ_STAMP="$HERE/.venv/.bogo_requirements.sha256"
+PY=""
+PY_VERSION=""
+PY_COMPAT=""
+REQ_HASH=""
+REQUIREMENTS_INSTALLED=0
 
-python_version() {
-  "$PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'
+python_version_for() {
+  "$1" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'
 }
 
-python_compat() {
-  "$PY" -c 'import sys; v=sys.version_info; print("ok" if (v.major, v.minor) >= (3, 10) and (v.major, v.minor) < (3, 14) else ("too_old" if (v.major, v.minor) < (3, 10) else "too_new"))'
+python_compat_for() {
+  "$1" -c 'import sys; v=sys.version_info; print("supported" if (v.major, v.minor) >= (3, 10) and (v.major, v.minor) < (3, 14) else ("too_old" if (v.major, v.minor) < (3, 10) else "future"))'
 }
 
-require_supported_python_for_new_venv() {
-  local py_ver compat
-  py_ver="$(python_version 2>/dev/null || echo unknown)"
-  compat="$(python_compat 2>/dev/null || echo too_old)"
-  case "$compat" in
-    ok) return 0 ;;
-    too_old)
-      err "Python $py_ver is too old for BOGO dependencies."
-      err "Use Python 3.10-3.13. Python 3.10 selects hermes-agent==0.15.2; Python 3.11-3.13 selects hermes-agent==0.17.0."
+resolve_python_candidate() {
+  local candidate="$1"
+  if [[ "$candidate" == */* ]]; then
+    [ -x "$candidate" ] && printf '%s\n' "$candidate"
+  else
+    command -v "$candidate" 2>/dev/null || true
+  fi
+}
+
+python_candidate_commands() {
+  if [ -n "${BOGO_PYTHON:-}" ]; then
+    printf '%s\n' "$BOGO_PYTHON"
+    return 0
+  fi
+  printf '%s\n' python3 python python3.13 python3.12 python3.11 python3.10
+}
+
+print_python_install_guidance() {
+  case "$(uname -s)" in
+    Darwin)
+      err "Install a Python with venv support, e.g. brew install python, or set BOGO_PYTHON=/path/to/python."
       ;;
-    too_new)
-      err "Python $py_ver is newer than the supported hermes-agent range."
-      err "Use Python 3.10-3.13 until hermes-agent publishes support for this Python version."
+    Linux)
+      err "Install a Python with venv support, e.g. sudo apt install python3 python3-venv."
+      err "If your distro's python3 is ahead of PyPI packages, install python3.13-venv or python3.12-venv and rerun."
+      err "You can also set BOGO_PYTHON=/path/to/python3.13 before launching."
       ;;
     *)
-      err "Could not verify Python compatibility for: $PY"
+      err "Install Python 3.10+ with venv support, or set BOGO_PYTHON=/path/to/python."
       ;;
   esac
-  exit 1
 }
 
 requirements_hash() {
@@ -79,7 +80,131 @@ requirements_hash() {
 }
 
 venv_usable() {
-  [ -x "$VENV_PY" ] && "$VENV_PY" -c "import json, sqlite3, urllib.request, websockets" >/dev/null 2>&1
+  [ -x "$VENV_PY" ] && validate_runtime_dependencies >/dev/null 2>&1
+}
+
+validate_runtime_dependencies() {
+  "$VENV_PY" - <<'PY'
+import importlib
+import importlib.metadata as metadata
+import sys
+
+missing = []
+for dist in ("hermes-agent",):
+    try:
+        metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        missing.append(dist)
+
+try:
+    importlib.import_module("run_agent")
+except Exception:
+    missing.append("run_agent")
+
+try:
+    import websockets  # noqa: F401
+except Exception:
+    missing.append("websockets")
+
+if missing:
+    print("missing runtime dependency: " + ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+install_requirements_current_venv() {
+  say "Upgrading pip + installing requirements..."
+  if ! "$VENV_PY" -m pip install --upgrade pip >/dev/null; then
+    err "pip upgrade failed. Check Python/pip installation or network access, then retry."
+    return 1
+  fi
+  if ! "$VENV_PY" -m pip install -r "$HERE/requirements.txt"; then
+    err "Dependency installation failed."
+    err "This is usually a Python-version/package compatibility issue or network/package-index problem."
+    err "Python in use: $("$VENV_PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unknown)"
+    err "Expected hermes-agent selection: Python 3.10 -> 0.15.x; Python 3.11+ -> latest compatible hermes-agent from PyPI."
+    return 1
+  fi
+  if ! validate_runtime_dependencies; then
+    err "Runtime dependency validation failed after pip install."
+    err "Python in use: $("$VENV_PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unknown)"
+    return 1
+  fi
+  if ! "$VENV_PY" -m pip check; then
+    err "pip check failed; installed packages have incompatible dependencies."
+    return 1
+  fi
+  printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
+}
+
+create_venv_and_install_with_available_python() {
+  local candidate path version compat seen_paths=":" tried_any=0
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    path="$(resolve_python_candidate "$candidate")"
+    [ -n "$path" ] || continue
+    case "$seen_paths" in
+      *":$path:"*) continue ;;
+    esac
+    seen_paths="${seen_paths}${path}:"
+    tried_any=1
+
+    version="$(python_version_for "$path" 2>/dev/null || echo unknown)"
+    compat="$(python_compat_for "$path" 2>/dev/null || echo unusable)"
+    case "$compat" in
+      supported|future) ;;
+      too_old)
+        say "Skipping Python $version at $path (too old for BOGO dependencies)."
+        continue
+        ;;
+      *)
+        say "Skipping Python at $path (could not verify version)."
+        continue
+        ;;
+    esac
+
+    if [ "$compat" = "future" ]; then
+      say "Trying future Python $version at $path; pip will decide whether dependencies support it."
+    else
+      say "Trying Python: $path ($version)"
+    fi
+
+    rm -rf "$HERE/.venv"
+    if ! "$path" -m venv --copies "$HERE/.venv"; then
+      rm -rf "$HERE/.venv"
+      if [ -n "${BOGO_PYTHON:-}" ]; then
+        err "BOGO_PYTHON was set to $path, but it could not create .venv."
+        print_python_install_guidance
+        exit 1
+      fi
+      say "Python $version at $path could not create .venv; trying another interpreter."
+      continue
+    fi
+
+    PY="$path"
+    PY_VERSION="$version"
+    PY_COMPAT="$compat"
+    say "Using Python: $PY ($PY_VERSION)"
+    if install_requirements_current_venv; then
+      REQUIREMENTS_INSTALLED=1
+      return 0
+    fi
+
+    rm -rf "$HERE/.venv"
+    if [ -n "${BOGO_PYTHON:-}" ]; then
+      print_python_install_guidance
+      exit 1
+    fi
+    say "Python $version at $path could not satisfy BOGO dependencies; trying another interpreter."
+  done < <(python_candidate_commands)
+
+  if [ "$tried_any" = "0" ]; then
+    err "Could not find a usable Python interpreter."
+  else
+    err "No available Python candidate could create a working BOGO venv."
+  fi
+  print_python_install_guidance
+  exit 1
 }
 
 # ── 2. Create or reuse the portable venv ───────────────────────────────────────
@@ -87,6 +212,7 @@ venv_usable() {
 # setup from deleting a working venv and re-downloading packages later in the
 # same startup. If the venv was copied from another PC and its interpreter is
 # pinned to an old absolute path, the usability check fails and we recreate it.
+REQ_HASH="$(requirements_hash)"
 if venv_usable; then
   say "Existing .venv is usable — reusing it."
 else
@@ -94,37 +220,18 @@ else
     say "Existing .venv is not usable here → recreating it."
     rm -rf "$HERE/.venv"
   fi
-  require_supported_python_for_new_venv
-  say "Creating .venv..."
-  if ! "$PY" -m venv --copies "$HERE/.venv"; then
-    err "Could not create .venv with Python $(python_version 2>/dev/null || echo unknown) at: $PY"
-    case "$(uname -s)" in
-      Linux) err "If Debian/Ubuntu reports ensurepip or venv missing, install the matching venv package, e.g. sudo apt install python3-venv." ;;
-      Darwin) err "Install or repair Python with venv support, e.g. brew install python." ;;
-    esac
-    exit 1
-  fi
+  create_venv_and_install_with_available_python
 fi
 
 # ── 3. Install dependencies ────────────────────────────────────────────────────
-req_hash="$(requirements_hash)"
-if [ -f "$REQ_STAMP" ] && [ "$(cat "$REQ_STAMP" 2>/dev/null || true)" = "$req_hash" ]; then
+if [ "$REQUIREMENTS_INSTALLED" = "1" ]; then
+  :
+elif [ -f "$REQ_STAMP" ] && [ "$(cat "$REQ_STAMP" 2>/dev/null || true)" = "$REQ_HASH" ]; then
   say "Requirements unchanged — skipping pip install."
 else
-  say "Upgrading pip + installing requirements..."
-  if ! "$VENV_PY" -m pip install --upgrade pip >/dev/null; then
-    err "pip upgrade failed. Check Python/pip installation or network access, then retry."
+  if ! install_requirements_current_venv; then
     exit 1
   fi
-  if ! "$VENV_PY" -m pip install -r "$HERE/requirements.txt"; then
-    err "Dependency installation failed."
-    err "This is usually a Python-version/package compatibility issue or network/package-index problem."
-    err "Python in use: $("$VENV_PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unknown)"
-    err "Expected hermes-agent selection: Python 3.10 -> 0.15.2; Python 3.11-3.13 -> 0.17.0."
-    err "If pip tries hermes-agent==0.17.0 on Python 3.10, use this updated requirements.txt with Python markers and retry."
-    exit 1
-  fi
-  printf '%s\n' "$req_hash" > "$REQ_STAMP"
 fi
 
 # ── 4. Copy config / .env (only when missing) ─────────────────────────────────
