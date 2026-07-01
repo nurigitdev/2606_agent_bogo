@@ -11,8 +11,9 @@
 #
 # WHAT (ordered, all idempotent):
 #   1) If Colima is not running, colima start. On a stale lock, stop --force then restart.
-#   2) If the bogo-pg, bogo-mm containers are not Up, docker start (data preserved).
-#      Raise the restart policy to unless-stopped so they auto-revive when Colima restarts.
+#   2) If the bogo-pg, bogo-mm containers are missing, create them via compose; if they
+#      exist but are not Up, docker start (data preserved). Raise the restart policy to
+#      unless-stopped so they auto-revive when Colima restarts.
 #   3) Poll-wait until MM /api/v4/system/ping returns 200 (timeout + clear failure message).
 #
 # If already up, each step is skipped (no duplicate startup). If any step is unrecoverable,
@@ -111,7 +112,20 @@ ensure_colima() {
 }
 
 # ── 2. Ensure containers ──────────────────────────────────────────────────
-container_state() { docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || echo "absent"; }
+container_state() {
+  local out
+  if ! out="$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)"; then
+    printf 'absent\n'
+    return 0
+  fi
+  out="$(printf '%s\n' "$out" | awk 'NF { print; exit }')"
+  case "$out" in
+    created|restarting|running|removing|paused|exited|dead)
+      printf '%s\n' "$out" ;;
+    *)
+      printf 'absent\n' ;;
+  esac
+}
 
 # docker compose invoker (auto-selects the new 'docker compose' / legacy 'docker-compose').
 # Pins --project-directory to the directory containing the compose file (=app). This way,

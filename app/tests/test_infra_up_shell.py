@@ -141,6 +141,116 @@ def test_infra_up_creates_absent_containers_via_compose(tmp_path: Path) -> None:
     assert "start bogo-pg" not in calls
 
 
+def test_infra_up_normalizes_blank_inspect_failure_to_absent(tmp_path: Path) -> None:
+    """Regression: some Docker CLIs can leave a blank stdout line before inspect fails.
+
+    Without normalization, command substitution produced a value like "\nabsent",
+    missing the exact `absent)` case and falling through to `docker start bogo-pg`.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _write_running_colima(fake_bin)
+
+    _write_executable(
+        fake_bin / "docker",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        state="${FAKE_DOCKER_STATE_DIR}/created"
+        log="${FAKE_DOCKER_STATE_DIR}/calls.log"
+        printf '%s\n' "$*" >> "$log"
+
+        cmd="${1:-}"
+        if [ "$cmd" = "info" ]; then
+          exit 0
+        fi
+
+        if [ "$cmd" = "compose" ]; then
+          if [ "${2:-}" = "version" ]; then
+            exit 0
+          fi
+          if [ "${*: -2}" = "up -d" ]; then
+            touch "$state"
+            exit 0
+          fi
+        fi
+
+        if [ "$cmd" = "inspect" ]; then
+          fmt=""
+          shift
+          if [ "${1:-}" = "-f" ]; then
+            fmt="$2"
+            shift 2
+          fi
+          name="${1:-}"
+          case "$fmt" in
+            *State.Status*)
+              if [ "$name" = "bogo-pg" ] && [ ! -f "$state" ]; then
+                printf '\n'
+                exit 1
+              fi
+              echo running
+              exit 0 ;;
+            *State.Health*)
+              echo healthy
+              exit 0 ;;
+            *HostConfig.RestartPolicy.Name*)
+              echo unless-stopped
+              exit 0 ;;
+            *NetworkSettings.Networks*)
+              if [[ "$fmt" == *Aliases* ]]; then
+                echo "bogo-pg hermes-pg"
+              else
+                echo "bogo-net "
+              fi
+              exit 0 ;;
+          esac
+        fi
+
+        if [ "$cmd" = "port" ]; then
+          echo "127.0.0.1:8065"
+          exit 0
+        fi
+
+        if [ "$cmd" = "update" ] || [ "$cmd" = "network" ] || [ "$cmd" = "exec" ]; then
+          exit 0
+        fi
+
+        printf 'unexpected docker args: %s\n' "$*" >&2
+        exit 99
+        """,
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "FAKE_DOCKER_STATE_DIR": str(state_dir),
+            "BOGO_SKIP_PROVISION": "1",
+            "BOGO_MM_WAIT_TIMEOUT": "1",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(APP_DIR / "infra_up.sh")],
+        cwd=APP_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Detected missing containers" in proc.stdout
+    assert "state=\nabsent" not in proc.stdout
+    calls = (state_dir / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert any(line.startswith("compose --project-directory ") and line.endswith(" up -d") for line in calls)
+    assert "start bogo-pg" not in calls
+
+
 def test_infra_up_returns_compose_specific_code_when_compose_is_missing(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
