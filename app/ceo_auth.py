@@ -45,11 +45,30 @@ def _hash_pw(password, salt_hex):
 
 
 def load_accounts(path=None):
-    """accounts_config.json -> {login_id: account dict}. 평문 비밀번호는 존재하지 않는다."""
+    """accounts_config.json -> {login_id: account dict}. 평문 비밀번호는 존재하지 않는다.
+
+    파일이 없거나(신선 설치) 손상됐으면 빈 dict 를 돌려준다(하드 크래시 금지).
+
+    WHY (근본 원인): accounts_config.json 은 운영자 로컬 시크릿이라 git 제외 대상이고,
+      bootstrap 의 config copy 목록·프로비저닝 어디에도 이 파일을 생성하는 경로가 없다.
+      과거엔 load_accounts 가 파일을 무조건 open 해, 신선 설치(파일 부재)에서 대시보드가
+      기동 즉시 FileNotFoundError 로 죽어 systemd 가 무한 재시작하고 [5/5] dashboard
+      health check 가 실패해 파이프라인 전체가 중단됐다(신선 systemd 실측). 그러나 인증은
+      이중 경로(1차 Mattermost 로그인 + 2차 로컬 config 폴백)로 설계돼 있어, 로컬 config 가
+      비어도 프로비저닝된 admin 계정으로 Mattermost 인증 경로가 정상 동작한다. 따라서 파일
+      부재를 '폴백 계정 0개'로 해석해 graceful degrade 하는 것이 옳다 → 이 버그 클래스
+      (신선 설치에서 미프로비저닝 시크릿 파일 부재로 핵심 서비스가 크래시루프)을 근절한다.
+      운영자가 나중에 accounts_config.json 을 채우면 로컬 폴백 계정이 그대로 활성화된다.
+    """
     path = path or os.path.join(HERE, "accounts_config.json")
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    return {a["login_id"]: a for a in data.get("accounts", [])}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {a["login_id"]: a for a in data.get("accounts", []) if isinstance(a, dict) and a.get("login_id")}
 
 
 def verify_local(login_id, password, accounts):

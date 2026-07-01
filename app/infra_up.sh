@@ -540,11 +540,31 @@ wait_mm_ready() {
       ok "Mattermost healthy (docker healthcheck, ${waited}s)."
       return 0
     fi
-    # If there is no healthcheck or it's undetermined, ping directly from inside the container.
-    if [ "$health" = "none" ] || [ "$health" = "starting" ]; then
+    # For ANY non-healthy state (none/starting/unhealthy), probe readiness directly.
+    #  WHY include 'unhealthy' too (root cause): the docker healthcheck (the
+    #    `curl -fsS http://localhost:8065/...` injected by compose) only works if curl exists in
+    #    the container image. On minimal/distroless-style MM images (observed on a fresh run: no
+    #    sh/curl) that healthcheck command cannot even run, so it counts as a failure every time,
+    #    and once the retry limit is exceeded the state hardens from starting -> 'unhealthy'. That
+    #    is, MM is serving 8065 fine but gets falsely judged 'unhealthy' solely because the
+    #    healthcheck tools are absent. Previously this branch was limited to none/starting only, so
+    #    the moment it hardened to unhealthy both fallbacks below were skipped and it false-aborted
+    #    at [3/5] after burning ${MM_WAIT_TIMEOUT}s.
+    #    → For every non-healthy state, check real readiness directly, independent of image tools.
+    if [ "$health" != "healthy" ]; then
+      # (a) HTTP ping from inside the container (needs sh + curl/wget in the image).
       code="$(docker exec "$MM_NAME" sh -c "curl -s -o /dev/null -w '%{http_code}' http://localhost:8065${ping_path} 2>/dev/null || wget -q -O /dev/null -S http://localhost:8065${ping_path} 2>&1 | awk '/HTTP\\//{print \$2; exit}'" 2>/dev/null || echo "")"
       if [ "$code" = "200" ]; then
         ok "Mattermost ping 200 (${waited}s)."
+        return 0
+      fi
+      # (b) mmctl --local readiness — shell/curl-independent authoritative fallback.
+      #    The mmctl binary always exists in every MM image, and provisioning already depends on
+      #    this path. If mmctl --local (local unix socket, ENABLELOCALMODE=true) responds, the
+      #    server/DB are actually up and able to process commands → a true signal independent of
+      #    image tools (sh/curl) and the healthcheck verdict.
+      if docker exec "$MM_NAME" mmctl --local system version >/dev/null 2>&1; then
+        ok "Mattermost ready (mmctl --local, ${waited}s)."
         return 0
       fi
     fi

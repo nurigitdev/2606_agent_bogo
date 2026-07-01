@@ -1203,14 +1203,21 @@ def test_linux_systemd_install_fails_cleanly_when_systemctl_is_absent(tmp_path: 
 
 
 def test_linux_systemd_templates_quote_repo_paths() -> None:
+    # 계약 정정(신선 systemd 실측): WorkingDirectory= 는 '따옴표 없이' __WORKDIR__ 여야 한다.
+    #   과거 이 테스트는 WorkingDirectory="__WORKDIR__"(따옴표)를 요구했으나, 실제 systemd 는
+    #   선행 따옴표를 만나면 "path is not absolute" 로 유닛을 bad-setting 처리해 전 봇/대시보드
+    #   기동이 실패했다(=버그를 코드화한 테스트였다). ExecStart= 는 셸형 파싱이라 경로 인자
+    #   따옴표가 올바른 문법이므로 그대로 유지한다(둘의 systemd 파싱 규칙이 다르다).
     unit = (APP_DIR / "service" / "templates" / "bogo@.service.template").read_text(encoding="utf-8")
     backup = (APP_DIR / "service" / "templates" / "bogo-backup.service.template").read_text(encoding="utf-8")
 
-    assert 'WorkingDirectory="__WORKDIR__"' in unit
+    assert "WorkingDirectory=__WORKDIR__" in unit
+    assert 'WorkingDirectory="__WORKDIR__"' not in unit
     assert 'ExecStart=/usr/bin/env bash "__WORKDIR__/run_role.sh" %i' in unit
     assert "NoNewPrivileges=true" in unit
     assert "PrivateTmp=true" in unit
-    assert 'WorkingDirectory="__WORKDIR__"' in backup
+    assert "WorkingDirectory=__WORKDIR__" in backup
+    assert 'WorkingDirectory="__WORKDIR__"' not in backup
     assert 'ExecStart=/usr/bin/env bash "__WORKDIR__/migration/bogo_backup.sh"' in backup
     assert '--out "__WORKDIR__/migration"' in backup
     assert "NoNewPrivileges=true" in backup

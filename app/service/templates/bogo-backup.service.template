@@ -8,7 +8,11 @@ Description=BOGO automatic data backup (conversations/accounts/channels/reports)
 
 [Service]
 Type=oneshot
-WorkingDirectory="__WORKDIR__"
+# WorkingDirectory= keeps the raw path with NO quotes (wrapping it in quotes makes systemd
+# treat it as a bad-setting "path is not absolute" -> the whole backup job fails). Paths with
+# spaces/Hangul are handled fine without quotes. (ExecStart= uses shell-style parsing, so
+# quoting the arguments is correct syntax there — keep it.)
+WorkingDirectory=__WORKDIR__
 # --quiet automatic mode; output goes to the repo's migration/, auto-pruned to __RETAIN__ kept.
 ExecStart=/usr/bin/env bash "__WORKDIR__/migration/bogo_backup.sh" --quiet --out "__WORKDIR__/migration" --retain __RETAIN__
 # Conservative hardening that still permits Docker CLI access and repo-local backup writes.

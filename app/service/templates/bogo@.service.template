@@ -5,6 +5,15 @@
 # (orchestrator|hr|dev|admin):  systemctl --user start bogo@orchestrator
 #
 # __WORKDIR__ is substituted at install time (the absolute repo path, may contain Hangul).
+#
+# Quoting rules (important — parsing differs per systemd directive):
+#   - WorkingDirectory= takes 'a single path' as-is. Wrapping the value in double quotes makes
+#     systemd treat the unit as a bad-setting "path is not absolute" because of the leading '"',
+#     so startup fails entirely (observed on a fresh systemd --user). Paths with spaces/Hangul
+#     are handled correctly by systemd when left raw 'without quotes', so no quotes are used here.
+#   - ExecStart= uses shell-style command-line parsing, so double quotes are the 'correct' syntax
+#     for spaces/Hangul inside arguments. That is why the run_role.sh path argument stays quoted
+#     (the key point: the two directives follow different rules).
 [Unit]
 Description=BOGO agent (%i)
 After=network-online.target
@@ -12,7 +21,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory="__WORKDIR__"
+WorkingDirectory=__WORKDIR__
 ExecStart=/usr/bin/env bash "__WORKDIR__/run_role.sh" %i
 Restart=always
 RestartSec=10

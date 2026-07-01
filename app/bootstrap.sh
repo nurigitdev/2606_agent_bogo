@@ -138,11 +138,45 @@ install_requirements_current_venv() {
     err "Python in use: $("$VENV_PY" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unknown)"
     return 1
   fi
-  if ! "$VENV_PY" -m pip check; then
-    err "pip check failed; installed packages have incompatible dependencies."
+  if ! pip_check_ok; then
+    err "pip check reported a genuine dependency conflict (see the lines above)."
     return 1
   fi
   printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
+}
+
+# ── pip check gate (platform-note tolerant) ────────────────────────────────
+# WHY (root cause): 'pip check' lumps two different classes under the same rc=1.
+#   (a) Real dependency conflict: "X requires Y, which is not installed" / "has requirement ...,
+#       but you have ..." — this genuinely breaks the runtime, so it MUST fail.
+#   (b) Platform support note: "<pkg> <ver> is not supported on this platform" — an optional
+#       GPU/accelerator transitive (torch -> nvidia-cusparselt-cu13, etc.) reporting itself as
+#       'unsupported' on a CPU-only/unsupported architecture (arm64, x86 servers without GPU).
+#       This is a normal informational note. The actual BOGO runtime
+#       (websockets/hermes-agent/run_agent) does not use these packages, and
+#       validate_runtime_dependencies already verified they can be imported.
+# Previously any non-zero 'pip check' rc was treated as a fatal failure, so a single (b) note
+# from a GPU transitive pulled in by sentence-transformers (optional embeddings) aborted the
+# whole fresh-install pipeline at [1/5] (observed on a fresh container). Now only class (b) is
+# filtered out and only class (a) real conflicts fail
+# → structurally eliminating this bug class (bootstrap abort caused by an optional GPU
+#   transitive's platform note).
+pip_check_ok() {
+  local out rc real
+  out="$("$VENV_PY" -m pip check 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  # Keep only the 'real conflict' lines, excluding "... is not supported on this platform" notes.
+  # If nothing remains (=platform notes only) pass; otherwise show those lines and fail.
+  real="$(printf '%s\n' "$out" | grep -v -E 'is not supported on this platform' | grep -E '.' || true)"
+  if [ -z "$real" ]; then
+    say "pip check: only platform-unsupported notes from optional GPU/accelerator packages (runtime-irrelevant) — passing."
+    return 0
+  fi
+  printf '%s\n' "$real" >&2
+  return 1
 }
 
 ensure_virtualenv_helper() {
