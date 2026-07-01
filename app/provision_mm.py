@@ -201,6 +201,29 @@ def ensure_team():
     say(f"팀 '{TEAM_NAME}'({TEAM_DISPLAY}) 생성 완료.")
 
 
+def ensure_bot_prereqs():
+    """봇 생성·토큰 발급이 서버 설정에 의해 막히지 않도록 선행 활성화(멱등).
+
+    WHY (근본 원인): Mattermost 서버는 기본값으로
+      - ServiceSettings.EnableBotAccountCreation = false → `bot create` 가
+        "Bot creation has been disabled" 로 실패(rc=1).
+      - ServiceSettings.EnableUserAccessTokens = false → `--with-token`/
+        `token generate` 가 요구하는 Personal Access Token 발급이 막힘.
+    지금까지 이 값들이 true 였던 것은 사람이 관리자 콘솔에서 손으로 켰기 때문이며,
+    새 PC(fresh 컨테이너)에서는 둘 다 false 로 시작해 봇 생성 단계에서 프로비저닝이
+    무너진다. 무인 프로비저닝 원칙(더블클릭 한 번)을 지키려면 봇 생성 앞단에서 이
+    설정을 코드로 켜야 한다.
+
+    멱등: `config set` 은 값이 이미 true 여도 무해하게 "Value changed successfully"
+    를 반환한다(회귀 없음). --local 소켓 경로로 실행(인증 불필요).
+    """
+    for key in ("ServiceSettings.EnableBotAccountCreation",
+                "ServiceSettings.EnableUserAccessTokens"):
+        mmctl("config", "set", key, "true", check=True)
+    say("봇 생성/토큰 발급 서버 설정 활성화 확인(EnableBotAccountCreation, "
+        "EnableUserAccessTokens = true).")
+
+
 def _bot_specs():
     """agents/*.md 에서 (config_stem, username, display_name) 도출. 단일 진실원."""
     specs = []
@@ -434,6 +457,9 @@ def main():
         ensure_mmctl_available()
         ensure_admin()
         ensure_team()
+        # 봇 생성·토큰 발급이 서버 설정으로 막히지 않도록 선행 활성화(멱등).
+        # fresh 컨테이너는 두 설정이 false → 이 단계 없이는 bot create 가 실패한다.
+        ensure_bot_prereqs()
         specs = _bot_specs()
         bot_usernames = []
         for config_stem, username, display_name in specs:
