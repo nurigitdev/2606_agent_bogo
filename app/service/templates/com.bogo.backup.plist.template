@@ -5,19 +5,23 @@
     <key>Label</key>
     <string>com.bogo.backup</string>
 
-    <!-- 봇이 평소 운영되는 동안 주기적으로 데이터(대화/계정/채널/보고)를 폴더 안에 자동
-         백업한다. 사람이 '백업'을 누르는 단계를 없애기 위한 핵심 — 폴더를 새 PC 로 복사하면
-         최신 백업도 함께 따라가고, 새 PC 는 시작 더블클릭 1번에 그 백업을 자동 복원한다.
+    <!-- While the bots are operating, this periodically auto-backs up the data
+         (conversations/accounts/channels/reports) inside the folder. It is the key to removing
+         the step where a human presses 'Backup' — when the folder is copied to a new PC, the
+         latest backup travels with it, and the new PC auto-restores that backup with a single
+         double-click of Start.
 
-         중요(이식성): 백업 산출물은 반드시 '원본 repo' 의 migration/ 에 써야 폴더 물리 복사
-         시 함께 이동한다. launchd 는 ASCII 미러를 실행하지만(__APP__), 백업 스크립트에
-         --out 으로 '원본 repo'(__REPO__/migration)를 명시해 산출물을 원본 폴더에 남긴다.
-         (미러는 install_service.sh 가 rsync 로 만든 사본이라 Finder 로 복사하는 대상이 아님.)
+         Important (portability): the backup output MUST be written to the migration/ of the
+         'source repo' so it moves along when the folder is physically copied. launchd runs the
+         ASCII mirror (__APP__), but the backup script is given --out pointing at the 'source
+         repo' (__REPO__/migration) so the output lands in the original folder.
+         (The mirror is a copy made by install_service.sh via rsync, so it is not the target you
+         copy in Finder.)
 
-         경로는 install_service.sh 가 설치 시 치환한다:
-           __APP__  = ASCII 미러 app 경로(스크립트 실행 위치)
-           __REPO__ = 원본 repo app 경로(산출물 출력 위치 = 폴더 복사 대상)
-           __LOGS__ = 미러 logs 경로 -->
+         Paths are substituted by install_service.sh at install time:
+           __APP__  = ASCII mirror app path (where the script runs)
+           __REPO__ = source repo app path (output destination = folder-copy target)
+           __LOGS__ = mirror logs path -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
@@ -29,24 +33,26 @@
         <string>__RETAIN__</string>
     </array>
 
-    <!-- 주기: 기본 6시간(21600초). 너무 잦으면 디스크/IO 부담, 너무 드물면 데이터 유실 폭
-         증가 → 6시간이 무인 운영의 합리적 균형(보관 3개면 최대 18시간 이력). install_service.sh
-         가 BOGO_BACKUP_INTERVAL 로 치환(__INTERVAL__). -->
+    <!-- Interval: default 6 hours (21600 seconds). Too frequent burdens disk/IO, too rare
+         increases potential data loss → 6 hours is a reasonable balance for unattended operation
+         (with 3 retained, up to 18 hours of history). install_service.sh substitutes this from
+         BOGO_BACKUP_INTERVAL (__INTERVAL__). -->
     <key>StartInterval</key>
     <integer>__INTERVAL__</integer>
 
-    <!-- 부팅/로그인 직후에도 1회 떠서 최신 백업을 보장(첫 주기까지 공백 최소화).
-         pg_dump 는 read-only 라 봇/MM 에 영향 없음. -->
+    <!-- Also runs once right after boot/login to guarantee a fresh backup (minimizing the gap
+         until the first interval). pg_dump is read-only, so it has no impact on the bots/MM. -->
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- 백업은 1회성 잡(떠서 백업하고 종료) → KeepAlive 두지 않는다. 실패해도 다음 주기에
-         다시 시도하므로 crash-loop 위험 없음. 동시 실행이 겹치지 않도록 launchd 가 직전
-         인스턴스 종료 후에만 재기동(StartInterval 의 기본 동작). -->
+    <!-- The backup is a one-shot job (start, back up, exit) → no KeepAlive. Even if it fails, it
+         retries on the next interval, so there is no crash-loop risk. To avoid overlapping runs,
+         launchd only relaunches after the previous instance has exited (the default behavior of
+         StartInterval). -->
     <key>ProcessType</key>
     <string>Background</string>
 
-    <!-- 저우선순위(Nice)로 백업이 봇 응답성을 방해하지 않게 한다. -->
+    <!-- Low priority (Nice) so the backup does not interfere with the bots' responsiveness. -->
     <key>Nice</key>
     <integer>10</integer>
 

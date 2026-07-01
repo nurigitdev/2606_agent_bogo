@@ -45,7 +45,7 @@ __pycache__/
 logs/
 app/logs/
 # 터미널 폴백 로그(파일관리자 더블클릭 시 터미널 미탐지 폴백 산출물)
-BOGO_시작_log.txt
+BOGO_start_log.txt
 
 # DB
 hub/hub.db

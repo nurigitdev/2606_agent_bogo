@@ -1,13 +1,14 @@
 [Unit]
-# bogo-backup.service 를 주기적으로 트리거하는 타이머. 봇이 운영되는 동안 백그라운드로
-# 데이터 백업을 폴더 안에 누적시켜 '백업 더블클릭' 단계를 없앤다.
-Description=BOGO 데이터 자동 백업 타이머
+# Timer that periodically triggers bogo-backup.service. While the bots operate, it accumulates
+# data backups inside the folder in the background, removing the 'double-click Backup' step.
+Description=BOGO automatic data backup timer
 
 [Timer]
-# 부팅(서비스 시작) 2분 후 첫 백업(첫 주기 공백 최소화), 이후 __INTERVAL_SEC__ 초마다.
+# First backup 2 minutes after boot (service start) to minimize the first-interval gap, then
+# every __INTERVAL_SEC__ seconds.
 OnActiveSec=120
 OnUnitActiveSec=__INTERVAL_SEC__s
-# 슬립/오프라인으로 놓친 주기는 깨어난 직후 1회 보충 실행(데이터 유실 폭 최소화).
+# Intervals missed due to sleep/offline are caught up once right after waking (minimizing data loss).
 Persistent=true
 
 [Install]

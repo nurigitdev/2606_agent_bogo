@@ -38,9 +38,9 @@ function Install-All {
     Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger `
       -Settings $settings -Principal $principal -Force | Out-Null
     Start-ScheduledTask -TaskName $name
-    Say "등록+기동: $name"
+    Say "Registered+started: $name"
   }
-  Say "Windows Task Scheduler 설치 완료. 상태:  .\service\install_service.ps1 status"
+  Say "Windows Task Scheduler install complete. Status:  .\service\install_service.ps1 status"
 }
 
 function Uninstall-All {
@@ -49,10 +49,10 @@ function Uninstall-All {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
       Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
       Unregister-ScheduledTask -TaskName $name -Confirm:$false
-      Say "해제: $name"
+      Say "Unregistered: $name"
     }
   }
-  Say "Task Scheduler 등록 해제 완료."
+  Say "Task Scheduler unregistration complete."
 }
 
 function Restart-All {
@@ -60,7 +60,7 @@ function Restart-All {
     $name = "BOGO_$r"
     Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     Start-ScheduledTask -TaskName $name
-    Say "재시작: $name"
+    Say "Restarted: $name"
   }
 }
 
@@ -69,7 +69,7 @@ function Status-All {
     $name = "BOGO_$r"
     $t = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if ($t) { Write-Host ("{0,-18} {1}" -f $name, $t.State) }
-    else    { Write-Host ("{0,-18} (미등록)" -f $name) }
+    else    { Write-Host ("{0,-18} (not registered)" -f $name) }
   }
 }
 
@@ -78,5 +78,5 @@ switch ($Action) {
   "uninstall" { Uninstall-All }
   "restart"   { Restart-All }
   "status"    { Status-All }
-  default     { Write-Host "알 수 없는 명령: $Action (install|uninstall|restart|status)" -ForegroundColor Red; exit 1 }
+  default     { Write-Host "Unknown command: $Action (install|uninstall|restart|status)" -ForegroundColor Red; exit 1 }
 }

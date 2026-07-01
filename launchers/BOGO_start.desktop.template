@@ -1,0 +1,20 @@
+[Desktop Entry]
+# BOGO Start -- launcher for the Linux GUI file manager / app menu / desktop (recommended entry point).
+# A .desktop Exec cannot resolve its own location, so an absolute path must be set once.
+# Auto-install (recommended): run  ./app/install_desktop_launcher.sh  from the project root
+#   (that script substitutes this template's __START_SH__ with the real absolute path and installs
+#    it into ~/.local/share/applications, setting execute permission and the trusted flag).
+# Manual install: replace __START_SH__ with the absolute path of 'BOGO_start.sh', then grant this file execute permission.
+# The 'BOGO_start.sh' this launcher calls converges on the full core (bogo_oneclick.sh start) --
+#   venv -> reindex -> infra -> data auto-restore -> bot/dashboard always-on registration -> dashboard health check.
+Type=Application
+Name=BOGO Start
+Name[en]=BOGO Start
+Comment=Start all BOGO components and auto-restore data (run once after copying the folder)
+Comment[en]=Start all BOGO components and auto-restore data (run once after copying the folder)
+Exec=bash "__START_SH__"
+Terminal=true
+Icon=utilities-terminal
+Categories=Utility;Network;
+Keywords=BOGO;Mattermost;Bot;Dashboard;
+StartupNotify=true

@@ -1,49 +1,50 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════
-#  BOGO 데이터 내보내기 (A) — 기존 PC 의 대화/계정/채널/보고 DB 를 단일 백업본으로
+#  BOGO data export (A) — bundle the old PC's chat/account/channel/report DB into a single backup
 # ════════════════════════════════════════════════════════════════════════
-#  WHY  폴더(코드·설정·인프라 정의)는 git 으로 따라가지만, 실제 대화·계정·채널·보고
-#    데이터는 Docker named volume(bogo-pg-data / bogo-mm-data ...) 에만 있다. 폴더만
-#    옮기면 빈 Mattermost 가 새로 만들어질 뿐 기존 데이터는 따라오지 않는다. 이 스크립트가
-#    그 공백을 메운다 — 컨테이너가 마운트한 볼륨을 통째로 떠내 단일 .tar.gz 산출물 하나로
-#    만든다(새 PC 의 복원 스크립트가 이 파일 하나만 보면 됨).
+#  WHY  The folder (code, config, infra definitions) is tracked by git, but the actual
+#    chat/account/channel/report data lives only in the Docker named volumes
+#    (bogo-pg-data / bogo-mm-data ...). Moving the folder alone just spawns a fresh empty
+#    Mattermost — the existing data does not come along. This script fills that gap: it dumps
+#    the container-mounted volumes wholesale into a single .tar.gz artifact (so the new PC's
+#    restore script only needs to look at this one file).
 #
-#  WHAT (전부 멱등·비파괴 — 읽기 전용 덤프만, 원본 볼륨/컨테이너 무손상):
-#    1) docker/colima 가 떠 있고 bogo-pg/bogo-mm 가 존재하는지 점검(없으면 명확한 1줄 안내)
-#    2) bogo-pg: pg_dump --format=custom 으로 논리 덤프(이식성 최상, 버전 차이 흡수)
-#       + 안전망으로 PG 데이터 볼륨 원본도 tar 로 동봉(논리 복원 실패 시 물리 복원 대비)
-#    3) bogo-mm: data/config/plugins 볼륨을 tar 로 떠냄(첨부파일·설정·플러그인 보존)
-#    4) 위 전부를 app/migration/bogo_backup_<날짜시각>.tar.gz 단일 산출물로 묶고,
-#       무결성 검증(tar -t)·매니페스트(manifest.json) 동봉. 최신본은 bogo_backup_latest.tar.gz
-#       심볼릭/복사로도 남겨 복원 스크립트가 자동으로 집어가게 한다.
+#  WHAT (fully idempotent and non-destructive — read-only dump only, original volumes/containers untouched):
+#    1) Check that docker/colima is up and bogo-pg/bogo-mm exist (if not, a clear one-line notice)
+#    2) bogo-pg: logical dump via pg_dump --format=custom (best portability, absorbs version diffs)
+#       + as a safety net, also bundle the raw PG data volume as a tar (fallback physical restore if logical restore fails)
+#    3) bogo-mm: tar the data/config/plugins volumes (preserve attachments, settings, plugins)
+#    4) Wrap all of the above into a single artifact app/migration/bogo_backup_<datetime>.tar.gz, with
+#       integrity verification (tar -t) and a manifest (manifest.json) included. Also leave the latest as
+#       bogo_backup_latest.tar.gz (symlink/copy) so the restore script picks it up automatically.
 #
-#  계약(infra_up.sh / docker-compose.yml 과 1:1):
-#    - 컨테이너 이름 고정: bogo-pg / bogo-mm  (볼륨 이름이 PC마다 달라도 컨테이너 기준으로 접근)
-#    - PG 자격증명: docker-compose.yml 의 ${BOGO_PG_USER:-mmuser}/${BOGO_PG_DB:-mattermost}
-#    - 볼륨 경로: PG=/var/lib/postgresql/data, MM=/mattermost/{data,config,plugins}
+#  Contract (1:1 with infra_up.sh / docker-compose.yml):
+#    - Fixed container names: bogo-pg / bogo-mm  (access by container even if volume names differ per PC)
+#    - PG credentials: ${BOGO_PG_USER:-mmuser}/${BOGO_PG_DB:-mattermost} from docker-compose.yml
+#    - Volume paths: PG=/var/lib/postgresql/data, MM=/mattermost/{data,config,plugins}
 #
-#  안전: 외부 네트워크/포트 안 건드림. 시크릿(비밀번호)은 컨테이너 env 에서만 읽고 출력 안 함.
-#        원본 컨테이너·볼륨은 절대 삭제/수정하지 않는다(순수 read-only 덤프).
-#  사용:
-#    ./bogo_backup.sh                  # 백업 생성(기본)
-#    ./bogo_backup.sh --out <경로>     # 산출물 디렉터리 지정(기본 app/migration)
+#  Safety: Does not touch external networks/ports. Secrets (passwords) are read only from the container env and never printed.
+#        Original containers/volumes are never deleted or modified (pure read-only dump).
+#  Usage:
+#    ./bogo_backup.sh                  # create backup (default)
+#    ./bogo_backup.sh --out <path>     # specify artifact directory (default app/migration)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-# ── 컨테이너 이름 계약(docker-compose.yml / infra_up.sh 와 동일) ──────────
+# ── Container name contract (same as docker-compose.yml / infra_up.sh) ──────────
 PG_NAME="bogo-pg"
 MM_NAME="bogo-mm"
-# PG 자격증명 기본값(compose 기본과 일치). 컨테이너 env 에서 실제값을 읽어 덮어쓴다.
+# PG credential defaults (matching compose defaults). Overridden by reading the actual values from the container env.
 PG_USER_DEFAULT="mmuser"
 PG_DB_DEFAULT="mattermost"
 
 OUT_DIR="$HERE"
-# 보관 개수(최근 N개만 남기고 자동 정리 — 폴더 비대화/디스크 통제). 환경변수로 조정 가능.
+# Retention count (keep only the latest N and auto-prune — controls folder bloat/disk). Adjustable via env var.
 RETAIN="${BOGO_BACKUP_RETAIN:-3}"
-# --quiet: 자동(launchd) 호출 시 색/장식 출력을 줄이고 로그를 간결히(사람 대면 X).
+# --quiet: for automated (launchd) invocation, reduce color/decoration output and keep logs concise (not human-facing).
 QUIET=0
-# --out <dir> 옵션 파싱.
+# Parse the --out <dir> option.
 while [ $# -gt 0 ]; do
   case "$1" in
     --out)    OUT_DIR="${2:-$HERE}"; shift 2 ;;
@@ -56,32 +57,32 @@ done
 C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_WARN=$'\033[0;33m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { [ "${QUIET:-0}" -eq 1 ] && return 0; printf '%s[backup]%s %s\n' "$C_INFO" "$C_RST" "$*"; }
 ok()   { printf '%s[backup:OK]%s %s\n'   "$C_OK"   "$C_RST" "$*"; }
-warn() { printf '%s[backup:경고]%s %s\n' "$C_WARN" "$C_RST" "$*" >&2; }
-err()  { printf '%s[backup:오류]%s %s\n' "$C_ERR"  "$C_RST" "$*" >&2; }
+warn() { printf '%s[backup:WARN]%s %s\n' "$C_WARN" "$C_RST" "$*" >&2; }
+err()  { printf '%s[backup:ERROR]%s %s\n' "$C_ERR"  "$C_RST" "$*" >&2; }
 
-# ── 0. 사전 점검: docker 가 살아있고 컨테이너가 존재하는가 ────────────────
+# ── 0. Preflight: is docker alive and do the containers exist ────────────────
 preflight() {
   if ! command -v docker >/dev/null 2>&1; then
-    err "docker 명령을 찾지 못했습니다."
-    err "할 일 1가지: Docker Desktop 설치 또는 'brew install docker colima' 후 다시 실행."
+    err "Could not find the docker command."
+    err "One thing to do: install Docker Desktop or run 'brew install docker colima', then retry."
     exit 1
   fi
   if ! docker info >/dev/null 2>&1; then
-    err "Docker 데몬에 연결할 수 없습니다(Colima/Docker Desktop 미기동)."
-    err "할 일 1가지: 터미널에서 'colima start' 실행(또는 Docker Desktop 기동) 후 다시 실행."
+    err "Cannot connect to the Docker daemon (Colima/Docker Desktop not running)."
+    err "One thing to do: run 'colima start' in the terminal (or launch Docker Desktop), then retry."
     exit 1
   fi
   local missing=0
   for c in "$PG_NAME" "$MM_NAME"; do
     if [ -z "$(docker ps -aq -f "name=^${c}$" 2>/dev/null)" ]; then
-      err "컨테이너 '$c' 가 이 PC 에 없습니다 — 백업할 데이터가 없습니다."
+      err "Container '$c' does not exist on this PC — there is no data to back up."
       missing=1
     fi
   done
-  [ "$missing" -eq 0 ] || { err "이 PC 가 BOGO 원본(데이터 보유) PC 가 맞는지 확인하세요."; exit 1; }
+  [ "$missing" -eq 0 ] || { err "Check whether this PC is really the BOGO source (data-holding) PC."; exit 1; }
 }
 
-# 컨테이너 env 에서 실제 PG 자격증명 읽기(시크릿은 변수로만, 출력 금지).
+# Read the actual PG credentials from the container env (secrets stay in variables only, never printed).
 read_pg_creds() {
   PG_USER="$(docker exec "$PG_NAME" sh -c 'printf %s "$POSTGRES_USER"' 2>/dev/null || true)"
   PG_DB="$(docker exec "$PG_NAME" sh -c 'printf %s "$POSTGRES_DB"' 2>/dev/null || true)"
@@ -89,13 +90,13 @@ read_pg_creds() {
   [ -n "${PG_DB:-}" ]   || PG_DB="$PG_DB_DEFAULT"
 }
 
-# 임시 작업공간 — 모든 덤프 조각을 여기 모았다가 단일 tar.gz 로 묶는다.
+# Temp workspace — gather all dump pieces here, then bundle into a single tar.gz.
 STAGE=""
 cleanup() { [ -n "${STAGE:-}" ] && rm -rf "$STAGE" 2>/dev/null || true; }
 trap cleanup EXIT
 
 main() {
-  say "BOGO 데이터 백업 시작 (컨테이너 기준 read-only 덤프)."
+  say "Starting BOGO data backup (container-based read-only dump)."
   preflight
   read_pg_creds
 
@@ -105,42 +106,42 @@ main() {
   local payload="$STAGE/payload"
   mkdir -p "$payload"
 
-  # ── 1. PG 논리 덤프(이식성 최상) ─────────────────────────────────────
-  say "[1/4] Postgres 논리 덤프 (pg_dump custom, db=$PG_DB)..."
+  # ── 1. PG logical dump (best portability) ─────────────────────────────────
+  say "[1/4] Postgres logical dump (pg_dump custom, db=$PG_DB)..."
   if docker exec "$PG_NAME" pg_dump -U "$PG_USER" -d "$PG_DB" -F c -Z 6 \
         > "$payload/pg_dump.custom" 2>"$STAGE/pg_dump.err"; then
-    ok "PG 논리 덤프 완료 ($(du -h "$payload/pg_dump.custom" | cut -f1))."
+    ok "PG logical dump complete ($(du -h "$payload/pg_dump.custom" | cut -f1))."
   else
-    warn "pg_dump 실패 — 물리 볼륨 복원 경로로 대체 가능(아래 PG 볼륨 tar 동봉). 상세: $(cat "$STAGE/pg_dump.err" 2>/dev/null | tail -1)"
+    warn "pg_dump failed — physical volume restore path can be used instead (PG volume tar bundled below). Details: $(cat "$STAGE/pg_dump.err" 2>/dev/null | tail -1)"
     rm -f "$payload/pg_dump.custom"
   fi
 
-  # ── 2. PG 데이터 볼륨 물리 tar(안전망) ───────────────────────────────
-  say "[2/4] Postgres 데이터 볼륨 물리 백업(안전망)..."
+  # ── 2. PG data volume physical tar (safety net) ───────────────────────────
+  say "[2/4] Postgres data volume physical backup (safety net)..."
   if docker run --rm --volumes-from "$PG_NAME" -v "$payload":/backup alpine \
         sh -c 'cd /var/lib/postgresql/data && tar czf /backup/pg_volume.tar.gz .' \
         >/dev/null 2>"$STAGE/pgvol.err"; then
-    ok "PG 볼륨 물리 백업 완료 ($(du -h "$payload/pg_volume.tar.gz" | cut -f1))."
+    ok "PG volume physical backup complete ($(du -h "$payload/pg_volume.tar.gz" | cut -f1))."
   else
-    warn "PG 볼륨 물리 백업 실패(논리 덤프가 있으면 무방). 상세: $(tail -1 "$STAGE/pgvol.err" 2>/dev/null)"
+    warn "PG volume physical backup failed (fine if the logical dump exists). Details: $(tail -1 "$STAGE/pgvol.err" 2>/dev/null)"
   fi
 
-  # ── 3. MM 볼륨(data/config/plugins) tar ──────────────────────────────
-  say "[3/4] Mattermost 볼륨 백업 (data·config·plugins — 첨부·설정 보존)..."
-  # MM data 가 핵심(파일 업로드), config·plugins 는 부가. 각각 별 tar 로 떠 멱등 복원.
+  # ── 3. MM volumes (data/config/plugins) tar ──────────────────────────────
+  say "[3/4] Mattermost volume backup (data/config/plugins — preserve attachments/settings)..."
+  # MM data is the core (file uploads); config/plugins are supplementary. Tar each separately for idempotent restore.
   for spec in "data:/mattermost/data" "config:/mattermost/config" "plugins:/mattermost/plugins"; do
     local label="${spec%%:*}" path="${spec#*:}"
     if docker run --rm --volumes-from "$MM_NAME" -v "$payload":/backup alpine \
           sh -c "cd '$path' 2>/dev/null && tar czf /backup/mm_${label}.tar.gz . " \
           >/dev/null 2>>"$STAGE/mm.err"; then
-      ok "MM $label 백업 완료 ($(du -h "$payload/mm_${label}.tar.gz" 2>/dev/null | cut -f1))."
+      ok "MM $label backup complete ($(du -h "$payload/mm_${label}.tar.gz" 2>/dev/null | cut -f1))."
     else
-      warn "MM $label 백업 건너뜀(해당 볼륨 없음 가능)."
+      warn "MM $label backup skipped (volume may not exist)."
     fi
   done
 
-  # ── 4. 매니페스트 + 단일 산출물 묶기 ─────────────────────────────────
-  say "[4/4] 매니페스트 작성 + 단일 산출물 압축..."
+  # ── 4. Manifest + bundle single artifact ─────────────────────────────────
+  say "[4/4] Writing manifest + compressing single artifact..."
   cat > "$payload/manifest.json" <<JSON
 {
   "schema": "bogo-backup/v1",
@@ -156,51 +157,51 @@ main() {
 }
 JSON
 
-  # 최소 하나의 PG 백업(논리 또는 물리)은 있어야 의미가 있다.
+  # At least one PG backup (logical or physical) must exist to be meaningful.
   if [ ! -f "$payload/pg_dump.custom" ] && [ ! -f "$payload/pg_volume.tar.gz" ]; then
-    err "PG 백업이 논리·물리 모두 실패했습니다 — 산출물을 만들지 않습니다(빈 백업 방지)."
+    err "PG backup failed both logically and physically — not creating an artifact (avoids an empty backup)."
     exit 1
   fi
 
   local final="$OUT_DIR/bogo_backup_${stamp}.tar.gz"
   ( cd "$STAGE" && tar czf "$final" -C "$payload" . )
 
-  # 무결성 검증(목록 출력 가능해야 정상).
+  # Integrity verification (must be able to list contents to be valid).
   if ! tar tzf "$final" >/dev/null 2>&1; then
-    err "산출물 무결성 검증 실패: $final"
+    err "Artifact integrity verification failed: $final"
     exit 1
   fi
 
-  # 복원 스크립트가 자동으로 집어갈 'latest' 포인터(복사본 — 심볼릭은 USB/타 FS 에서 깨질 수 있음).
+  # 'latest' pointer that the restore script picks up automatically (a copy — symlinks can break on USB/other filesystems).
   cp -f "$final" "$OUT_DIR/bogo_backup_latest.tar.gz"
 
-  # ── 보관 개수 제한(자동 정리 — 자동 백업이 폴더를 비대화시키지 않게) ──
-  # bogo_backup_<stamp>.tar.gz 중 최신 RETAIN 개만 남기고 나머지 삭제. _latest 포인터는
-  # 별도 파일이라 이 정리 대상이 아니다(항상 최신본을 가리킨 채 유지). 멱등: 개수 이하면 무동작.
+  # ── Retention limit (auto-prune — so automated backups don't bloat the folder) ──
+  # Keep only the latest RETAIN of the bogo_backup_<stamp>.tar.gz files and delete the rest. The _latest pointer is
+  # a separate file and not subject to this pruning (it always keeps pointing at the latest). Idempotent: no-op if at or below the count.
   rotate_backups
 
-  ok "백업 완료 → $final"
-  ok "최신 포인터  → $OUT_DIR/bogo_backup_latest.tar.gz ($(du -h "$final" | cut -f1))"
-  [ "$QUIET" -eq 1 ] || say "이 파일(또는 폴더 전체)을 새 PC 로 옮긴 뒤, 새 PC 에서 'BOGO 시작'을 더블클릭하면 자동 복원됩니다."
+  ok "Backup complete → $final"
+  ok "Latest pointer → $OUT_DIR/bogo_backup_latest.tar.gz ($(du -h "$final" | cut -f1))"
+  [ "$QUIET" -eq 1 ] || say "Move this file (or the whole folder) to the new PC, then double-click 'BOGO_start' on the new PC to restore automatically."
 }
 
-# 타임스탬프 백업본을 이름순(=시간순, stamp 가 YYYYMMDD-HHMMSS 라 사전식=시간식)으로
-# 정렬해 RETAIN 개 초과분(가장 오래된 것)을 삭제한다. _latest 포인터는 glob 에 안 걸린다.
+# Sort the timestamped backups by name (= chronological, since stamp is YYYYMMDD-HHMMSS so lexical=chronological)
+# and delete the excess over RETAIN (the oldest). The _latest pointer is not caught by the glob.
 rotate_backups() {
   [ "$RETAIN" -ge 1 ] 2>/dev/null || RETAIN=3
-  # glob 으로 안전 수집(ls 파싱 회피). 매칭 없으면 nullglob 가 없는 환경 대비해 실재 검사.
+  # Collect safely via glob (avoid parsing ls). If nothing matches, check existence in case nullglob isn't set.
   local files=() f
   for f in "$OUT_DIR"/bogo_backup_[0-9]*.tar.gz; do
     [ -f "$f" ] && files+=("$f")
   done
   local total="${#files[@]}"
   [ "$total" -gt "$RETAIN" ] || return 0
-  # 파일명은 stamp 로만 구성 → 사전식 정렬 결과의 앞쪽이 가장 오래된 것. sort 로 정렬.
+  # The filename consists of the stamp only → the front of the lexical sort is the oldest. Sort with sort.
   local sorted; sorted="$(printf '%s\n' "${files[@]}" | sort)"
   local remove=$((total - RETAIN)) i=0
   while IFS= read -r f; do
     [ "$i" -ge "$remove" ] && break
-    rm -f "$f" 2>/dev/null && say "오래된 백업 정리: $(basename "$f")"
+    rm -f "$f" 2>/dev/null && say "Pruned old backup: $(basename "$f")"
     i=$((i + 1))
   done <<< "$sorted"
 }

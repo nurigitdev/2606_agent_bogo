@@ -80,17 +80,17 @@ cd agent-bogo
 
 | OS | 더블클릭할 파일 | 내부 동작 |
 |----|----------------|-----------|
-| macOS | `BOGO 시작.command` | `launchers/BOGO 시작.command` → `app/bogo_ctl.sh` |
-| Windows | `BOGO 시작.bat` | `launchers\BOGO 시작.bat` → `app\bogo_ctl.ps1` |
-| Linux | `launchers/BOGO 시작.sh` | `app/bogo_oneclick.sh start`(풀 코어) |
+| macOS | `BOGO_start.command` | `launchers/BOGO_start.command` → `app/bogo_ctl.sh` |
+| Windows | `BOGO_start.bat` | `launchers\BOGO_start.bat` → `app\bogo_ctl.ps1` |
+| Linux | `launchers/BOGO_start.sh` | `app/bogo_oneclick.sh start`(풀 코어) |
 
 - 미설치 상태면 → 자동으로 venv + 의존성 + config 복사 + 상시 가동 등록까지 수행한다.
 - 이미 가동 중이면 → 중복 없이 최신 코드 재배포 + 역할 재시작만 한다.
 - Linux는 앱 메뉴 아이콘 설치(`./app/install_desktop_launcher.sh`)를 한 번 하면 메뉴에서 클릭 실행된다.
-- 더블클릭이 막히면 터미널에서 (경로에 한글·공백이 있으니 따옴표 필수):
+- 더블클릭이 막히면 터미널에서 (경로에 공백이 있을 수 있으니 따옴표 권장):
 
   ```bash
-  bash "/실제/경로/launchers/BOGO 시작.sh"
+  bash "/실제/경로/launchers/BOGO_start.sh"
   ```
 
 ### 3) 터미널로 시작 (서버·헤드리스)
@@ -147,9 +147,9 @@ Windows(PowerShell): `pwsh ./bogo_ctl.ps1 setup` → `pwsh ./bogo_ctl.ps1 restar
 
 ```
 agent-bogo/
-├─ BOGO 시작.command        # macOS 더블클릭 진입점(→ launchers/)
-├─ BOGO 시작.bat            # Windows 더블클릭 진입점(→ launchers/)
-├─ BOGO 시작.sh             # 공용 래퍼(→ launchers/BOGO 시작.sh)
+├─ BOGO_start.command       # macOS 더블클릭 진입점(→ launchers/)
+├─ BOGO_start.bat           # Windows 더블클릭 진입점(→ launchers/)
+├─ BOGO_start.sh            # 공용 래퍼(→ launchers/BOGO_start.sh)
 ├─ launchers/               # 실제 더블클릭 런처(시작/정지/백업, mac·win·linux)
 ├─ README.md                # 이 문서
 └─ app/                     # 애플리케이션 본체

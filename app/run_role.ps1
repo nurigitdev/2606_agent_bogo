@@ -1,6 +1,6 @@
 # BOGO role launcher (Windows / PowerShell).
 # Usage:  pwsh ./run_role.ps1 <orchestrator|hr|dev|admin>
-# Loads .env then execs the venv python runtime. Hangul-path safe.
+# Loads .env then execs the venv python runtime. Path-safe.
 param([Parameter(Mandatory=$true)][string]$Role)
 
 $ErrorActionPreference = "Stop"
@@ -22,11 +22,11 @@ if (Test-Path $envFile) {
 
 $VenvPy = Join-Path $Here ".venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPy)) {
-  Write-Host "[run_role] .venv 가 없습니다. 먼저 .\bootstrap.ps1 를 실행하세요." -ForegroundColor Red
+  Write-Host "[run_role] .venv is missing. Run .\bootstrap.ps1 first." -ForegroundColor Red
   exit 1
 }
 
-# admin = CEO 업데이트 파이프라인(ceo_admin_runtime.py), 나머지는 bogo_runtime.py.
+# admin = CEO update pipeline (ceo_admin_runtime.py); everything else = bogo_runtime.py.
 if ($Role -eq "admin") {
   & $VenvPy -u (Join-Path $Here "ceo_admin_runtime.py")
 } else {

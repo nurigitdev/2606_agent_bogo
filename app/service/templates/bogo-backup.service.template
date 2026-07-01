@@ -1,15 +1,16 @@
 [Unit]
-# BOGO 자동 데이터 백업(1회성 oneshot) — bogo-backup.timer 가 주기적으로 트리거한다.
-# Linux 는 repo 를 in-place 로 실행하므로 산출물도 __WORKDIR__/migration 에 직접 쌓인다
-# (= Finder/파일관리자로 폴더를 복사할 때 백업이 함께 따라가는 경로). read-only pg_dump 라
-# 봇/MM 운영에 영향 없음. 사람이 '백업'을 누르는 단계를 없애는 핵심 잡.
-Description=BOGO 데이터 자동 백업 (대화/계정/채널/보고)
+# BOGO automatic data backup (one-shot) — triggered periodically by bogo-backup.timer.
+# Linux runs the repo in-place, so the output also accumulates directly in __WORKDIR__/migration
+# (= the path where the backup travels along when the folder is copied via Finder/file manager).
+# Being a read-only pg_dump, it has no impact on the bots/MM. This is the key job that removes the
+# step where a human presses 'Backup'.
+Description=BOGO automatic data backup (conversations/accounts/channels/reports)
 
 [Service]
 Type=oneshot
 WorkingDirectory=__WORKDIR__
-# --quiet 자동 모드, 산출물은 repo 의 migration/, 보관 __RETAIN__ 개로 자동 정리.
+# --quiet automatic mode; output goes to the repo's migration/, auto-pruned to __RETAIN__ kept.
 ExecStart=/usr/bin/env bash __WORKDIR__/migration/bogo_backup.sh --quiet --out __WORKDIR__/migration --retain __RETAIN__
-# 백업이 봇 응답성을 방해하지 않게 저우선순위.
+# Low priority so the backup does not interfere with the bots' responsiveness.
 Nice=10
 IOSchedulingClass=idle

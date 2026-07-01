@@ -4,11 +4,11 @@
 # OS-detected, username-agnostic (everything derived from ${HOME} and this repo's
 # resolved path). No /Users/<name> is ever hardcoded.
 #
-#   macOS : mirrors the repo to an ASCII path ${HOME}/.bogo-bin/app (REQUIRED —
-#           launchd corrupts Hangul paths and TCC blocks ~/Desktop reads), installs
+#   macOS : mirrors the repo to an ASCII path ${HOME}/.bogo-bin/app (REQUIRED --
+#           launchd corrupts Unicode paths and TCC blocks ~/Desktop reads), installs
 #           4 launchd user agents from the plist template.
 #   Linux : installs a systemd --user template unit and enables 4 instances. Runs
-#           the repo IN PLACE (Linux handles Hangul paths; no mirror needed).
+#           the repo IN PLACE (Linux handles Unicode paths; no mirror needed).
 #
 # Usage:
 #   ./service/install_service.sh install     # install + start all roles
@@ -19,12 +19,13 @@ set -euo pipefail
 
 ROLES=(orchestrator hr dev admin)
 
-# CEO 대시보드 리슨 포트(루프백 전용). 환경변수로 덮어쓰기 가능, 기본 8642.
+# CEO dashboard listen port (loopback only). Overridable via environment variable, default 8642.
 DASH_PORT="${BOGO_DASHBOARD_PORT:-8642}"
 
-# 자동 데이터 백업 주기(초)·보관 개수. 봇 운영 중 주기적으로 폴더 안에 최신 백업을 쌓아
-# '백업 더블클릭' 단계를 없앤다(폴더 복사 시 백업 동반 → 새 PC 시작 1번에 자동 복원).
-# 기본 6시간·3개 보관(최대 18시간 이력). 환경변수로 조정 가능.
+# Automatic data backup interval (seconds) and retention count. While the bots run, periodically
+# accumulate the latest backups inside the folder, eliminating the 'double-click backup' step
+# (copying the folder carries the backups along → auto-restore in one start on a new PC).
+# Default 6 hours, retain 3 (up to 18 hours of history). Adjustable via environment variables.
 BACKUP_INTERVAL="${BOGO_BACKUP_INTERVAL:-21600}"
 BACKUP_RETAIN="${BOGO_BACKUP_RETAIN:-3}"
 
@@ -34,7 +35,7 @@ REPO="$(cd "$SELF/.." && pwd)"
 TPL="$SELF/templates"
 
 say() { printf '\033[0;36m[service]\033[0m %s\n' "$*"; }
-err() { printf '\033[0;31m[service:오류]\033[0m %s\n' "$*" >&2; }
+err() { printf '\033[0;31m[service:ERROR]\033[0m %s\n' "$*" >&2; }
 
 OS="$(uname -s)"
 ACTION="${1:-install}"
@@ -47,18 +48,18 @@ mac_launcher="${HOME}/.bogo-bin/run_role.sh"
 mac_logs="${mac_app}/logs"
 mac_la="${HOME}/Library/LaunchAgents"
 
-# git post-commit 훅 활성화 — 미러 드리프트 원천 차단의 핵심.
-# launchd 데몬은 TCC 로 ~/Desktop 원본 read 가 막혀 스스로 동기화하지 못한다. 대신
-# 커밋(=사용자 세션, TCC 통과) 시점에 .githooks/post-commit 이 미러 재동기화 + 데몬
-# 재시작을 자동 수행하게 한다. core.hooksPath 를 버전관리되는 .githooks 로 가리켜,
-# 새 클론/머신에서도 install 한 번이면 자동 활성화된다(.git/hooks 는 버전관리 안 됨).
+# Enable the git post-commit hook — the key to eliminating mirror drift at the source.
+# The launchd daemon can't read the ~/Desktop original due to TCC, so it can't self-sync. Instead,
+# at commit time (= a user session, which passes TCC) .githooks/post-commit automatically
+# re-syncs the mirror + restarts the daemon. By pointing core.hooksPath at the version-controlled
+# .githooks, it auto-enables with a single install on a new clone/machine (.git/hooks isn't version-controlled).
 mac_enable_git_hooks() {
   local groot; groot="$(cd "$REPO/.." && git rev-parse --show-toplevel 2>/dev/null || true)"
-  [ -n "$groot" ] || { say "git 워크트리 아님 → post-commit 훅 등록 생략"; return 0; }
+  [ -n "$groot" ] || { say "Not a git worktree → skipping post-commit hook registration"; return 0; }
   if [ -f "$groot/.githooks/post-commit" ]; then
     chmod +x "$groot/.githooks/post-commit" 2>/dev/null || true
     ( cd "$groot" && git config core.hooksPath .githooks )
-    say "git post-commit 훅 활성화: 커밋 시 미러 자동 동기화 + 데몬 재시작"
+    say "git post-commit hook enabled: auto-sync mirror + restart daemon on commit"
   fi
 }
 
@@ -77,18 +78,19 @@ mac_sync() {
   # The mirror is an ASCII path → bootstrap the venv THERE (its own pyvenv pins
   # the ASCII path, which is what we want for launchd).
   if [ ! -x "$mac_app/.venv/bin/python" ]; then
-    say "ASCII 미러에 venv 생성 중..."
+    say "Creating venv in the ASCII mirror..."
     ( cd "$mac_app" && ./bootstrap.sh >/dev/null )
   fi
-  say "미러 동기화: $REPO -> $mac_app"
+  say "Mirror sync: $REPO -> $mac_app"
 }
 
-# Colima 부팅 자동시작 LaunchAgent 등록(멱등). macOS 로그인/부팅 시 도커 런타임 VM 을
-# 자동 기동해, 봇이 의존하는 통신 백본 컨테이너가 unless-stopped 정책으로 부활하게 한다.
+# Register the Colima boot auto-start LaunchAgent (idempotent). Auto-starts the Docker runtime VM
+# on macOS login/boot so the communication-backbone containers the bots depend on revive under the
+# unless-stopped policy.
 mac_install_colima_agent() {
   local colima_bin; colima_bin="$(command -v colima 2>/dev/null || true)"
   if [ -z "$colima_bin" ]; then
-    say "colima 미설치 → Colima 부팅 자동시작 등록 생략(봇 인프라는 infra_up.sh 가 보장)."
+    say "colima not installed → skipping Colima boot auto-start registration (bot infra is guaranteed by infra_up.sh)."
     return 0
   fi
   local brew_bin; brew_bin="$(dirname "$colima_bin")"
@@ -101,18 +103,18 @@ mac_install_colima_agent() {
   local uid; uid="$(id -u)"
   launchctl bootout "gui/$uid/com.bogo.colima" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$uid" "$plist"
-  say "등록: com.bogo.colima (부팅 시 Colima 자동 기동)"
+  say "Registered: com.bogo.colima (auto-starts Colima on boot)"
 }
 
-# 안전한 (재)등록: 같은 Label 이 아직 완전히 bootout 되지 않은 상태에서 bootstrap 하면
-# launchd 가 "Input/output error (5)" 를 던지며 set -e 로 설치가 통째로 중단된다.
-# (KeepAlive 봇이 즉시 재시작되며 라벨이 잠시 살아있는 레이스.) → bootout 후 라벨이
-# 사라질 때까지 짧게 폴링하고, 그래도 실패하면 1회 재시도한다. $1=label, $2=plist 경로.
+# Safe (re)registration: if you bootstrap while the same Label has not been fully booted out,
+# launchd throws "Input/output error (5)" and set -e aborts the whole install.
+# (A race where the KeepAlive bot restarts immediately and the label stays briefly alive.) → After
+# bootout, poll briefly until the label disappears, and if it still fails, retry once. $1=label, $2=plist path.
 mac_bootstrap_safe() {
   local uid; uid="$(id -u)"
   local label="$1" plist="$2"
   launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
-  # 라벨이 service DB 에서 빠질 때까지 최대 ~5초 대기(완전 unload 보장).
+  # Wait up to ~5s until the label drops from the service DB (guarantees a full unload).
   local i=0
   while [ "$i" -lt 25 ] && launchctl print "gui/$uid/$label" >/dev/null 2>&1; do
     sleep 0.2; i=$((i + 1))
@@ -121,13 +123,14 @@ mac_bootstrap_safe() {
     sleep 1
     launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
     sleep 1
-    launchctl bootstrap "gui/$uid" "$plist"   # 2차 실패는 진짜 오류 → set -e 로 중단
+    launchctl bootstrap "gui/$uid" "$plist"   # a second failure is a real error → aborts via set -e
   fi
 }
 
-# 자동 데이터 백업 LaunchAgent 등록(멱등). 봇 운영 중 BACKUP_INTERVAL 마다 read-only pg_dump +
-# MM 볼륨 백업을 '원본 repo' 의 migration/ 에 쌓는다(__REPO__ = 폴더 복사 대상). 사람이 백업을
-# 누를 필요가 없어진다 — 폴더만 새 PC 로 복사하면 최신 백업이 동반된다.
+# Register the automatic data backup LaunchAgent (idempotent). While the bots run, every
+# BACKUP_INTERVAL it accumulates a read-only pg_dump + MM volume backup into the 'original repo's'
+# migration/ (__REPO__ = the folder-copy target). No one needs to press backup — just copy the
+# folder to a new PC and the latest backup comes along.
 mac_install_backup_agent() {
   local plist="$mac_la/com.bogo.backup.plist"
   sed -e "s#__APP__#$mac_app#g" \
@@ -137,7 +140,7 @@ mac_install_backup_agent() {
       -e "s#__RETAIN__#$BACKUP_RETAIN#g" \
       "$TPL/com.bogo.backup.plist.template" > "$plist"
   mac_bootstrap_safe "com.bogo.backup" "$plist"
-  say "등록+기동: com.bogo.backup (${BACKUP_INTERVAL}s 마다 자동 백업 → $REPO/migration)"
+  say "Registered+started: com.bogo.backup (auto-backup every ${BACKUP_INTERVAL}s → $REPO/migration)"
 }
 
 mac_install() {
@@ -146,8 +149,8 @@ mac_install() {
   cp "$REPO/run_role.sh" "$mac_launcher"
   chmod +x "$mac_launcher"
   mac_sync
-  mac_enable_git_hooks   # 커밋 시 미러 자동 동기화(드리프트 원천 차단)
-  # Colima 부팅 자동시작 등록 + 지금 당장 통신 백본 보장(봇 등록 전에 MM 이 떠 있어야 즉사 없음).
+  mac_enable_git_hooks   # auto-sync mirror on commit (eliminate drift at the source)
+  # Register Colima boot auto-start + guarantee the communication backbone right now (MM must be up before bot registration to avoid instant death).
   mac_install_colima_agent
   "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
@@ -160,10 +163,10 @@ mac_install() {
         -e "s#__LOGS__#$mac_logs#g" \
         "$TPL/com.bogo.ROLE.plist.template" > "$plist"
     mac_bootstrap_safe "com.bogo.$r" "$plist"
-    say "등록+기동: com.bogo.$r"
+    say "Registered+started: com.bogo.$r"
   done
-  # CEO 대시보드(127.0.0.1:DASH_PORT)도 봇과 동일하게 launchd 상시 소유로 승격.
-  # 기존 oneclick nohup 단발 프로세스가 떠 있으면 중복 LISTEN 충돌하므로 먼저 정리한다.
+  # Promote the CEO dashboard (127.0.0.1:DASH_PORT) to permanent launchd ownership, same as the bots.
+  # If an existing oneclick nohup one-off process is up it would conflict on a duplicate LISTEN, so clean it up first.
   mac_kill_legacy_dashboard
   local dplist="$mac_la/com.bogo.dashboard.plist"
   sed -e "s#__LAUNCHER__#$mac_launcher#g" \
@@ -173,21 +176,21 @@ mac_install() {
       -e "s#__LOGS__#$mac_logs#g" \
       "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
   mac_bootstrap_safe "com.bogo.dashboard" "$dplist"
-  say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
-  # 자동 데이터 백업 잡 등록(봇 운영 중 폴더 안에 최신 백업 누적 → 무인 이전 완성).
+  say "registered+started: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
+  # Register the automatic data-backup job (accumulates the latest backup inside the folder while the bots run -> unattended migration complete).
   mac_install_backup_agent
-  say "macOS launchd 설치 완료. 상태:  ./service/install_service.sh status"
+  say "macOS launchd install complete. Status:  ./service/install_service.sh status"
 }
 
-# launchd 가 대시보드를 소유하기 전에, oneclick 이 띄운 단발 nohup 대시보드(원본 Desktop
-# 경로 또는 미러)를 안전 종료한다. 우리 ceo_dashboard.py 프로세스만 골라 죽인다(포트 점유
-# 충돌·이중 LISTEN 방지). 외부 프로세스는 건드리지 않는다.
+# Before launchd owns the dashboard, safely stop the one-shot nohup dashboard started by oneclick
+# (original Desktop path or the mirror). Kill only our own ceo_dashboard.py process (prevents port
+# contention / double LISTEN). Do not touch external processes.
 mac_kill_legacy_dashboard() {
   local holders; holders="$(lsof -nP -iTCP:"$DASH_PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
   for p in $holders; do
     if ps -p "$p" -o command= 2>/dev/null | grep -q "ceo_dashboard.py"; then
       kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true
-      say "기존 nohup 대시보드(PID $p) 정리 → launchd 소유로 이관."
+      say "cleaned up legacy nohup dashboard (PID $p) -> handing ownership to launchd."
     fi
   done
   rm -f "$mac_app/logs/dashboard.pid" "$REPO/logs/dashboard.pid" 2>/dev/null || true
@@ -198,36 +201,36 @@ mac_uninstall() {
   for r in "${ROLES[@]}"; do
     launchctl bootout "gui/$uid/com.bogo.$r" >/dev/null 2>&1 || true
     rm -f "$mac_la/com.bogo.$r.plist"
-    say "해제: com.bogo.$r"
+    say "unregistered: com.bogo.$r"
   done
-  # CEO 대시보드 launchd 해제(미러·로그는 보존).
+  # Unregister the CEO dashboard from launchd (mirror and logs are preserved).
   launchctl bootout "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1 || true
   rm -f "$mac_la/com.bogo.dashboard.plist"
-  say "해제: com.bogo.dashboard"
-  # 자동 데이터 백업 LaunchAgent 해제(이미 떠낸 백업 산출물은 보존 — 데이터 이전용).
+  say "unregistered: com.bogo.dashboard"
+  # Unregister the automatic data-backup LaunchAgent (already-produced backup artifacts are preserved — for data migration).
   launchctl bootout "gui/$uid/com.bogo.backup" >/dev/null 2>&1 || true
   rm -f "$mac_la/com.bogo.backup.plist"
-  say "해제: com.bogo.backup"
-  # Colima 부팅 자동시작 LaunchAgent 도 함께 해제(콜리마 VM 자체는 건드리지 않음).
+  say "unregistered: com.bogo.backup"
+  # Also unregister the Colima boot auto-start LaunchAgent (the Colima VM itself is left untouched).
   launchctl bootout "gui/$uid/com.bogo.colima" >/dev/null 2>&1 || true
   rm -f "$mac_la/com.bogo.colima.plist"
-  say "해제: com.bogo.colima"
-  say "launchd 등록 해제 완료. (미러 $mac_app 는 보존 — 수동 삭제 가능)"
+  say "unregistered: com.bogo.colima"
+  say "launchd unregistration complete. (mirror $mac_app is preserved — delete manually if desired)"
 }
 
 mac_restart() {
   cp "$REPO/run_role.sh" "$mac_launcher"; chmod +x "$mac_launcher"
   mac_sync
-  mac_enable_git_hooks   # 멱등: restart 시에도 훅 활성 보장
-  # 재시작 전에도 통신 백본을 보장한다(Colima/컨테이너가 내려가 있으면 봇이 또 즉사하므로).
+  mac_enable_git_hooks   # idempotent: keep the hook active on restart too
+  # Guarantee the communication backbone before restart too (if Colima/containers are down, the bots die instantly again).
   "$mac_app/infra_up.sh"
   local uid; uid="$(id -u)"
   for r in "${ROLES[@]}"; do
-    launchctl kickstart -k "gui/$uid/com.bogo.$r" && say "재시작: com.bogo.$r"
+    launchctl kickstart -k "gui/$uid/com.bogo.$r" && say "restarted: com.bogo.$r"
   done
-  # 대시보드가 아직 등록 안 됐을 수 있다(구버전에서 올린 경우) → 없으면 등록, 있으면 재시작.
+  # The dashboard may not be registered yet (if brought up from an older version) -> register if absent, restart if present.
   if launchctl print "gui/$uid/com.bogo.dashboard" >/dev/null 2>&1; then
-    launchctl kickstart -k "gui/$uid/com.bogo.dashboard" && say "재시작: com.bogo.dashboard"
+    launchctl kickstart -k "gui/$uid/com.bogo.dashboard" && say "restarted: com.bogo.dashboard"
   else
     mac_kill_legacy_dashboard
     local dplist="$mac_la/com.bogo.dashboard.plist"
@@ -238,38 +241,38 @@ mac_restart() {
         -e "s#__LOGS__#$mac_logs#g" \
         "$TPL/com.bogo.dashboard.plist.template" > "$dplist"
     mac_bootstrap_safe "com.bogo.dashboard" "$dplist"
-    say "등록+기동: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
+    say "registered+started: com.bogo.dashboard (127.0.0.1:$DASH_PORT)"
   fi
-  # 자동 백업 잡 (재)등록(멱등) — 구버전에서 올라온 환경에도 백업 잡을 보장한다.
+  # (Re)register the automatic backup job (idempotent) — guarantees the backup job even on environments brought up from an older version.
   mac_install_backup_agent
 }
 
-# 미러 동기화 드리프트 감지: 원본(REPO)과 ASCII 미러(mac_app)의 핵심 코드 파일이
-# 어긋나면 경고한다. launchd 데몬은 미러본을 실행하므로, 원본만 고치고 restart 를
-# 안 하면 미러가 stale 채로 남아 "대시보드/봇이 옛 코드로 동작"하는 사고가 조용히
-# 발생한다(예: mm_client 의 MM_BASE localhost→127.0.0.1 수정 미반영 시 Mattermost
-# 연결이 ::1 거부로 실패). status 단계에서 이 드리프트를 즉시 가시화한다.
+# Mirror-sync drift detection: warn when core code files diverge between the original (REPO) and
+# the ASCII mirror (mac_app). Because the launchd daemon runs the mirror copy, fixing only the
+# original without a restart leaves the mirror stale, silently causing "dashboard/bots run old code"
+# incidents (e.g. if mm_client's MM_BASE localhost->127.0.0.1 fix is not reflected, the Mattermost
+# connection fails with an ::1 refusal). Surface this drift immediately at the status step.
 mac_check_mirror_sync() {
-  [ -d "$mac_app" ] || { say "미러 없음(아직 install 안 됨): $mac_app"; return 0; }
+  [ -d "$mac_app" ] || { say "no mirror (not installed yet): $mac_app"; return 0; }
   local drift=0 f
   for f in ceo_dashboard.py mm_client.py agent_schema.py bogo_runtime.py \
            ceo_admin_runtime.py teams.json channels.json; do
     [ -f "$REPO/$f" ] || continue
     if [ ! -f "$mac_app/$f" ] || ! cmp -s "$REPO/$f" "$mac_app/$f"; then
-      printf '\033[0;33m[service]\033[0m   ⚠ 미러 불일치: %s\n' "$f"
+      printf '\033[0;33m[service]\033[0m   \xe2\x9a\xa0 mirror mismatch: %s\n' "$f"
       drift=1
     fi
   done
   if [ "$drift" -eq 1 ]; then
-    printf '\033[0;33m[service]\033[0m 미러가 원본과 어긋났습니다 → 데몬이 옛 코드를 실행 중입니다.\n'
-    printf '\033[0;33m[service]\033[0m 복구: ./service/install_service.sh restart\n'
+    printf '\033[0;33m[service]\033[0m The mirror has diverged from the original -> the daemon is running old code.\n'
+    printf '\033[0;33m[service]\033[0m Recovery: ./service/install_service.sh restart\n'
   else
-    say "미러 동기화 OK (원본 ↔ $mac_app 핵심 파일 일치)"
+    say "mirror sync OK (original <-> $mac_app core files match)"
   fi
 }
 
 mac_status() {
-  launchctl list | grep bogo || say "(실행 중인 com.bogo.* 없음)"
+  launchctl list | grep bogo || say "(no com.bogo.* running)"
   mac_check_mirror_sync
 }
 
@@ -280,28 +283,28 @@ sd_dir="${HOME}/.config/systemd/user"
 sd_unit="$sd_dir/bogo@.service"
 
 linux_install() {
-  command -v systemctl >/dev/null 2>&1 || { err "systemctl 미발견 — systemd 환경이 아닙니다."; exit 1; }
+  command -v systemctl >/dev/null 2>&1 || { err "systemctl not found — this is not a systemd environment."; exit 1; }
   chmod +x "$REPO/run_role.sh"
   mkdir -p "$sd_dir"
   sed -e "s#__WORKDIR__#$REPO#g" "$TPL/bogo@.service.template" > "$sd_unit"
   systemctl --user daemon-reload
   # Lingering so user services survive logout / run at boot.
   loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || \
-    say "참고: 'sudo loginctl enable-linger $(id -un)' 를 실행하면 로그아웃 후에도 유지됩니다."
+    say "note: run 'sudo loginctl enable-linger $(id -un)' to keep it running after logout."
   for r in "${ROLES[@]}"; do
     systemctl --user enable --now "bogo@$r.service"
-    say "등록+기동: bogo@$r"
+    say "registered+started: bogo@$r"
   done
-  # CEO 대시보드(127.0.0.1:DASH_PORT)도 동일 템플릿 인스턴스로 상시 가동. run_role.sh 가
-  # 'dashboard' 인자를 받아 ceo_dashboard.py 를 exec 하며, BOGO_DASHBOARD_PORT 기본 8642.
+  # Keep the CEO dashboard (127.0.0.1:DASH_PORT) always-on via the same template instance. run_role.sh
+  # takes a 'dashboard' argument and execs ceo_dashboard.py; BOGO_DASHBOARD_PORT defaults to 8642.
   systemctl --user enable --now "bogo@dashboard.service"
-  say "등록+기동: bogo@dashboard (127.0.0.1:$DASH_PORT)"
-  # 자동 데이터 백업 타이머 등록(봇 운영 중 폴더 안에 최신 백업 누적 → 무인 이전 완성).
+  say "registered+started: bogo@dashboard (127.0.0.1:$DASH_PORT)"
+  # Register the automatic data-backup timer (accumulates the latest backup inside the folder while the bots run -> unattended migration complete).
   linux_install_backup_timer
-  say "Linux systemd 설치 완료. 로그:  journalctl --user -u bogo@orchestrator -f"
+  say "Linux systemd install complete. Logs:  journalctl --user -u bogo@orchestrator -f"
 }
 
-# systemd 사용자 타이머로 주기적 백업 등록(멱등). 서비스+타이머 유닛을 치환 생성 후 enable.
+# Register a periodic backup via a systemd user timer (idempotent). Generate the service+timer units by substitution, then enable.
 linux_install_backup_timer() {
   sed -e "s#__WORKDIR__#$REPO#g" -e "s#__RETAIN__#$BACKUP_RETAIN#g" \
       "$TPL/bogo-backup.service.template" > "$sd_dir/bogo-backup.service"
@@ -309,34 +312,34 @@ linux_install_backup_timer() {
       "$TPL/bogo-backup.timer.template" > "$sd_dir/bogo-backup.timer"
   systemctl --user daemon-reload
   systemctl --user enable --now "bogo-backup.timer"
-  say "등록+기동: bogo-backup.timer (${BACKUP_INTERVAL}s 마다 자동 백업 → $REPO/migration)"
+  say "registered+started: bogo-backup.timer (auto-backup every ${BACKUP_INTERVAL}s -> $REPO/migration)"
 }
 
 linux_uninstall() {
   for r in "${ROLES[@]}"; do
     systemctl --user disable --now "bogo@$r.service" >/dev/null 2>&1 || true
-    say "해제: bogo@$r"
+    say "unregistered: bogo@$r"
   done
   systemctl --user disable --now "bogo@dashboard.service" >/dev/null 2>&1 || true
-  say "해제: bogo@dashboard"
-  # 자동 백업 타이머 해제(이미 떠낸 백업 산출물은 보존 — 데이터 이전용).
+  say "unregistered: bogo@dashboard"
+  # Unregister the automatic backup timer (already-produced backup artifacts are preserved — for data migration).
   systemctl --user disable --now "bogo-backup.timer" >/dev/null 2>&1 || true
   rm -f "$sd_dir/bogo-backup.timer" "$sd_dir/bogo-backup.service"
-  say "해제: bogo-backup.timer"
+  say "unregistered: bogo-backup.timer"
   rm -f "$sd_unit"
   systemctl --user daemon-reload || true
-  say "systemd 등록 해제 완료."
+  say "systemd unregistration complete."
 }
 
 linux_restart() {
   chmod +x "$REPO/run_role.sh"
   for r in "${ROLES[@]}"; do
-    systemctl --user restart "bogo@$r.service" && say "재시작: bogo@$r"
+    systemctl --user restart "bogo@$r.service" && say "restarted: bogo@$r"
   done
-  # 대시보드 인스턴스가 아직 enable 안 됐으면(구버전) 등록까지, 있으면 재시작.
+  # If the dashboard instance is not enabled yet (older version), register it too; if present, restart.
   systemctl --user enable --now "bogo@dashboard.service" 2>/dev/null || true
-  systemctl --user restart "bogo@dashboard.service" && say "재시작: bogo@dashboard"
-  # 자동 백업 타이머 (재)등록(멱등) — 구버전 환경에도 백업 타이머를 보장한다.
+  systemctl --user restart "bogo@dashboard.service" && say "restarted: bogo@dashboard"
+  # (Re)register the automatic backup timer (idempotent) — guarantees the backup timer even on older environments.
   linux_install_backup_timer
 }
 
@@ -355,7 +358,7 @@ linux_status() {
 case "$OS" in
   Darwin) fn="mac" ;;
   Linux)  fn="linux" ;;
-  *) err "지원하지 않는 OS: $OS (Windows 는 install_service.ps1 사용)"; exit 1 ;;
+  *) err "unsupported OS: $OS (use install_service.ps1 on Windows)"; exit 1 ;;
 esac
 
 case "$ACTION" in
@@ -363,5 +366,5 @@ case "$ACTION" in
   uninstall) "${fn}_uninstall" ;;
   restart)   "${fn}_restart" ;;
   status)    "${fn}_status" ;;
-  *) err "알 수 없는 명령: $ACTION (install|uninstall|restart|status)"; exit 1 ;;
+  *) err "unknown command: $ACTION (install|uninstall|restart|status)"; exit 1 ;;
 esac

@@ -5,22 +5,25 @@
     <key>Label</key>
     <string>com.bogo.dashboard</string>
 
-    <!-- CEO 대시보드(ceo_dashboard.py)를 launchd 가 상시 소유한다. 기존엔 oneclick 의
-         nohup 단발 프로세스라 터미널 종료/슬립/수동 kill 마다 죽고 부활하지 못했다 →
-         봇 4역할과 동일하게 KeepAlive 로 승격해 재발을 막는다.
-         launchd 는 Hangul 경로를 손상시키고 ~/Desktop TCC 를 막으므로, 봇과 똑같이
-         ASCII 미러(__APP__)의 런처(__LAUNCHER__)만 실행한다. 'dashboard' 인자를 받은
-         run_role.sh 가 .env 로드 후 venv python 으로 ceo_dashboard.py 를 exec 한다.
-         모든 경로는 ${HOME} 기반으로 install 시 치환 — username 하드코딩 없음. -->
+    <!-- launchd permanently owns the CEO dashboard (ceo_dashboard.py). Previously it was a
+         one-off nohup process under oneclick, so it died on every terminal close/sleep/manual
+         kill and could not revive → it is promoted to KeepAlive like the 4 bot roles to prevent
+         recurrence.
+         launchd corrupts Hangul paths and TCC blocks ~/Desktop, so, just like the bots, it only
+         runs the launcher (__LAUNCHER__) of the ASCII mirror (__APP__). run_role.sh, given the
+         'dashboard' argument, loads .env and then execs ceo_dashboard.py with the venv python.
+         All paths are ${HOME}-based and substituted at install time — no hardcoded username. -->
     <key>ProgramArguments</key>
     <array>
         <string>__LAUNCHER__</string>
         <string>dashboard</string>
     </array>
 
-    <!-- BOGO_DASHBOARD_PORT: 대시보드 리슨 포트(기본 8642). 루프백 바인딩(127.0.0.1)은
-         ceo_dashboard.py 가 HOST 하드코딩으로 강제하므로 외부 노출 위험 없음.
-         BOGO_REPO: 봇과 일관성을 위해 동일 주입(대시보드는 미사용이나 무해). -->
+    <!-- BOGO_DASHBOARD_PORT: the dashboard listen port (default 8642). Loopback binding
+         (127.0.0.1) is enforced by ceo_dashboard.py via a hardcoded HOST, so there is no
+         external-exposure risk.
+         BOGO_REPO: injected identically for consistency with the bots (unused by the dashboard
+         but harmless). -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>BOGO_DASHBOARD_PORT</key>

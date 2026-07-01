@@ -190,8 +190,8 @@ BOGO_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 
 ## 가장 쉬운 시작 — 더블클릭 (macOS)
 
-터미널 타이핑이 귀찮으면 프로젝트 루트의 **`BOGO 시작.command`** 파일을 Finder에서 더블클릭한다.
-(파일 위치: `launchers/BOGO 시작.command` — 최상위에 더블클릭하면 자동으로 열림)
+터미널 타이핑이 귀찮으면 프로젝트 루트의 **`BOGO_start.command`** 파일을 Finder에서 더블클릭한다.
+(파일 위치: `launchers/BOGO_start.command` — 최상위에 더블클릭하면 자동으로 열림)
 
 - 아직 미설치면 → 자동으로 `setup`(venv+의존성+config+launchd 등록) 수행
 - 이미 상시 가동 중이면 → 중복 기동 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
@@ -202,15 +202,15 @@ BOGO_DASHBOARD_PORT=9000 .venv/bin/python ceo_dashboard.py
 
 ## 가장 쉬운 시작 — 더블클릭 (Windows)
 
-mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을 탐색기에서 더블클릭한다.
-(파일 위치: `launchers/BOGO 시작.bat` — 최상위에 더블클릭하면 자동으로 열림)
+mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO_start.bat`** 파일을 탐색기에서 더블클릭한다.
+(파일 위치: `launchers/BOGO_start.bat` — 최상위에 더블클릭하면 자동으로 열림)
 
 - 아직 미등록이면 → 자동으로 `setup`(venv+의존성+config+**Task Scheduler** 등록) 수행
 - 이미 상시 가동 등록돼 있으면 → 중복 등록 없이 최신 코드 재배포 + 4역할 재시작(`restart`)
 - 끝나면 현재 상태(역할별 Task State)를 한국어로 표시하고, 오류 시 창이 닫히지 않고(`pause`) 원인을 보여준다
 
-내부 동작: `BOGO 시작.bat`(UTF-8 `chcp 65001`, `cd /d "%~dp0"` 로 한글·공백 경로 고정)
-→ `BOGO 시작.launcher.ps1`(가동 상태 감지·분기 본체)
+내부 동작: `BOGO_start.bat`(UTF-8 `chcp 65001`, `cd /d "%~dp0"` 로 공백 포함 경로 고정)
+→ `BOGO_start.launcher.ps1`(가동 상태 감지·분기 본체)
 → `app\bogo_ctl.ps1 {setup|restart|status}`. mac 의 `.command`→`bogo_ctl.sh` 경로와 1:1 등가다.
 
 - 가동 상태는 `Get-ScheduledTask -TaskName "BOGO_*"` 존재 여부로 감지한다(mac 의 `launchctl list | grep com.bogo` 등가).
@@ -220,7 +220,7 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
 ## 가장 쉬운 시작 — 더블클릭/아이콘 (Linux)
 
 리눅스 파일관리자는 macOS 의 `.command` 를 실행하지 못한다. 그래서 **단일 진입점**은
-`launchers/` 폴더의 **`BOGO 시작.sh`** 이다. 이 파일 하나가 macOS `.command` 와 **완전히 동일한
+`launchers/` 폴더의 **`BOGO_start.sh`** 이다. 이 파일 하나가 macOS `.command` 와 **완전히 동일한
 풀 코어**(`app/bogo_oneclick.sh start`: venv→reindex→통신백본→**데이터 자동복원**→봇·대시보드
 상시가동 등록→대시보드 헬스체크)로 수렴한다. 즉 "폴더 복사 후 1번 실행"이면 데이터까지 따라온다.
 
@@ -235,20 +235,20 @@ mac 절과 완전 대칭. 프로젝트 루트의 **`BOGO 시작.bat`** 파일을
    설치 스크립트가 (a)핵심 `.sh` 전부에 실행권한(+x) 자동 부여(clone 시 소실 대비)
    (b)`~/.local/share/applications/bogo-start.desktop` 설치 + 신뢰 플래그(`gio metadata::trusted`)
    (c)앱 메뉴 캐시 갱신(`update-desktop-database`)까지 해 준다. 이후 **앱 메뉴/파일관리자에서
-   'BOGO 시작' 아이콘을 클릭**하면 터미널 창에 로그가 뜨며 풀 코어가 돈다. (안 보이면 로그아웃→재로그인 1회.)
+   'BOGO Start' 아이콘을 클릭**하면 터미널 창에 로그가 뜨며 풀 코어가 돈다. (안 보이면 로그아웃→재로그인 1회.)
 
-2. **파일관리자에서 `launchers/BOGO 시작.sh` 더블클릭** — 일부 환경은 `.sh` 우클릭 →
+2. **파일관리자에서 `launchers/BOGO_start.sh` 더블클릭** — 일부 환경은 `.sh` 우클릭 →
    "속성 → 실행 허용"(또는 "Allow Launching")을 1회 켜야 한다. TTY 없이 실행돼도
-   `BOGO 시작.sh` 가 설치된 터미널(gnome-terminal/konsole/xterm 등)을 자동 탐지해 그 안에서
+   `BOGO_start.sh` 가 설치된 터미널(gnome-terminal/konsole/xterm 등)을 자동 탐지해 그 안에서
    자기 자신을 다시 띄워 로그를 보여준다(무한재귀 가드 포함). 터미널을 못 찾으면
-   `BOGO_시작_log.txt` 로 로그를 남기고 위치를 안내한다.
+   `BOGO_start_log.txt` 로 로그를 남기고 위치를 안내한다.
 
 > **더블클릭이 막히면(편집기로 열리거나 권한 거부) 아래 한 줄을 터미널에 그대로 복붙하면 항상 동작한다:**
 >
-> **`bash "/실제/경로/launchers/BOGO 시작.sh"`**
+> **`bash "/실제/경로/launchers/BOGO_start.sh"`**
 >
-> (예: 홈에 압축을 풀었다면 **`bash "$HOME/agent-bogo/launchers/BOGO 시작.sh"`**. 경로에 한글·공백이 있으므로
-> 반드시 **따옴표로 감싼다.** 정지는 같은 방식으로 **`bash "/실제/경로/launchers/BOGO 정지.sh"`**.)
+> (예: 홈에 압축을 풀었다면 **`bash "$HOME/agent-bogo/launchers/BOGO_start.sh"`**. 경로에 공백이 있을 수 있으므로
+> 반드시 **따옴표로 감싼다.** 정지는 같은 방식으로 **`bash "/실제/경로/launchers/BOGO_stop.sh"`**.)
 
 > 헤드리스 서버(GUI 없음)에서는 위 더블클릭 대신 아래 "다른 PC에서 시작"의 CLI 절차를 쓴다.
 
@@ -531,4 +531,4 @@ launchctl bootout gui/$UID/com.bogo.dev
 구 `launchd/` 디렉터리(`sync_app.sh`·구 `run_role.sh`·고정 plist)는 신규 크로스플랫폼 시스템(`bogo_ctl`
 + `bootstrap.*` + `service/templates/`)으로 **완전히 대체되어 제거됐다**. 신규 시스템도 동일한
 `${HOME}/.bogo-bin` 경로를 쓰므로, 구 launchd 로 가동 중이던 기존 환경도 `bogo_ctl install`(또는
-`BOGO 시작.command` 더블클릭) 한 번이면 그대로 인수인계된다(중복 라벨은 bootout 후 재등록).
+`BOGO_start.command` 더블클릭) 한 번이면 그대로 인수인계된다(중복 라벨은 bootout 후 재등록).

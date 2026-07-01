@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════
-#  BOGO 데이터 복원 (B-코어) — 백업본을 새 PC 의 bogo-pg/bogo-mm 볼륨으로 주입
+#  BOGO data restore (B-core) — inject the backup into the new PC's bogo-pg/bogo-mm volumes
 # ════════════════════════════════════════════════════════════════════════
-#  WHY  새 PC 에서 infra_up.sh 가 빈 bogo-pg/bogo-mm 를 막 만든 직후, 기존 PC 의
-#    대화·계정·채널·보고 데이터를 그 안으로 밀어넣어야 '데이터까지 따라오는' 이전이
-#    완성된다. 이 스크립트는 그 주입을 담당한다 — 단, 백업본이 있을 때만 동작하고
-#    없으면 조용히 빈 상태로 둔다(사람에게 묻지 않는 자동 분기는 호출부 deploy 가 한다).
+#  WHY  Right after infra_up.sh freshly creates empty bogo-pg/bogo-mm on the new PC, the old PC's
+#    chat/account/channel/report data must be pushed into them for a migration that "brings the data
+#    along" to be complete. This script handles that injection — but it acts only when a backup exists,
+#    and otherwise quietly leaves things empty (the automatic branching that doesn't ask a human is done by the calling deploy).
 #
-#  WHAT (멱등·자동복원 분기):
-#    1) 백업 산출물 자동 탐색(인자 없으면 app/migration/bogo_backup_latest.tar.gz)
-#    2) 이미 복원됨 표식(.bogo_restored)이 있고 --force 가 아니면 skip(두 번 돌려도 안전)
-#    3) 산출물 풀어 manifest 읽기
-#    4) MM 정지(데이터 주입 중 쓰기 충돌 방지) → PG 복원 → MM 볼륨 복원 → MM 재기동
-#       PG: 논리 덤프 우선(pg_restore --clean --if-exists), 없으면 물리 볼륨 복원
-#       MM: data/config/plugins tar 를 볼륨에 풀기(기존 빈 데이터 위에 덮어쓰기)
-#    5) 복원 완료 표식 기록 → 재배포 시 중복 복원 방지
+#  WHAT (idempotent auto-restore branch):
+#    1) Auto-discover the backup artifact (if no argument, app/migration/bogo_backup_latest.tar.gz)
+#    2) If an already-restored marker (.bogo_restored) exists and it's not --force, skip (safe to run twice)
+#    3) Extract the artifact and read the manifest
+#    4) Stop MM (prevent write conflicts during data injection) → restore PG → restore MM volumes → restart MM
+#       PG: prefer logical dump (pg_restore --clean --if-exists); if absent, physical volume restore
+#       MM: extract data/config/plugins tars into the volumes (overwrite on top of the existing empty data)
+#    5) Record a restore-complete marker → prevent duplicate restore on redeploy
 #
-#  계약: 컨테이너 이름 bogo-pg/bogo-mm 고정. PG 자격증명은 컨테이너 env 에서 읽음.
-#  안전: 백업본이 없으면 비파괴 종료(rc=0, "빈 상태로 진행"). 시크릿 출력 안 함.
-#        --force 없이는 이미 복원된 환경을 덮어쓰지 않는다(기존 PC 에서 실수로 돌려도 안전).
-#  사용:
-#    ./bogo_restore.sh                  # latest 자동 탐색 후 복원(없으면 빈 상태로 통과)
-#    ./bogo_restore.sh <백업.tar.gz>    # 특정 백업본 지정
-#    ./bogo_restore.sh --force [<파일>] # 이미 복원된 환경에도 강제 재복원(주의: 덮어쓰기)
+#  Contract: fixed container names bogo-pg/bogo-mm. PG credentials read from the container env.
+#  Safety: if no backup exists, exit non-destructively (rc=0, "proceed empty"). Secrets are not printed.
+#        Without --force it does not overwrite an already-restored environment (safe even if run by mistake on the old PC).
+#  Usage:
+#    ./bogo_restore.sh                  # auto-discover latest then restore (if none, pass through empty)
+#    ./bogo_restore.sh <backup.tar.gz>  # specify a particular backup
+#    ./bogo_restore.sh --force [<file>] # force re-restore even on an already-restored environment (caution: overwrite)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -32,7 +32,7 @@ MM_NAME="bogo-mm"
 PG_USER_DEFAULT="mmuser"
 PG_DB_DEFAULT="mattermost"
 
-# 복원 완료 표식(멱등 가드). 백업 파일 경로/해시까지 기록해 다른 백업으로 바뀌면 재복원 허용.
+# Restore-complete marker (idempotency guard). Records the backup file path/hash too, so switching to a different backup allows re-restore.
 MARKER="$HERE/.bogo_restored"
 
 FORCE=0
@@ -43,14 +43,14 @@ while [ $# -gt 0 ]; do
     *) BACKUP="$1"; shift ;;
   esac
 done
-# 인자 없으면 latest 포인터 자동 탐색.
+# If no argument, auto-discover the latest pointer.
 [ -n "$BACKUP" ] || BACKUP="$HERE/bogo_backup_latest.tar.gz"
 
 C_INFO=$'\033[0;36m'; C_OK=$'\033[0;32m'; C_WARN=$'\033[0;33m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { printf '%s[restore]%s %s\n'      "$C_INFO" "$C_RST" "$*"; }
 ok()   { printf '%s[restore:OK]%s %s\n'   "$C_OK"   "$C_RST" "$*"; }
-warn() { printf '%s[restore:경고]%s %s\n' "$C_WARN" "$C_RST" "$*" >&2; }
-err()  { printf '%s[restore:오류]%s %s\n' "$C_ERR"  "$C_RST" "$*" >&2; }
+warn() { printf '%s[restore:WARN]%s %s\n' "$C_WARN" "$C_RST" "$*" >&2; }
+err()  { printf '%s[restore:ERROR]%s %s\n' "$C_ERR"  "$C_RST" "$*" >&2; }
 
 read_pg_creds() {
   PG_USER="$(docker exec "$PG_NAME" sh -c 'printf %s "$POSTGRES_USER"' 2>/dev/null || true)"
@@ -59,11 +59,11 @@ read_pg_creds() {
   [ -n "${PG_DB:-}" ]   || PG_DB="$PG_DB_DEFAULT"
 }
 
-# 백업 파일 지문(경로+크기+mtime). 같은 백업이면 동일 → 중복 복원 skip 판정에 사용.
+# Backup file fingerprint (path+size+mtime). Identical for the same backup → used to decide duplicate-restore skip.
 backup_fingerprint() {
   local f="$1"
-  # 해시 도구 선호 순서: shasum(macOS 기본) → sha256sum(GNU/Linux 기본). 둘 다 없으면
-  # 크기+mtime 로 근사(BSD stat -f → GNU stat -c 폴백). OS 무관하게 항상 지문을 만든다.
+  # Hash tool preference order: shasum (macOS default) → sha256sum (GNU/Linux default). If neither exists,
+  # approximate with size+mtime (BSD stat -f → GNU stat -c fallback). Always produces a fingerprint regardless of OS.
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$f" 2>/dev/null | awk '{print $1}'
   elif command -v sha256sum >/dev/null 2>&1; then
@@ -78,107 +78,107 @@ cleanup() { [ -n "${STAGE:-}" ] && rm -rf "$STAGE" 2>/dev/null || true; }
 trap cleanup EXIT
 
 main() {
-  # ── 자동 분기: 백업본이 없으면 비파괴 통과(빈 상태로 초기 셋업) ────────
+  # ── Auto-branch: if no backup exists, pass through non-destructively (initial setup with empty state) ────────
   if [ ! -f "$BACKUP" ]; then
-    say "백업본 없음($BACKUP) → 데이터 복원 건너뜀(빈 상태로 초기 셋업 진행)."
+    say "No backup ($BACKUP) → skipping data restore (proceeding with empty-state initial setup)."
     exit 0
   fi
 
-  # ── 멱등 가드: 이미 같은 백업으로 복원했으면 skip ────────────────────
+  # ── Idempotency guard: if already restored from the same backup, skip ────────────────────
   local fp; fp="$(backup_fingerprint "$BACKUP")"
   if [ "$FORCE" -ne 1 ] && [ -f "$MARKER" ] && grep -q "$fp" "$MARKER" 2>/dev/null; then
-    ok "이미 이 백업본으로 복원됨(표식 일치) → 중복 복원 skip. 강제: --force"
+    ok "Already restored from this backup (marker matches) → skipping duplicate restore. Force: --force"
     exit 0
   fi
 
   if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    err "Docker 데몬에 연결할 수 없습니다. 'colima start' 후 다시 실행하세요."
+    err "Cannot connect to the Docker daemon. Run 'colima start', then retry."
     exit 1
   fi
   for c in "$PG_NAME" "$MM_NAME"; do
     if [ -z "$(docker ps -aq -f "name=^${c}$" 2>/dev/null)" ]; then
-      err "컨테이너 '$c' 가 없습니다 — 먼저 infra_up.sh 로 인프라를 만든 뒤 복원하세요."
+      err "Container '$c' does not exist — create the infra first with infra_up.sh, then restore."
       exit 1
     fi
   done
 
   read_pg_creds
   STAGE="$(mktemp -d "${TMPDIR:-/tmp}/bogo_restore.XXXXXX")"
-  say "백업본 해제: $(basename "$BACKUP")"
+  say "Extracting backup: $(basename "$BACKUP")"
   if ! tar xzf "$BACKUP" -C "$STAGE" 2>/dev/null; then
-    err "백업본 압축 해제 실패(손상 가능): $BACKUP"
+    err "Failed to extract backup (possibly corrupt): $BACKUP"
     exit 1
   fi
-  local P="$STAGE"   # payload 루트(백업이 payload 내용을 루트로 담음)
+  local P="$STAGE"   # payload root (the backup holds the payload contents at the root)
 
-  # ── MM 정지(주입 중 쓰기 충돌 방지) ──────────────────────────────────
-  say "Mattermost 일시 정지(데이터 주입 중 충돌 방지)..."
+  # ── Stop MM (prevent write conflicts during injection) ──────────────────────────────────
+  say "Pausing Mattermost (prevent conflicts during data injection)..."
   docker stop "$MM_NAME" >/dev/null 2>&1 || true
 
-  # ── PG 복원: 논리 덤프 우선, 없으면 물리 볼륨 ─────────────────────────
+  # ── PG restore: prefer logical dump, fall back to physical volume ─────────────────────────
   if [ -f "$P/pg_dump.custom" ]; then
-    say "[PG] 논리 덤프 복원(pg_restore --clean --if-exists, db=$PG_DB)..."
-    # PG 가 떠 있어야 pg_restore 가능. 떠 있지 않으면 기동.
+    say "[PG] Logical dump restore (pg_restore --clean --if-exists, db=$PG_DB)..."
+    # PG must be up for pg_restore. If it isn't up, start it.
     docker start "$PG_NAME" >/dev/null 2>&1 || true
-    # PG ready 대기.
+    # Wait for PG ready.
     local i=0
     until docker exec "$PG_NAME" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; do
-      sleep 1; i=$((i+1)); [ "$i" -ge 30 ] && { err "PG 가 준비되지 않음(30s)."; exit 1; }
+      sleep 1; i=$((i+1)); [ "$i" -ge 30 ] && { err "PG did not become ready (30s)."; exit 1; }
     done
     if docker exec -i "$PG_NAME" pg_restore -U "$PG_USER" -d "$PG_DB" \
           --clean --if-exists --no-owner --no-acl < "$P/pg_dump.custom" \
           >"$STAGE/pg_restore.log" 2>&1; then
-      ok "PG 논리 복원 완료."
+      ok "PG logical restore complete."
     else
-      # pg_restore 는 --clean 시 존재하지 않는 객체 DROP 경고로 비0 종료할 수 있다 → 로그로 판단.
+      # pg_restore may exit non-zero on --clean due to DROP warnings for non-existent objects → judge by the log.
       if grep -qiE 'error|fatal' "$STAGE/pg_restore.log"; then
-        warn "PG 논리 복원에 경고/오류가 있었습니다(상당수는 무해한 DROP 경고). 상세 마지막 줄:"
+        warn "PG logical restore had warnings/errors (many are harmless DROP warnings). Last detail lines:"
         tail -3 "$STAGE/pg_restore.log" >&2 || true
       else
-        ok "PG 논리 복원 완료(경고만)."
+        ok "PG logical restore complete (warnings only)."
       fi
     fi
   elif [ -f "$P/pg_volume.tar.gz" ]; then
-    say "[PG] 물리 볼륨 복원(논리 덤프 부재 → 안전망 경로)..."
+    say "[PG] Physical volume restore (no logical dump → safety-net path)..."
     docker stop "$PG_NAME" >/dev/null 2>&1 || true
     docker run --rm --volumes-from "$PG_NAME" -v "$P":/backup alpine \
       sh -c 'cd /var/lib/postgresql/data && rm -rf ./* ./.[!.]* 2>/dev/null; tar xzf /backup/pg_volume.tar.gz' \
       >/dev/null 2>"$STAGE/pgvol.err" \
-      && ok "PG 물리 복원 완료." \
-      || { err "PG 물리 복원 실패: $(tail -1 "$STAGE/pgvol.err" 2>/dev/null)"; exit 1; }
+      && ok "PG physical restore complete." \
+      || { err "PG physical restore failed: $(tail -1 "$STAGE/pgvol.err" 2>/dev/null)"; exit 1; }
     docker start "$PG_NAME" >/dev/null 2>&1 || true
   else
-    err "백업본에 PG 데이터(논리/물리)가 없습니다 — 복원 불가."
+    err "The backup has no PG data (logical/physical) — cannot restore."
     exit 1
   fi
 
-  # ── MM 볼륨 복원(data/config/plugins) ────────────────────────────────
+  # ── MM volume restore (data/config/plugins) ────────────────────────────────
   for spec in "data:/mattermost/data" "config:/mattermost/config" "plugins:/mattermost/plugins"; do
     local label="${spec%%:*}" path="${spec#*:}"
     local tarf="$P/mm_${label}.tar.gz"
-    [ -f "$tarf" ] || { say "[MM] $label 백업 없음 → 건너뜀."; continue; }
-    say "[MM] $label 볼륨 복원..."
-    # 빈(새로 만든) 볼륨 위에 덮어쓴다. 멱등: 같은 내용 재적용도 안전.
+    [ -f "$tarf" ] || { say "[MM] No $label backup → skipping."; continue; }
+    say "[MM] Restoring $label volume..."
+    # Overwrite on top of the empty (newly created) volume. Idempotent: reapplying the same content is safe too.
     docker run --rm --volumes-from "$MM_NAME" -v "$P":/backup alpine \
       sh -c "mkdir -p '$path' && cd '$path' && tar xzf /backup/mm_${label}.tar.gz" \
       >/dev/null 2>>"$STAGE/mm.err" \
-      && ok "[MM] $label 복원 완료." \
-      || warn "[MM] $label 복원 실패: $(tail -1 "$STAGE/mm.err" 2>/dev/null)"
+      && ok "[MM] $label restore complete." \
+      || warn "[MM] $label restore failed: $(tail -1 "$STAGE/mm.err" 2>/dev/null)"
   done
 
-  # ── MM 재기동 ────────────────────────────────────────────────────────
-  say "Mattermost 재기동..."
+  # ── Restart MM ────────────────────────────────────────────────────────
+  say "Restarting Mattermost..."
   docker start "$MM_NAME" >/dev/null 2>&1 || true
 
-  # ── 복원 완료 표식(멱등 가드 갱신) ──────────────────────────────────
+  # ── Restore-complete marker (refresh idempotency guard) ──────────────────────────────
   {
     echo "restored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "backup_file=$(basename "$BACKUP")"
     echo "fingerprint=$fp"
   } > "$MARKER"
 
-  ok "데이터 복원 완료. 기존 PC 의 대화/계정/채널/보고가 이 PC 로 이전되었습니다."
-  say "MM 이 healthy 가 될 때까지 수십 초 걸릴 수 있습니다(이후 봇이 자동 연결)."
+  ok "Data restore complete. The old PC's chats/accounts/channels/reports have been migrated to this PC."
+  say "MM may take tens of seconds to become healthy (the bot connects automatically afterward)."
 }
 
 main "$@"

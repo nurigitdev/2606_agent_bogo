@@ -1,10 +1,10 @@
 #!/bin/zsh
 # ════════════════════════════════════════════════════════════════════════
-#  BOGO 정지 — Finder 더블클릭 1회로 깔끔히 내림
+#  BOGO Stop -- one Finder double-click brings it down cleanly
 # ════════════════════════════════════════════════════════════════════════
-#  기본: CEO 대시보드만 정지(봇 상시가동·통신 백본은 보존 — 데이터/연결 유지).
-#  완전 정지가 필요하면 터미널에서:  ./app/bogo_oneclick.sh stop --all
-#  Korean path safe.
+#  Default: stop only the CEO dashboard (keep bots always-on and the communication backbone -- preserve data/connections).
+#  For a full stop, run in a terminal:  ./app/bogo_oneclick.sh stop --all
+#  Path-safe.
 # ════════════════════════════════════════════════════════════════════════
 set -u
 
@@ -14,22 +14,22 @@ ONECLICK="$REPO/bogo_oneclick.sh"
 
 C_INFO=$'\033[0;36m'; C_ERR=$'\033[0;31m'; C_RST=$'\033[0m'
 say()  { printf "%s[BOGO]%s %s\n" "$C_INFO" "$C_RST" "$*"; }
-fail() { printf "%s[오류]%s %s\n"   "$C_ERR"  "$C_RST" "$*"; }
+fail() { printf "%s[ERROR]%s %s\n" "$C_ERR"  "$C_RST" "$*"; }
 
 pause_exit() {
   print -r -- ""
   print -r -- "──────────────────────────────────────────────"
-  print -r -- "이 창은 Enter 또는 아무 키나 누르면 닫힙니다."
+  print -r -- "Press Enter or any key to close this window."
   read -k1 -s 2>/dev/null || true
   exit "${1:-0}"
 }
 
 print -r -- ""
-say "BOGO 대시보드 정지"
+say "Stopping the BOGO dashboard"
 print -r -- ""
 
 if [[ ! -f "$ONECLICK" ]]; then
-  fail "bogo_oneclick.sh 를 찾지 못했습니다: $ONECLICK"
+  fail "bogo_oneclick.sh not found: $ONECLICK"
   pause_exit 1
 fi
 chmod +x "$ONECLICK" 2>/dev/null || true
@@ -37,5 +37,5 @@ chmod +x "$ONECLICK" 2>/dev/null || true
 "$ONECLICK" stop
 rc=$?
 print -r -- ""
-say "봇 상시가동까지 완전히 내리려면:  cd \"$REPO\" && ./bogo_oneclick.sh stop --all"
+say "To bring everything down including the always-on bots:  cd \"$REPO\" && ./bogo_oneclick.sh stop --all"
 pause_exit $rc
