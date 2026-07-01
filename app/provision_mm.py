@@ -117,19 +117,30 @@ def _ensure_auth_session():
         return
     # 컨테이너 내부에서 MM 자신(127.0.0.1:8065)으로 로그인. localhost 대신 127.0.0.1
     # 강제(프로젝트 IPv4 가드와 일치 — ::1 우선해석 회귀 차단).
+    # NOTE: --name 은 `auth login` 에서만 유효한 플래그다(자격증명 이름 부여).
+    # login 은 --no-activate 가 없으면 방금 만든 컨텍스트를 활성 컨텍스트로 설정한다.
     subprocess.run(
         ["docker", "exec", MM_CONTAINER, "mmctl", "auth", "login",
          "http://127.0.0.1:8065", "--name", AUTH_CTX,
          "--username", ADMIN_USER, "--password", ADMIN_PASS],
+        capture_output=True, text=True)
+    # 다른 활성 컨텍스트가 있더라도 우리 컨텍스트를 명시적으로 활성화(결정성 보장).
+    # `auth set <name>` 이 컨텍스트를 전환하는 올바른 명령이다(per-command --name 은 없음).
+    subprocess.run(
+        ["docker", "exec", MM_CONTAINER, "mmctl", "auth", "set", AUTH_CTX],
         capture_output=True, text=True)
     # login 실패해도 여기서 죽지 않는다 — 실제 bot/token 호출에서 명확히 드러난다.
     _AUTH_READY = True
 
 
 def mmctl_auth(*args, check=True):
-    """인증 세션 경로(bot create / token generate). 세션을 보장한 뒤 실행."""
+    """인증 세션 경로(bot create / token generate). 세션을 보장한 뒤 실행.
+
+    활성 컨텍스트(=_ensure_auth_session 에서 auth set 으로 고정한 AUTH_CTX)로
+    서버 모드 실행한다. mmctl 에는 커맨드별 컨텍스트 선택용 --name 플래그가 없으므로
+    (auth login 전용) 여기서 --name 을 붙이면 'unknown flag: --name' 로 실패한다."""
     _ensure_auth_session()
-    cmd = ["docker", "exec", MM_CONTAINER, "mmctl", "--name", AUTH_CTX, *args]
+    cmd = ["docker", "exec", MM_CONTAINER, "mmctl", *args]
     p = subprocess.run(cmd, capture_output=True, text=True)
     out = (p.stdout or "") + (p.stderr or "")
     if check and p.returncode != 0:

@@ -174,6 +174,73 @@ class EmployeeProvisionTest(unittest.TestCase):
         self.assertEqual(ch_adds, [], "미정의 채널이 멤버 배치로 새어나감")
 
 
+class MmctlAuthArgvTest(unittest.TestCase):
+    """회귀: mmctl_auth 가 실제 docker exec 로 넘기는 argv 검증.
+
+    Bug was: bot create 가 'Error: unknown flag: --name' 로 rc=1 실패.
+    Root cause: mmctl_auth 가 커맨드에 `--name <ctx>` 를 붙였는데, mmctl 9.11 에서
+      --name 은 `auth login` 전용 플래그이고 커맨드별 컨텍스트 선택 플래그는 존재하지 않는다.
+      (컨텍스트 전환은 `auth set <name>`, 실행은 활성 컨텍스트로 --name 없이.)
+    Fixed in: provision_mm.mmctl_auth — argv 에서 --name 제거, _ensure_auth_session 에서
+      auth set 으로 활성 컨텍스트 고정.
+    """
+
+    def setUp(self):
+        import provision_mm as P
+        self.P = P
+        self._orig_run = P.subprocess.run
+        self._orig_auth_ready = P._AUTH_READY
+        self.run_calls = []
+
+        class _Res:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, *a, **kw):
+            self.run_calls.append(list(cmd))
+            return _Res()
+
+        P.subprocess.run = fake_run
+        P._AUTH_READY = False  # 세션 재확립 경로를 강제 실행
+
+    def tearDown(self):
+        self.P.subprocess.run = self._orig_run
+        self.P._AUTH_READY = self._orig_auth_ready
+
+    def test_bot_create_argv_has_no_name_flag(self):
+        # 정확히 실패했던 명령 재현: bot create jihyun --display-name 최지현 --with-token
+        self.P.mmctl_auth("bot", "create", "jihyun",
+                          "--display-name", "최지현", "--with-token", check=True)
+        # mmctl_auth 가 만든(=auth login/set 이 아닌) 실제 bot create argv 를 찾는다.
+        bot_calls = [c for c in self.run_calls
+                     if "mmctl" in c and "bot" in c and "create" in c]
+        self.assertTrue(bot_calls, "bot create argv 가 실행되지 않음")
+        argv = bot_calls[0]
+        self.assertNotIn("--name", argv,
+                         f"mmctl_auth argv 에 금지된 --name 플래그가 남아있음: {argv}")
+        # positional username + 올바른 플래그가 그대로 전달되는지 확인.
+        self.assertIn("jihyun", argv)
+        self.assertIn("--display-name", argv)
+        self.assertIn("--with-token", argv)
+        # 활성 컨텍스트 사용을 위해 --local 도 붙이지 않는다(서버 모드).
+        self.assertNotIn("--local", argv)
+
+    def test_auth_session_activates_context(self):
+        # _ensure_auth_session 은 login(--name 유효) + auth set 으로 컨텍스트를 활성화한다.
+        self.P.mmctl_auth("bot", "list", check=False)
+        login_calls = [c for c in self.run_calls
+                       if "auth" in c and "login" in c]
+        set_calls = [c for c in self.run_calls
+                     if "auth" in c and "set" in c]
+        self.assertTrue(login_calls, "auth login 이 호출되지 않음")
+        # login 에서 --name 은 유효(자격증명 이름) — 여기서는 허용.
+        self.assertIn("--name", login_calls[0])
+        self.assertIn(self.P.AUTH_CTX, login_calls[0])
+        self.assertTrue(set_calls, "auth set(컨텍스트 활성화)이 호출되지 않음")
+        self.assertIn(self.P.AUTH_CTX, set_calls[0])
+
+
 class MultihomeBindModeTest(unittest.TestCase):
     """멀티홈(다중 NIC 직결) 모드 게이트 — 공인 NIC 부재 전제에서만 0.0.0.0 허용.
 
